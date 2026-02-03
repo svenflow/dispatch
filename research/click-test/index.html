@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Click Test</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  cursor: crosshair;
+  position: relative;
+}
+#circle {
+  position: absolute;
+  border-radius: 50%;
+}
+#score {
+  position: fixed;
+  top: 10px;
+  right: 10px;
+  font: 16px monospace;
+  background: rgba(255,255,255,0.8);
+  padding: 8px 12px;
+  border-radius: 4px;
+  z-index: 100;
+  pointer-events: none;
+}
+#done {
+  display: none;
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font: 24px monospace;
+  background: white;
+  padding: 20px;
+  border: 2px solid black;
+  z-index: 200;
+}
+</style>
+</head>
+<body>
+<div id="circle"></div>
+<div id="score"></div>
+<div id="done"></div>
+<script>
+// URL params: diameter, rounds, bgColor, circleColor
+const params = new URLSearchParams(window.location.search);
+const diameter = parseInt(params.get('diameter') || '100');
+const totalRounds = parseInt(params.get('rounds') || '10');
+const bgColor = params.get('bg') || 'white';
+const circleColor = params.get('color') || 'black';
+
+document.body.style.backgroundColor = bgColor;
+
+const circle = document.getElementById('circle');
+const scoreEl = document.getElementById('score');
+const doneEl = document.getElementById('done');
+
+circle.style.width = diameter + 'px';
+circle.style.height = diameter + 'px';
+circle.style.backgroundColor = circleColor;
+
+let round = 0;
+let totalClicks = 0;
+let roundClicks = 0;
+const maxClicksPerRound = 100;
+let cx, cy; // circle center
+let totalEdgeDist = 0; // sum of distance from edge (max(0, dist-radius)) for all clicks
+let allEdgeDists = []; // individual edge distances for every click
+
+function placeCircle() {
+  const margin = diameter;
+  cx = margin + Math.random() * (window.innerWidth - 2 * margin);
+  cy = margin + Math.random() * (window.innerHeight - 2 * margin);
+  circle.style.left = (cx - diameter/2) + 'px';
+  circle.style.top = (cy - diameter/2) + 'px';
+  circle.style.display = 'block';
+  updateScore();
+}
+
+function updateScore() {
+  scoreEl.textContent = `Round ${round + 1}/${totalRounds} | Clicks: ${totalClicks}`;
+}
+
+function finish() {
+  circle.style.display = 'none';
+  const avgClicks = (totalClicks / totalRounds).toFixed(2);
+  const accuracy = (totalRounds / totalClicks).toFixed(4);
+  const avgEdgeDist = (totalEdgeDist / totalClicks).toFixed(1);
+  const msg = `DONE | ${diameter}px | Rounds: ${totalRounds} | Clicks: ${totalClicks} | Avg: ${avgClicks} clicks/hit | Accuracy: ${accuracy} | AvgMissDist: ${avgEdgeDist}px`;
+  doneEl.textContent = msg;
+  doneEl.style.display = 'block';
+  scoreEl.textContent = msg;
+  document.title = `RESULT: ${accuracy} accuracy | ${diameter}px | ${avgClicks} avg | avgMissDist ${avgEdgeDist}px`;
+}
+
+function advanceRound() {
+  round++;
+  roundClicks = 0;
+  if (round >= totalRounds) {
+    finish();
+  } else {
+    placeCircle();
+  }
+}
+
+document.body.addEventListener('click', function(e) {
+  if (round >= totalRounds) return;
+  totalClicks++;
+  roundClicks++;
+  const dx = e.clientX - cx;
+  const dy = e.clientY - cy;
+  const dist = Math.sqrt(dx*dx + dy*dy);
+  const edgeDist = Math.max(0, dist - diameter / 2);
+  totalEdgeDist += edgeDist;
+  allEdgeDists.push(edgeDist);
+  if (dist <= diameter / 2) {
+    // Hit!
+    advanceRound();
+  } else if (roundClicks >= maxClicksPerRound) {
+    // Max misses reached, skip this circle
+    advanceRound();
+  } else {
+    updateScore();
+  }
+});
+
+placeCircle();
+</script>
+</body>
+</html>

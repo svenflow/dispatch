@@ -723,24 +723,14 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
                 f"HEALTH_CHECK | {session.contact_name} | UNHEALTHY | "
                 f"alive={session.is_alive()} errors={session._error_count}"
             )
-            try:
-                # Isolate in separate task to prevent anyio cancel scope leaks
-                restart_task = asyncio.create_task(
-                    self.restart_session(chat_id),
-                    name=f"health-restart-{chat_id}"
-                )
-                await asyncio.wait_for(restart_task, timeout=120)
-            except asyncio.TimeoutError:
-                log.error(f"Health check restart timed out for {chat_id}")
-                restart_task.cancel()
-            except asyncio.CancelledError:
-                task = asyncio.current_task()
-                if task is not None:
-                    while task.cancelling() > 0:
-                        task.uncancel()
-                log.warning(f"CancelledError during health restart of {chat_id}, recovered")
-            except Exception as e:
-                log.error(f"Health check restart failed for {chat_id}: {e}")
+            # Fire-and-forget: do NOT await restart_session at all.
+            async def _isolated_restart(cid: str):
+                try:
+                    await self.restart_session(cid)
+                except Exception as e:
+                    log.error(f"Health check restart failed for {cid}: {e}")
+
+            asyncio.create_task(_isolated_restart(chat_id), name=f"health-restart-{chat_id}")
             return False
         return True
 
@@ -771,28 +761,16 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
                     f"IDLE_TIMEOUT | {session.contact_name} | KILLING | "
                     f"idle_hours={idle_hours:.1f} threshold={timeout_hours}"
                 )
-                try:
-                    # Run kill_session in an isolated task so anyio cancel
-                    # scopes inside SDK client.disconnect() can NEVER leak
-                    # CancelledError to the calling task (the main loop).
-                    kill_task = asyncio.create_task(
-                        self.kill_session(chat_id),
-                        name=f"idle-kill-{chat_id}"
-                    )
-                    await asyncio.wait_for(kill_task, timeout=30)
-                except asyncio.TimeoutError:
-                    log.error(f"Idle kill timed out for {chat_id}")
-                    kill_task.cancel()
-                    self.sessions.pop(chat_id, None)
-                except asyncio.CancelledError:
-                    # Belt-and-suspenders: clear any leaked cancellation
-                    task = asyncio.current_task()
-                    if task is not None:
-                        while task.cancelling() > 0:
-                            task.uncancel()
-                    log.warning(f"CancelledError during idle kill of {chat_id}, recovered")
-                except Exception as e:
-                    log.error(f"Idle kill failed for {chat_id}: {e}")
+                # Fire-and-forget: do NOT await kill_session at all.
+                # Awaiting (even via wait_for on a separate task) allows anyio
+                # cancel scopes to leak CancelledError to this task.
+                async def _isolated_kill(cid: str):
+                    try:
+                        await self.kill_session(cid)
+                    except Exception as e:
+                        log.error(f"Idle kill failed for {cid}: {e}")
+
+                asyncio.create_task(_isolated_kill(chat_id), name=f"idle-kill-{chat_id}")
                 killed.append(chat_id)
         return killed
 

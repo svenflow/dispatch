@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Click Benchmark</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  width: 100vw; height: 100vh; overflow: hidden;
+  position: relative; cursor: crosshair;
+  font-family: -apple-system, sans-serif;
+}
+#target {
+  position: absolute; border-radius: 50%;
+  pointer-events: none; /* we detect clicks on body */
+}
+#hud {
+  position: fixed; top: 10px; left: 10px; z-index: 100;
+  background: rgba(0,0,0,0.8); color: #fff; padding: 10px 15px;
+  border-radius: 8px; font-size: 14px; line-height: 1.6;
+}
+#results {
+  position: fixed; bottom: 10px; left: 10px; right: 10px; z-index: 100;
+  background: rgba(0,0,0,0.9); color: #0f0; padding: 10px 15px;
+  border-radius: 8px; font-size: 12px; font-family: monospace;
+  max-height: 200px; overflow-y: auto; display: none;
+}
+.miss-marker {
+  position: absolute; width: 6px; height: 6px; border-radius: 50%;
+  background: red; opacity: 0.5; transform: translate(-3px, -3px);
+  pointer-events: none; z-index: 50;
+}
+</style>
+</head>
+<body>
+<div id="hud"></div>
+<div id="target"></div>
+<div id="results"></div>
+
+<script>
+// Config from URL params
+const params = new URLSearchParams(window.location.search);
+const DIAMETER = parseInt(params.get('diameter') || '100');
+const RUNS = parseInt(params.get('runs') || '10');
+const BG_COLOR = params.get('bg') || '#ffffff';
+const CIRCLE_COLOR = params.get('color') || '#000000';
+const API_MODE = params.get('api') === '1'; // if true, expose state via window for automation
+
+document.body.style.background = BG_COLOR;
+
+const target = document.getElementById('target');
+const hud = document.getElementById('hud');
+const resultsDiv = document.getElementById('results');
+
+let circleX, circleY; // center of circle
+let currentRun = 0;
+let clicksThisRun = 0;
+let totalClicks = 0;
+let runResults = [];
+let finished = false;
+
+// State exposed for automation
+window.benchmarkState = {
+  circleX: 0, circleY: 0, diameter: DIAMETER,
+  currentRun: 0, totalRuns: RUNS, clicksThisRun: 0,
+  finished: false, runResults: [], missX: 0, missY: 0, hit: false
+};
+
+function placeCircle() {
+  const margin = DIAMETER + 80; // keep away from edges and HUD
+  const minX = margin;
+  const maxX = window.innerWidth - margin;
+  const minY = margin + 60; // extra for HUD
+  const maxY = window.innerHeight - margin;
+
+  circleX = Math.floor(Math.random() * (maxX - minX)) + minX;
+  circleY = Math.floor(Math.random() * (maxY - minY)) + minY;
+
+  target.style.width = DIAMETER + 'px';
+  target.style.height = DIAMETER + 'px';
+  target.style.left = (circleX - DIAMETER/2) + 'px';
+  target.style.top = (circleY - DIAMETER/2) + 'px';
+  target.style.background = CIRCLE_COLOR;
+
+  clicksThisRun = 0;
+
+  window.benchmarkState.circleX = circleX;
+  window.benchmarkState.circleY = circleY;
+  window.benchmarkState.clicksThisRun = 0;
+  window.benchmarkState.hit = false;
+
+  updateHud();
+}
+
+function updateHud() {
+  hud.innerHTML = `
+    <b>Click Benchmark</b><br>
+    Circle: ${DIAMETER}px diameter<br>
+    Run: ${currentRun + 1} / ${RUNS}<br>
+    Clicks this run: ${clicksThisRun}<br>
+    Total clicks: ${totalClicks}<br>
+    Circle center: (${circleX}, ${circleY})
+  `;
+}
+
+function showResults() {
+  finished = true;
+  window.benchmarkState.finished = true;
+  window.benchmarkState.runResults = runResults;
+
+  const avg = runResults.reduce((a,b) => a + b, 0) / runResults.length;
+  const max = Math.max(...runResults);
+  const min = Math.min(...runResults);
+  const firstTry = runResults.filter(r => r === 1).length;
+
+  let html = `<b>RESULTS - ${DIAMETER}px circle, ${RUNS} runs</b>\n`;
+  html += `Average clicks to hit: ${avg.toFixed(2)}\n`;
+  html += `Min: ${min}, Max: ${max}\n`;
+  html += `First-try hits: ${firstTry}/${RUNS} (${(firstTry/RUNS*100).toFixed(0)}%)\n`;
+  html += `Per-run: [${runResults.join(', ')}]\n`;
+
+  resultsDiv.innerHTML = html;
+  resultsDiv.style.display = 'block';
+  target.style.display = 'none';
+
+  hud.innerHTML = `<b>DONE</b><br>Avg: ${avg.toFixed(2)} clicks<br>First-try: ${firstTry}/${RUNS}`;
+
+  // Log to console for easy scraping
+  console.log(JSON.stringify({
+    diameter: DIAMETER, runs: RUNS, bg: BG_COLOR, color: CIRCLE_COLOR,
+    avgClicks: parseFloat(avg.toFixed(2)), min, max, firstTryRate: firstTry/RUNS,
+    perRun: runResults
+  }));
+}
+
+document.body.addEventListener('click', (e) => {
+  if (finished) return;
+
+  const clickX = e.clientX;
+  const clickY = e.clientY;
+  clicksThisRun++;
+  totalClicks++;
+
+  const dist = Math.sqrt((clickX - circleX)**2 + (clickY - circleY)**2);
+  const hit = dist <= DIAMETER / 2;
+
+  window.benchmarkState.clicksThisRun = clicksThisRun;
+  window.benchmarkState.missX = clickX;
+  window.benchmarkState.missY = clickY;
+  window.benchmarkState.hit = hit;
+
+  if (hit) {
+    // Record and move to next
+    runResults.push(clicksThisRun);
+    currentRun++;
+    window.benchmarkState.currentRun = currentRun;
+
+    if (currentRun >= RUNS) {
+      showResults();
+    } else {
+      // Clear miss markers
+      document.querySelectorAll('.miss-marker').forEach(m => m.remove());
+      placeCircle();
+    }
+  } else {
+    // Show miss marker
+    const marker = document.createElement('div');
+    marker.className = 'miss-marker';
+    marker.style.left = clickX + 'px';
+    marker.style.top = clickY + 'px';
+    document.body.appendChild(marker);
+    updateHud();
+  }
+});
+
+// Start
+placeCircle();
+</script>
+</body>
+</html>

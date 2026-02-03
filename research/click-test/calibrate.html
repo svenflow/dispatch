@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+<head><title>Calibrate</title>
+<style>
+* { margin: 0; padding: 0; }
+body { background: white; width: 100vw; height: 100vh; overflow: hidden; }
+.dot {
+  position: absolute;
+  width: 20px; height: 20px;
+  background: red;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+}
+#info {
+  position: fixed; bottom: 10px; left: 10px;
+  font: 14px monospace; background: #eee; padding: 5px;
+}
+</style>
+</head>
+<body>
+<!-- Red dots at known CSS positions -->
+<div class="dot" style="left:100px;top:100px;" title="100,100"></div>
+<div class="dot" style="left:500px;top:100px;" title="500,100"></div>
+<div class="dot" style="left:100px;top:500px;" title="100,500"></div>
+<div class="dot" style="left:500px;top:500px;" title="500,500"></div>
+<div class="dot" style="left:300px;top:300px;" title="300,300 CENTER"></div>
+<div id="info">Click anywhere to see coordinates</div>
+<script>
+document.body.addEventListener('click', e => {
+  document.getElementById('info').textContent =
+    `Clicked: (${e.clientX}, ${e.clientY}) | Page: (${e.pageX}, ${e.pageY})`;
+});
+</script>
+</body>
+</html>
