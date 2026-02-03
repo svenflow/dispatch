@@ -199,9 +199,9 @@ def phase3_api_keys():
           fix_hint="Create with GOOGLE_TTS_API_KEY=...",
           required=False)
 
-    check("Gemini API key (~/code/.env or ~/.claude/secrets.env)",
-          file_exists("~/code/.env") or file_exists("~/.claude/secrets.env"),
-          fix_hint="Create ~/code/.env with GEMINI_API_KEY=...",
+    check("Gemini API key (~/.claude/secrets.env)",
+          file_exists("~/.claude/secrets.env"),
+          fix_hint="Add GEMINI_API_KEY to ~/.claude/secrets.env",
           required=False)
 
     # Check if Anthropic API key is accessible
@@ -222,22 +222,22 @@ def phase3_api_keys():
 def phase4_chrome():
     print(f"\n{BOLD}Phase 4: Chrome Extension{RESET}")
 
-    chrome_dir = Path.home() / "code" / "chrome-control"
+    chrome_dir = Path.home() / ".claude" / "skills" / "chrome-control" / "scripts"
     check("Chrome control directory exists",
           chrome_dir.is_dir(),
-          fix_hint="Clone chrome-control repo to ~/code/chrome-control/")
+          fix_hint="Ensure ~/.claude/skills symlink points to skills directory")
 
     native_host_manifest = (Path.home() / "Library" / "Application Support" /
                             "Google" / "Chrome" / "NativeMessagingHosts" /
                             "com.dispatch.chrome_control.json")
     check("Native messaging host manifest",
           native_host_manifest.exists(),
-          fix_hint="Run: ~/code/chrome-control/install_native_host.sh")
+          fix_hint="Run: ~/.claude/skills/chrome-control/scripts/install_native_host.sh")
 
     chrome_cli = chrome_dir / "chrome"
     check("Chrome CLI executable",
           chrome_cli.exists() and os.access(chrome_cli, os.X_OK),
-          fix_hint="Check ~/code/chrome-control/chrome exists and is executable")
+          fix_hint="Check ~/.claude/skills/chrome-control/scripts/chrome exists and is executable")
 
     # Test connection
     chrome_ping = run_silent(f"{chrome_cli} ping 2>/dev/null") if chrome_cli.exists() else False
