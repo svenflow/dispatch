@@ -47,7 +47,7 @@ Each contact gets their own persistent Claude session with:
 
 ```bash
 # Clone the repo
-git clone https://github.com/nicklaude/dispatch.git ~/code/claude-assistant
+git clone https://github.com/YOUR-USERNAME/dispatch.git ~/code/claude-assistant
 cd ~/code/claude-assistant
 
 # Install dependencies
