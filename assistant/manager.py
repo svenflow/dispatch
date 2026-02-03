@@ -64,7 +64,7 @@ from assistant.sdk_backend import SDKBackend, SessionRegistry
 STATE_FILE = STATE_DIR / "last_rowid.txt"
 
 # Search daemon config
-SEARCH_DAEMON_DIR = HOME / "code/nicklaude-search"
+SEARCH_DAEMON_DIR = HOME / "code/dispatch-search"
 SEARCH_DAEMON_SCRIPT = SEARCH_DAEMON_DIR / "src/daemon.ts"
 SEARCH_DAEMON_PORT = 7890
 SEARCH_DAEMON_ENABLED = os.environ.get("DISABLE_SEARCH_DAEMON", "").lower() not in ("1", "true", "yes")

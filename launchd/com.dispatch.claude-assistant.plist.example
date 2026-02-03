@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.nicklaude.claude-assistant</string>
+    <string>com.dispatch.claude-assistant</string>
 
     <key>ProgramArguments</key>
     <array>

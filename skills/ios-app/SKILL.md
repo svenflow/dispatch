@@ -89,7 +89,7 @@ find ~/Library/Developer/Xcode/DerivedData -name "AppName.app" -path "*/Debug-ip
 xcrun simctl install booted /path/to/AppName.app
 
 # Launch
-xcrun simctl launch booted com.nicklaude.AppName
+xcrun simctl launch booted com.dispatch.AppName
 ```
 
 ### Screenshot the Simulator
@@ -122,10 +122,10 @@ xcrun simctl ui booted appearance dark
 xcrun simctl ui booted appearance light
 
 # Uninstall app
-xcrun simctl uninstall booted com.nicklaude.AppName
+xcrun simctl uninstall booted com.dispatch.AppName
 
 # Get app container path (to inspect files)
-xcrun simctl get_app_container booted com.nicklaude.AppName
+xcrun simctl get_app_container booted com.dispatch.AppName
 ```
 
 ## TestFlight Deployment Workflow
@@ -292,4 +292,4 @@ Usage: `bash deploy.sh HelloWorld`
 
 ## Bundle ID Convention
 
-All Nicklaude apps use: `com.nicklaude.AppName`
+All Dispatch apps use: `com.dispatch.AppName`

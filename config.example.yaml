@@ -10,7 +10,7 @@ wife:
   name: "Partner Name"  # Remove section if not applicable
 
 assistant:
-  name: "Nicklaude"
+  name: "Dispatch"
   email: "assistant@example.com"
 
 signal:

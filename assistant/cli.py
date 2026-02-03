@@ -533,8 +533,8 @@ def cmd_inject_prompt(args):
 
 def cmd_install(args):
     """Install LaunchAgent for auto-start on boot."""
-    plist_src = ASSISTANT_DIR / "launchd" / "com.nicklaude.claude-assistant.plist"
-    plist_dst = Path.home() / "Library/LaunchAgents/com.nicklaude.claude-assistant.plist"
+    plist_src = ASSISTANT_DIR / "launchd" / "com.dispatch.claude-assistant.plist"
+    plist_dst = Path.home() / "Library/LaunchAgents/com.dispatch.claude-assistant.plist"
 
     if not plist_src.exists():
         print(f"LaunchAgent plist not found: {plist_src}")
@@ -555,7 +555,7 @@ def cmd_install(args):
 
 def cmd_uninstall(args):
     """Uninstall LaunchAgent."""
-    plist_dst = Path.home() / "Library/LaunchAgents/com.nicklaude.claude-assistant.plist"
+    plist_dst = Path.home() / "Library/LaunchAgents/com.dispatch.claude-assistant.plist"
 
     if not plist_dst.exists():
         print("LaunchAgent not installed")
@@ -571,8 +571,8 @@ def cmd_uninstall(args):
 
 
 # Menu bar app commands
-MENUBAR_PLIST_SRC = ASSISTANT_DIR / "launchd" / "com.nicklaude.claude-menubar.plist"
-MENUBAR_PLIST_DST = Path.home() / "Library/LaunchAgents/com.nicklaude.claude-menubar.plist"
+MENUBAR_PLIST_SRC = ASSISTANT_DIR / "launchd" / "com.dispatch.claude-menubar.plist"
+MENUBAR_PLIST_DST = Path.home() / "Library/LaunchAgents/com.dispatch.claude-menubar.plist"
 
 
 def cmd_menubar(args):

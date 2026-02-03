@@ -50,7 +50,7 @@ For EPUB:
 ## Step 4: Find Downloaded File
 
 ```bash
-ls -la ~/Downloads/nicklaude/
+ls -la ~/Downloads/assistant/
 # Files named like: _OceanofPDF.com_Book_Title_-_Author_Name.pdf
 ```
 

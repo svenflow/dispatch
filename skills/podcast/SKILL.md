@@ -1,10 +1,10 @@
 ---
 name: podcast
-description: Manage the Nicklaude Podcast feed on GCS. Use when asked to publish podcast episodes, update the feed, or manage podcast content.
+description: Manage the Dispatch Podcast feed on GCS. Use when asked to publish podcast episodes, update the feed, or manage podcast content.
 allowed-tools: Bash(gsutil:*), Bash(uv:*), Bash(curl:*)
 ---
 
-# Nicklaude Podcast Management
+# Dispatch Podcast Management
 
 Private podcast feed hosted on Google Cloud Storage. Add it to Apple Podcasts or any podcast app.
 
@@ -12,7 +12,7 @@ Private podcast feed hosted on Google Cloud Storage. Add it to Apple Podcasts or
 
 **RSS Feed (for adding to podcast apps):**
 ```
-https://storage.googleapis.com/nicklaude-podcast/podcast.xml
+https://storage.googleapis.com/YOUR-PODCAST-BUCKET/podcast.xml
 ```
 
 **Spotify Show:**
@@ -35,7 +35,7 @@ To submit the RSS feed to Spotify:
 1. Go to [Spotify for Podcasters](https://creators.spotify.com)
 2. Log in with Spotify account
 3. Select "I already have a podcast"
-4. Paste the RSS feed URL: `https://storage.googleapis.com/nicklaude-podcast/podcast.xml`
+4. Paste the RSS feed URL: `https://storage.googleapis.com/YOUR-PODCAST-BUCKET/podcast.xml`
 5. Verify ownership via email code (sent to the email in the RSS feed's `itunes:owner` field)
 6. Add category, language, and country details
 7. Submit
@@ -58,7 +58,7 @@ After setup, Spotify pulls episodes automatically from the GCS bucket whenever t
 3. Tap the menu (three dots or "..." in top right)
 4. Select "Add Show by URL" or "Follow a Show by URL"
 5. Paste the feed URL above
-6. The podcast "Nicklaude Podcast" should appear
+6. The podcast "Dispatch Podcast" should appear
 
 ## Publishing a New Episode
 
@@ -95,10 +95,10 @@ cd ~/.claude/skills/tts && uv run python scripts/tts.py --file /tmp/script.txt -
 ```bash
 # Upload with proper headers
 gsutil -h "Content-Type:audio/mpeg" -h "Cache-Control:public, max-age=86400" \
-  cp /tmp/episode.mp3 gs://nicklaude-podcast/episodes/episode-name.mp3
+  cp /tmp/episode.mp3 gs://YOUR-PODCAST-BUCKET/episodes/episode-name.mp3
 
 # Make it publicly readable
-gsutil acl ch -u AllUsers:R gs://nicklaude-podcast/episodes/episode-name.mp3
+gsutil acl ch -u AllUsers:R gs://YOUR-PODCAST-BUCKET/episodes/episode-name.mp3
 ```
 
 ### Step 3: Get File Size and Duration
@@ -118,14 +118,14 @@ Download current feed, add new episode, and re-upload:
 
 ```bash
 # Download current feed
-gsutil cat gs://nicklaude-podcast/podcast.xml > /tmp/podcast.xml
+gsutil cat gs://YOUR-PODCAST-BUCKET/podcast.xml > /tmp/podcast.xml
 
 # Edit /tmp/podcast.xml to add new <item> (see XML Structure below)
 
 # Upload updated feed
 gsutil -h "Content-Type:application/rss+xml" \
   -h "Cache-Control:no-cache, no-store, max-age=0" \
-  cp /tmp/podcast.xml gs://nicklaude-podcast/podcast.xml
+  cp /tmp/podcast.xml gs://YOUR-PODCAST-BUCKET/podcast.xml
 ```
 
 ## XML Structure
@@ -136,26 +136,26 @@ gsutil -h "Content-Type:application/rss+xml" \
 <?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:atom="http://www.w3.org/2005/Atom">
   <channel>
-    <title>Nicklaude Podcast</title>
+    <title>Dispatch Podcast</title>
     <description>Private podcast feed for audio content</description>
-    <link>https://storage.googleapis.com/nicklaude-podcast</link>
-    <atom:link href="https://storage.googleapis.com/nicklaude-podcast/podcast.xml" rel="self" type="application/rss+xml"/>
+    <link>https://storage.googleapis.com/YOUR-PODCAST-BUCKET</link>
+    <atom:link href="https://storage.googleapis.com/YOUR-PODCAST-BUCKET/podcast.xml" rel="self" type="application/rss+xml"/>
     <language>en-us</language>
-    <itunes:author>Nicklaude</itunes:author>
+    <itunes:author>Dispatch</itunes:author>
     <itunes:owner>
-      <itunes:name>Nicklaude</itunes:name>
+      <itunes:name>Dispatch</itunes:name>
       <itunes:email>YOUR_EMAIL</itunes:email>  <!-- from config.local.yaml podcast.email -->
     </itunes:owner>
     <itunes:category text="Technology"/>
     <itunes:explicit>false</itunes:explicit>
-    <itunes:image href="https://storage.googleapis.com/nicklaude-podcast/artwork.png"/>
+    <itunes:image href="https://storage.googleapis.com/YOUR-PODCAST-BUCKET/artwork.png"/>
 
     <!-- Episodes go here, newest first -->
     <item>
       <title>Episode Title</title>
       <description>Episode description here.</description>
-      <enclosure url="https://storage.googleapis.com/nicklaude-podcast/episodes/filename.mp3" length="FILE_SIZE_BYTES" type="audio/mpeg"/>
-      <guid>https://storage.googleapis.com/nicklaude-podcast/episodes/filename.mp3</guid>
+      <enclosure url="https://storage.googleapis.com/YOUR-PODCAST-BUCKET/episodes/filename.mp3" length="FILE_SIZE_BYTES" type="audio/mpeg"/>
+      <guid>https://storage.googleapis.com/YOUR-PODCAST-BUCKET/episodes/filename.mp3</guid>
       <pubDate>DAY, DD MON YYYY HH:MM:SS -0500</pubDate>
       <itunes:duration>SECONDS</itunes:duration>
     </item>
@@ -172,8 +172,8 @@ Add new episodes at the TOP of the item list (before older episodes):
 <item>
   <title>Episode Title</title>
   <description>Episode description.</description>
-  <enclosure url="https://storage.googleapis.com/nicklaude-podcast/episodes/FILENAME.mp3" length="FILE_SIZE_IN_BYTES" type="audio/mpeg"/>
-  <guid>https://storage.googleapis.com/nicklaude-podcast/episodes/FILENAME.mp3</guid>
+  <enclosure url="https://storage.googleapis.com/YOUR-PODCAST-BUCKET/episodes/FILENAME.mp3" length="FILE_SIZE_IN_BYTES" type="audio/mpeg"/>
+  <guid>https://storage.googleapis.com/YOUR-PODCAST-BUCKET/episodes/FILENAME.mp3</guid>
   <pubDate>Sat, 25 Jan 2026 14:20:00 -0500</pubDate>
   <itunes:duration>DURATION_IN_SECONDS</itunes:duration>
 </item>
@@ -192,7 +192,7 @@ Add new episodes at the TOP of the item list (before older episodes):
 ## Bucket Contents
 
 ```
-gs://nicklaude-podcast/
+gs://YOUR-PODCAST-BUCKET/
 ├── podcast.xml          # The RSS feed
 ├── artwork.png          # Cover art (1500x1500)
 └── episodes/
@@ -202,13 +202,13 @@ gs://nicklaude-podcast/
 ## Listing Current Episodes
 
 ```bash
-gsutil ls gs://nicklaude-podcast/episodes/
+gsutil ls gs://YOUR-PODCAST-BUCKET/episodes/
 ```
 
 ## Viewing Current Feed
 
 ```bash
-curl -s https://storage.googleapis.com/nicklaude-podcast/podcast.xml
+curl -s https://storage.googleapis.com/YOUR-PODCAST-BUCKET/podcast.xml
 ```
 
 ## Updating Cover Art
@@ -226,8 +226,8 @@ curl -s https://storage.googleapis.com/nicklaude-podcast/podcast.xml
 3. Upload:
    ```bash
    gsutil -h "Content-Type:image/png" -h "Cache-Control:no-cache" \
-     cp /tmp/cover-resized.png gs://nicklaude-podcast/artwork.png
-   gsutil acl ch -u AllUsers:R gs://nicklaude-podcast/artwork.png
+     cp /tmp/cover-resized.png gs://YOUR-PODCAST-BUCKET/artwork.png
+   gsutil acl ch -u AllUsers:R gs://YOUR-PODCAST-BUCKET/artwork.png
    ```
 
 ## Troubleshooting
@@ -235,7 +235,7 @@ curl -s https://storage.googleapis.com/nicklaude-podcast/podcast.xml
 ### Feed not updating in podcast app
 - GCS caches aggressively - use `Cache-Control:no-cache, no-store` headers
 - Podcast apps also cache - may need to remove and re-add the podcast
-- Check the feed directly: `curl -s https://storage.googleapis.com/nicklaude-podcast/podcast.xml`
+- Check the feed directly: `curl -s https://storage.googleapis.com/YOUR-PODCAST-BUCKET/podcast.xml`
 
 ### Image not updating
 - Create new image with different filename to bypass cache

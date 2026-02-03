@@ -4,7 +4,7 @@
 # dependencies = []
 # ///
 """
-Nicklaude System Setup Wizard
+Dispatch System Setup Wizard
 Checks ALL requirements for the personal assistant system on macOS.
 """
 
@@ -229,7 +229,7 @@ def phase4_chrome():
 
     native_host_manifest = (Path.home() / "Library" / "Application Support" /
                             "Google" / "Chrome" / "NativeMessagingHosts" /
-                            "com.nicklaude.chrome_control.json")
+                            "com.dispatch.chrome_control.json")
     check("Native messaging host manifest",
           native_host_manifest.exists(),
           fix_hint="Run: ~/code/chrome-control/install_native_host.sh")
@@ -296,18 +296,18 @@ def phase6_daemon():
 
     # LaunchAgent plists
     la_dir = Path.home() / "Library" / "LaunchAgents"
-    daemon_plist = la_dir / "com.nicklaude.claude-assistant.plist"
+    daemon_plist = la_dir / "com.dispatch.claude-assistant.plist"
     check("Daemon LaunchAgent plist",
           daemon_plist.exists(),
           fix_hint="Run: claude-assistant install")
 
-    menubar_plist = la_dir / "com.nicklaude.claude-menubar.plist"
+    menubar_plist = la_dir / "com.dispatch.claude-menubar.plist"
     check("Menubar LaunchAgent plist",
           menubar_plist.exists(),
           fix_hint="Run: claude-assistant menubar-install",
           required=False)
 
-    chat_viewer_plist = la_dir / "com.nicklaude.chat-viewer.plist"
+    chat_viewer_plist = la_dir / "com.dispatch.chat-viewer.plist"
     check("Chat viewer LaunchAgent plist",
           chat_viewer_plist.exists(),
           required=False)
@@ -381,10 +381,10 @@ def phase7_databases():
           required=False)
 
     # Search daemon index
-    search_index = Path.home() / ".cache" / "nicklaude-search" / "index.sqlite"
+    search_index = Path.home() / ".cache" / "dispatch-search" / "index.sqlite"
     check("Search daemon index",
           search_index.exists(),
-          fix_hint="Run: uv run ~/code/nicklaude-search/search.py reindex",
+          fix_hint="Run: uv run ~/code/dispatch-search/search.py reindex",
           required=False)
 
 
@@ -399,7 +399,7 @@ def phase8_repos():
         "contacts-cli": "Contact lookup + tier management",
         "chrome-control": "Chrome browser automation",
         "nano-banana": "Image generation (Gemini)",
-        "nicklaude-search": "Hybrid search daemon",
+        "dispatch-search": "Hybrid search daemon",
         "chat-viewer": "Web UI for transcripts",
     }
 
@@ -453,7 +453,7 @@ def main():
     QUIET = "--quiet" in sys.argv
 
     print(f"\n{BOLD}{'='*60}{RESET}")
-    print(f"{BOLD}  Nicklaude System Setup Wizard{RESET}")
+    print(f"{BOLD}  Dispatch System Setup Wizard{RESET}")
     print(f"{BOLD}{'='*60}{RESET}")
 
     if AUTO_FIX:

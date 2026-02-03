@@ -1,13 +1,13 @@
 ---
 name: setup-wizard
-description: Setup wizard for fresh Nicklaude system installation. Use when setting up a new machine, checking system health, or diagnosing missing permissions/tools.
+description: Setup wizard for fresh Dispatch system installation. Use when setting up a new machine, checking system health, or diagnosing missing permissions/tools.
 user-invocable: true
 allowed-tools: Bash(*)
 ---
 
 # Setup Wizard
 
-Checks and guides through ALL requirements for the Nicklaude personal assistant system on a fresh macOS machine.
+Checks and guides through ALL requirements for the Dispatch personal assistant system on a fresh macOS machine.
 
 ## Usage
 

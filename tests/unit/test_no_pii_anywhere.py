@@ -32,6 +32,7 @@ BINARY_EXTS = {
     ".pyc", ".pyo", ".so", ".dylib", ".db", ".duckdb",
     ".png", ".jpg", ".jpeg", ".gif", ".ico", ".woff", ".woff2",
     ".ttf", ".eot", ".lock", ".gz", ".zip", ".tar",
+    ".plist",  # LaunchAgent plists are gitignored, contain system-specific paths
 }
 
 PII_PATTERNS = [
@@ -57,6 +58,8 @@ NAME_PATTERNS = [
     "nsthorat",
     "nikhil-thorat",
     "caroline-mcguire",
+    "nicklaude",
+    "Nicklaude",
 ]
 
 # These are borderline — IPs that are network-local but still PII-ish

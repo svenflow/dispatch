@@ -21,7 +21,7 @@ FEED_FILE = PODCAST_DIR / "feed.xml"
 # Podcast metadata
 PODCAST_TITLE = os.environ.get("PODCAST_TITLE", "Audio Articles")
 PODCAST_DESCRIPTION = "Text articles and PDFs converted to audio"
-PODCAST_AUTHOR = "Nicklaude TTS"
+PODCAST_AUTHOR = "Dispatch TTS"
 PODCAST_EMAIL = os.environ.get("PODCAST_EMAIL", "")
 PODCAST_IMAGE = ""  # Optional: URL to podcast artwork
 

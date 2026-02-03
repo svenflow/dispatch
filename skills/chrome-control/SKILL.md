@@ -56,7 +56,7 @@ Use `-p` or `--profile` flag with index or name:
 
 ```bash
 chrome -p 0 tabs              # Profile by index
-chrome -p nicklaude tabs      # Profile by name
+chrome -p assistant tabs      # Profile by name
 chrome -p 1 screenshot 123    # Different profile
 ```
 
@@ -68,14 +68,14 @@ Downloads are automatically saved to profile-specific directories:
 
 | Profile | Download Location |
 |---------|-------------------|
-| nicklaude (profile 0) | `~/Downloads/nicklaude/` |
+| assistant (profile 0) | `~/Downloads/assistant/` |
 | owner-profile (profile 1) | `~/Downloads/owner-profile/` |
 
 ## Profile Permissions
 
 **CRITICAL: Different profiles have different permission levels.**
 
-### Profile 0: nicklaude@gmail.com (Claude's Account)
+### Profile 0: assistant (see config.local.yaml chrome.profiles.0)
 
 This is YOUR account (Claude's). You have full autonomy to:
 - Browse, search, read emails

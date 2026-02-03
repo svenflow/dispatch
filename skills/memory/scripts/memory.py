@@ -395,7 +395,8 @@ def consolidate_memories(contact: str):
 
     # Find transcript files for this contact
     projects_dir = Path.home() / ".claude" / "projects"
-    contact_project = projects_dir / f"-Users-nicklaude-transcripts-{contact}"
+    username = Path.home().name
+    contact_project = projects_dir / f"-Users-{username}-transcripts-{contact}"
 
     if not contact_project.exists():
         print(f"CONSOLIDATE|{contact}|No transcript folder found")

@@ -136,7 +136,7 @@ DuckDB can read transcript JSONLs directly:
 ```sql
 -- Read all user messages from a contact's transcripts
 SELECT * FROM read_json_auto(
-  '~/.claude/projects/-Users-nicklaude-transcripts-<session-name>/*.jsonl'
+  '~/.claude/projects/-Users-USERNAME-transcripts-<session-name>/*.jsonl'
 ) WHERE type = 'user';
 ```
 
