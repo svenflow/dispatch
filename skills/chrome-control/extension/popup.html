@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body {
+      width: 200px;
+      padding: 10px;
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      font-size: 13px;
+    }
+    .status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+    .connected { background: #22c55e; }
+    .disconnected { background: #ef4444; }
+  </style>
+</head>
+<body>
+  <div class="status">
+    <div class="dot" id="statusDot"></div>
+    <span id="statusText">Checking...</span>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

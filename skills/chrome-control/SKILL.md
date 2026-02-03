@@ -102,7 +102,7 @@ This is the owner's personal account. **Requires explicit consent for ANY change
 ## CLI Location
 
 ```bash
-~/code/chrome-control/chrome
+~/.claude/skills/chrome-control/scripts/chrome
 ```
 
 ## Commands

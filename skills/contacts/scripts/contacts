@@ -1,0 +1,191 @@
+#!/usr/bin/env -S uv run --script
+"""
+contacts - Unified CLI for macOS Contacts.app management
+
+Usage:
+    contacts list                              # List all contacts with tiers
+    contacts list --tier family                # Filter by tier
+    contacts lookup +16175551234               # Find contact by phone
+    contacts add "First" "Last" "+1..." --tier family
+    contacts tier "Name"                       # Get tier
+    contacts tier "Name" family                # Set tier
+    contacts notes "Name"                      # Get notes
+    contacts notes "Name" "content"            # Set notes
+
+Tier hierarchy: admin > wife > family > favorite
+"""
+
+import sys
+import argparse
+
+# Import shared code from contacts_core
+from contacts_core import (
+    list_contacts,
+    lookup_phone,
+    lookup_email,
+    add_contact,
+    get_tier,
+    set_tier,
+    get_notes,
+    set_notes,
+)
+
+
+def cmd_list(tier_filter: str = None):
+    """List all contacts with their tiers."""
+    contacts = list_contacts(tier_filter)
+
+    for contact in contacts:
+        name = contact["name"]
+        phone = contact["phone"] or "(no phone)"
+        tier = contact["tier"]
+
+        # Filter by tier if specified
+        if tier_filter and tier != tier_filter:
+            continue
+
+        print(f"{name} | {phone} | {tier}")
+
+    return 0
+
+
+def cmd_lookup(identifier: str):
+    """Look up a contact by phone number or email address."""
+    # Check if it looks like an email address
+    if '@' in identifier:
+        contact = lookup_email(identifier)
+        if contact:
+            print(f"{contact['name']} | {contact['email']} | {contact['tier']}")
+            return 0
+    else:
+        contact = lookup_phone(identifier)
+        if contact:
+            print(f"{contact['name']} | {contact['phone']} | {contact['tier']}")
+            return 0
+
+    print(f"Not found: {identifier}", file=sys.stderr)
+    return 1
+
+
+def cmd_add(first: str, last: str, phone: str, tier: str = "none"):
+    """Add a new contact."""
+    success = add_contact(first, last, phone, tier)
+
+    if success:
+        print(f"Created: {first} {last} | {phone} | {tier}")
+        return 0
+    else:
+        print("Failed to create contact", file=sys.stderr)
+        return 1
+
+
+def cmd_tier_get(name: str):
+    """Get a contact's tier."""
+    tier = get_tier(name)
+    print(tier)
+    return 0
+
+
+def cmd_tier_set(name: str, tier: str):
+    """Set a contact's tier."""
+    success = set_tier(name, tier)
+
+    if success:
+        print(f"Updated: {name} -> {tier}")
+        return 0
+    else:
+        print(f"Failed to update tier for {name}", file=sys.stderr)
+        return 1
+
+
+def cmd_notes_get(name: str):
+    """Get a contact's notes."""
+    notes = get_notes(name)
+    if notes is not None:
+        print(notes)
+        return 0
+    else:
+        print(f"Contact not found: {name}", file=sys.stderr)
+        return 1
+
+
+def cmd_notes_set(name: str, content: str):
+    """Set a contact's notes."""
+    success = set_notes(name, content)
+
+    if success:
+        print(f"Saved notes for: {name}")
+        return 0
+    else:
+        print(f"Failed to save notes for {name}", file=sys.stderr)
+        return 1
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Manage macOS Contacts.app",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  contacts list                          # All contacts
+  contacts list --tier family            # Filter by tier
+  contacts lookup +16175551234           # Find by phone
+  contacts add "John" "Doe" "+1..." --tier favorite
+  contacts tier "John Doe"               # Get tier
+  contacts tier "John Doe" family        # Set tier
+  contacts notes "John Doe"              # Get notes
+  contacts notes "John Doe" "content"    # Set notes
+
+Tiers: admin, wife, family, favorite, none (removes from all)
+"""
+    )
+
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    # list
+    list_parser = subparsers.add_parser("list", help="List contacts")
+    list_parser.add_argument("--tier", "-t", help="Filter by tier")
+
+    # lookup
+    lookup_parser = subparsers.add_parser("lookup", help="Find contact by phone or email")
+    lookup_parser.add_argument("identifier", help="Phone number or email to search")
+
+    # add
+    add_parser = subparsers.add_parser("add", help="Add new contact")
+    add_parser.add_argument("first", help="First name")
+    add_parser.add_argument("last", help="Last name")
+    add_parser.add_argument("phone", help="Phone number")
+    add_parser.add_argument("--tier", "-t", default="none", help="Tier (admin/wife/family/favorite)")
+
+    # tier
+    tier_parser = subparsers.add_parser("tier", help="Get or set contact tier")
+    tier_parser.add_argument("name", help="Contact name")
+    tier_parser.add_argument("new_tier", nargs="?", help="New tier (omit to get current)")
+
+    # notes
+    notes_parser = subparsers.add_parser("notes", help="Get or set contact notes")
+    notes_parser.add_argument("name", help="Contact name")
+    notes_parser.add_argument("content", nargs="?", help="New notes (omit to get current)")
+
+    args = parser.parse_args()
+
+    if args.command == "list":
+        return cmd_list(args.tier)
+    elif args.command == "lookup":
+        return cmd_lookup(args.identifier)
+    elif args.command == "add":
+        return cmd_add(args.first, args.last, args.phone, args.tier)
+    elif args.command == "tier":
+        if args.new_tier:
+            return cmd_tier_set(args.name, args.new_tier)
+        else:
+            return cmd_tier_get(args.name)
+    elif args.command == "notes":
+        if args.content:
+            return cmd_notes_set(args.name, args.content)
+        else:
+            return cmd_notes_get(args.name)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

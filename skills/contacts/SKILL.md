@@ -1,7 +1,7 @@
 ---
 name: contacts
 description: Look up contact information, tiers, and notes from macOS Contacts.app. Use when you need to know about a user, find their phone number, check their tier, or manage their contact data.
-allowed-tools: Bash(~/code/contacts-cli/contacts*)
+allowed-tools: Bash(~/.claude/skills/contacts/scripts/contacts*)
 ---
 
 # Contacts Management Skill
@@ -11,7 +11,7 @@ This skill manages contacts using the native macOS Contacts.app. Tiers are imple
 ## CLI Location
 
 ```bash
-~/code/contacts-cli/contacts
+~/.claude/skills/contacts/scripts/contacts
 ```
 
 ## Architecture
@@ -33,48 +33,48 @@ This skill manages contacts using the native macOS Contacts.app. Tiers are imple
 ### List All Contacts
 ```bash
 # All contacts with tiers
-~/code/contacts-cli/contacts list
+~/.claude/skills/contacts/scripts/contacts list
 
 # Filter by tier
-~/code/contacts-cli/contacts list --tier family
-~/code/contacts-cli/contacts list --tier admin
+~/.claude/skills/contacts/scripts/contacts list --tier family
+~/.claude/skills/contacts/scripts/contacts list --tier admin
 ```
 
 ### Lookup Contact by Phone Number
 ```bash
-~/code/contacts-cli/contacts lookup +16175551234
+~/.claude/skills/contacts/scripts/contacts lookup +16175551234
 ```
 Returns: `Name | Phone | Tier`
 
 ### Add New Contact
 ```bash
 # With tier
-~/code/contacts-cli/contacts add "First" "Last" "+16175551234" --tier family
+~/.claude/skills/contacts/scripts/contacts add "First" "Last" "+16175551234" --tier family
 
 # Without tier (will be ignored by system)
-~/code/contacts-cli/contacts add "First" "Last" "+16175551234"
+~/.claude/skills/contacts/scripts/contacts add "First" "Last" "+16175551234"
 ```
 Valid tiers: admin, wife, family, favorite
 
 ### Get/Set Contact Tier
 ```bash
 # Get current tier
-~/code/contacts-cli/contacts tier "First Last"
+~/.claude/skills/contacts/scripts/contacts tier "First Last"
 
 # Set new tier
-~/code/contacts-cli/contacts tier "First Last" family
+~/.claude/skills/contacts/scripts/contacts tier "First Last" family
 
 # Remove from all tiers (contact will be ignored)
-~/code/contacts-cli/contacts tier "First Last" none
+~/.claude/skills/contacts/scripts/contacts tier "First Last" none
 ```
 
 ### Get/Set Contact Notes
 ```bash
 # Get notes
-~/code/contacts-cli/contacts notes "First Last"
+~/.claude/skills/contacts/scripts/contacts notes "First Last"
 
 # Set notes
-~/code/contacts-cli/contacts notes "First Last" "Prefers morning texts. Works at Google."
+~/.claude/skills/contacts/scripts/contacts notes "First Last" "Prefers morning texts. Works at Google."
 ```
 Notes are useful for remembering preferences, context, etc.
 

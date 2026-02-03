@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Receive messages via Signal using the daemon socket
+# Usage: receive-signal [--timeout SECONDS]
+
+set -e
+
+SOCKET="/tmp/signal-cli.sock"
+TIMEOUT="${1:-1}"
+
+# JSON-RPC request
+REQUEST=$(cat <<EOF
+{"jsonrpc":"2.0","method":"receive","id":1,"params":{"timeout":$TIMEOUT}}
+EOF
+)
+
+# Send via socket and get response
+echo "$REQUEST" | nc -U "$SOCKET"

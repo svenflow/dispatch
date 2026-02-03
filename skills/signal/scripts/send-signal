@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Send a message via Signal using the daemon socket
+# Usage: send-signal <phone> <message>
+
+set -e
+
+SOCKET="/tmp/signal-cli.sock"
+PHONE="${1:?Usage: send-signal <phone> <message>}"
+MESSAGE="${2:?Usage: send-signal <phone> <message>}"
+
+# Strip backslash-escaped exclamation marks (Claude often does this incorrectly)
+MESSAGE="${MESSAGE//\\!/!}"
+
+# Build JSON-RPC request with proper escaping via jq
+jq -cn --arg phone "$PHONE" --arg msg "$MESSAGE" \
+  '{"jsonrpc":"2.0","method":"send","id":1,"params":{"recipient":[$phone],"message":$msg}}' \
+  | nc -U "$SOCKET"

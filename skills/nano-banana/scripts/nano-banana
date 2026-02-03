@@ -1,0 +1,104 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["google-genai", "pillow", "python-dotenv"]
+# ///
+"""
+nano-banana - Generate images using Nano Banana Pro (Gemini 3 Pro Image).
+
+Usage:
+    nano-banana "A cat wearing a top hat" -o cat.png
+    nano-banana "Make the background blue" -i input.jpg -o output.png
+"""
+
+import argparse
+import os
+import sys
+from pathlib import Path
+
+from dotenv import load_dotenv
+from google import genai
+from PIL import Image
+
+
+def generate_image(prompt: str, input_image: Path | None = None, output: Path | None = None, model: str = "gemini-3-pro-image-preview") -> Path:
+    """Generate or edit an image using Nano Banana Pro."""
+
+    # Load API key from secrets.env
+    env_path = Path.home() / ".claude" / "secrets.env"
+    load_dotenv(env_path)
+
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise ValueError(f"GEMINI_API_KEY not found in {env_path}")
+
+    # Initialize client
+    client = genai.Client(api_key=api_key)
+
+    # Build contents
+    if input_image:
+        image = Image.open(input_image)
+        contents = [prompt, image]
+    else:
+        contents = prompt
+
+    # Generate
+    response = client.models.generate_content(
+        model=model,
+        contents=contents,
+    )
+
+    # Extract and save image
+    output_path = output or Path("generated_image.png")
+
+    for part in response.parts:
+        if part.inline_data is not None:
+            image = part.as_image()
+            image.save(output_path)
+            return output_path
+        elif part.text is not None:
+            # Model might return text (thinking/reasoning)
+            print(f"Model response: {part.text}", file=sys.stderr)
+
+    raise RuntimeError("No image was generated in the response")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Generate images using Nano Banana Pro (Gemini 3 Pro Image)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+    nano-banana "A sunset over mountains" -o sunset.png
+    nano-banana "Add a rainbow" -i photo.jpg -o edited.png
+    nano-banana "Logo for a coffee shop" --model gemini-2.5-flash-image
+        """
+    )
+    parser.add_argument("prompt", help="Text prompt for image generation/editing")
+    parser.add_argument("-i", "--input", type=Path, help="Input image for editing (optional)")
+    parser.add_argument("-o", "--output", type=Path, default=Path("generated_image.png"), help="Output file path (default: generated_image.png)")
+    parser.add_argument("--model", default="gemini-3-pro-image-preview",
+                       choices=["gemini-3-pro-image-preview", "gemini-2.5-flash-image"],
+                       help="Model to use (default: gemini-3-pro-image-preview)")
+
+    args = parser.parse_args()
+
+    if args.input and not args.input.exists():
+        print(f"Error: Input file not found: {args.input}", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        output_path = generate_image(
+            prompt=args.prompt,
+            input_image=args.input,
+            output=args.output,
+            model=args.model
+        )
+        print(f"Image saved to: {output_path}")
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

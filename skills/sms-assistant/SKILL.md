@@ -25,7 +25,7 @@ When your session starts or restarts, follow these steps:
 ### Read Recent Messages
 
 ```bash
-~/code/sms-cli/read-sms --chat "{{CHAT_ID}}" --limit 10
+~/.claude/skills/sms-assistant/scripts/read-sms --chat "{{CHAT_ID}}" --limit 10
 ```
 
 Works for both individual chats (phone number) and group chats (hex UUID).
@@ -125,13 +125,13 @@ Use the `send-sms` CLI to send messages without bash escaping issues:
 
 ```bash
 # Send to individual (chat_id = phone number)
-~/code/sms-cli/send-sms "+1234567890" "Hello there!"
+~/.claude/skills/sms-assistant/scripts/send-sms "+1234567890" "Hello there!"
 
 # Send to group (chat_id = hex UUID, auto-detected)
-~/code/sms-cli/send-sms "b3d258b9a4de447ca412eb335c82a077" "Hello group!"
+~/.claude/skills/sms-assistant/scripts/send-sms "b3d258b9a4de447ca412eb335c82a077" "Hello group!"
 
 # Unified: just use the chat_id
-~/code/sms-cli/send-sms "{{CHAT_ID}}" "message"
+~/.claude/skills/sms-assistant/scripts/send-sms "{{CHAT_ID}}" "message"
 ```
 
 The CLI auto-detects group chats (hex UUIDs 20+ chars) and handles special characters properly.
@@ -142,10 +142,10 @@ For Signal messages, use the Signal-specific CLIs:
 
 ```bash
 # Send to Signal individual (chat_id = phone number)
-~/code/signal/send-signal "+1234567890" "Hello there!"
+~/.claude/skills/signal/scripts/send-signal "+1234567890" "Hello there!"
 
 # Send to Signal group (chat_id = base64 group ID)
-~/code/signal/send-signal-group "IVzMluTGB6Jn9YeC/wfFxfPZXpV6ZRjI+Igu8EOOVbo=" "Hello group!"
+~/.claude/skills/signal/scripts/send-signal-group "IVzMluTGB6Jn9YeC/wfFxfPZXpV6ZRjI+Igu8EOOVbo=" "Hello group!"
 ```
 
 **CRITICAL:** Each incoming message tells you which send command to use in the "To reply to this group, use:" section. Always use the exact command shown in that section.
@@ -156,13 +156,13 @@ For Signal messages, use the Signal-specific CLIs:
 
 ```bash
 # Send image to individual
-~/code/sms-cli/send-sms "+1234567890" --image "/path/to/image.png"
+~/.claude/skills/sms-assistant/scripts/send-sms "+1234567890" --image "/path/to/image.png"
 
 # Send image to group
-~/code/sms-cli/send-sms "b3d258b9a4de447ca412eb335c82a077" --image "/path/to/image.png"
+~/.claude/skills/sms-assistant/scripts/send-sms "b3d258b9a4de447ca412eb335c82a077" --image "/path/to/image.png"
 
 # Send image with caption
-~/code/sms-cli/send-sms "{{CHAT_ID}}" "Check this out!" --image "/path/to/image.png"
+~/.claude/skills/sms-assistant/scripts/send-sms "{{CHAT_ID}}" "Check this out!" --image "/path/to/image.png"
 ```
 
 ## Quick Acknowledgments (Emoji Reactions)
@@ -186,16 +186,16 @@ Note: Native iMessage tapback reactions require unreliable UI scripting, so we u
 
 ```bash
 # Individual chat (phone number is the chat_id)
-~/code/sms-cli/read-sms --chat +16175551234
+~/.claude/skills/sms-assistant/scripts/read-sms --chat +16175551234
 
 # Group chat (hex UUID is the chat_id)
-~/code/sms-cli/read-sms --chat "b3d258b9a4de447ca412eb335c82a077"
+~/.claude/skills/sms-assistant/scripts/read-sms --chat "b3d258b9a4de447ca412eb335c82a077"
 
 # With time filter
-~/code/sms-cli/read-sms --chat +16175551234 --since "2026-01-23 17:00:00"
+~/.claude/skills/sms-assistant/scripts/read-sms --chat +16175551234 --since "2026-01-23 17:00:00"
 
 # More messages
-~/code/sms-cli/read-sms --chat +16175551234 --limit 50
+~/.claude/skills/sms-assistant/scripts/read-sms --chat +16175551234 --limit 50
 ```
 
 The `--chat` flag works with both phone numbers (individuals) and hex UUIDs (groups).
@@ -232,10 +232,10 @@ If someone in a group chat asks you to do something, send your response (text or
 
 ```bash
 # Send text (preferred - uses CLI)
-~/code/sms-cli/send-sms -g "chat_identifier" "message"
+~/.claude/skills/sms-assistant/scripts/send-sms -g "chat_identifier" "message"
 
 # Auto-detect group (hex string IDs work without -g flag)
-~/code/sms-cli/send-sms "chat_identifier" "message"
+~/.claude/skills/sms-assistant/scripts/send-sms "chat_identifier" "message"
 
 # Send image to group (use AppleScript directly)
 osascript -e 'tell application "Messages"
@@ -255,7 +255,7 @@ end tell'
 sqlite3 ~/Library/Messages/chat.db "SELECT chat_identifier, display_name FROM chat WHERE chat_identifier NOT LIKE '+%' LIMIT 20;"
 
 # Read messages from a specific group
-~/code/sms-cli/read-sms --chat "chat_identifier"
+~/.claude/skills/sms-assistant/scripts/read-sms --chat "chat_identifier"
 ```
 
 ### Group Chat Rules
@@ -310,15 +310,15 @@ When asked to generate/edit images:
 
 ```bash
 # Generate
-cd ~/code/nano-banana && uv run python main.py "prompt" -o /tmp/output.png
+~/.claude/skills/nano-banana/scripts/nano-banana "prompt" -o /tmp/output.png
 
 # Edit existing image
-cd ~/code/nano-banana && uv run python main.py "edit prompt" -i /path/to/input.png -o /tmp/output.png
+~/.claude/skills/nano-banana/scripts/nano-banana "edit prompt" -i /path/to/input.png -o /tmp/output.png
 ```
 
 Then send:
 ```bash
-~/code/sms-cli/send-sms "{{CHAT_ID}}" --image /tmp/output.png
+~/.claude/skills/sms-assistant/scripts/send-sms "{{CHAT_ID}}" --image /tmp/output.png
 ```
 
 ---
@@ -327,7 +327,7 @@ Then send:
 
 Keep notes about your human:
 ```bash
-~/code/contacts-cli/contacts notes "Contact Name" "notes content"
+~/.claude/skills/contacts/scripts/contacts notes "Contact Name" "notes content"
 ```
 
 Notes are injected at session start, so you have context after restarts.

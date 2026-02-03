@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Send a message to a Signal group using the daemon socket
+# Usage: send-signal-group <group_id> <message>
+
+set -e
+
+SOCKET="/tmp/signal-cli.sock"
+GROUP_ID="${1:?Usage: send-signal-group <group_id> <message>}"
+MESSAGE="${2:?Usage: send-signal-group <group_id> <message>}"
+
+# Strip backslash-escaped exclamation marks (Claude often does this incorrectly)
+MESSAGE="${MESSAGE//\\!/!}"
+
+# Build JSON-RPC request with proper escaping via jq and account parameter
+REQUEST=$(jq -c -n --arg gid "$GROUP_ID" --arg msg "$MESSAGE" \
+  '{"jsonrpc":"2.0","method":"send","id":1,"params":{"groupId":$gid,"message":$msg}}')
+
+# Send via socket and get response
+printf '%s\n' "$REQUEST" | nc -U "$SOCKET"

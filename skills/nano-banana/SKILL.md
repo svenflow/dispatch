@@ -10,13 +10,13 @@ Generate images from text prompts or edit existing images using Google's Nano Ba
 ## Generate an Image
 
 ```bash
-cd ~/code/nano-banana && uv run python main.py "your prompt here" -o /tmp/output.png
+~/.claude/skills/nano-banana/scripts/nano-banana "your prompt here" -o /tmp/output.png
 ```
 
 ## Edit an Existing Image
 
 ```bash
-cd ~/code/nano-banana && uv run python main.py "make the sky purple" -i /path/to/input.jpg -o /tmp/edited.png
+~/.claude/skills/nano-banana/scripts/nano-banana "make the sky purple" -i /path/to/input.jpg -o /tmp/edited.png
 ```
 
 ## Options
@@ -31,28 +31,28 @@ cd ~/code/nano-banana && uv run python main.py "make the sky purple" -i /path/to
 
 ```bash
 # Generate a logo
-cd ~/code/nano-banana && uv run python main.py "minimalist logo for a coffee shop called 'Bean There'" -o /tmp/logo.png
+~/.claude/skills/nano-banana/scripts/nano-banana "minimalist logo for a coffee shop called 'Bean There'" -o /tmp/logo.png
 
 # Edit a photo
-cd ~/code/nano-banana && uv run python main.py "remove the background and make it transparent" -i photo.jpg -o /tmp/edited.png
+~/.claude/skills/nano-banana/scripts/nano-banana "remove the background and make it transparent" -i photo.jpg -o /tmp/edited.png
 
 # Quick generation with faster model
-cd ~/code/nano-banana && uv run python main.py "sunset over mountains" -o /tmp/sunset.png --model gemini-2.5-flash-image
+~/.claude/skills/nano-banana/scripts/nano-banana "sunset over mountains" -o /tmp/sunset.png --model gemini-2.5-flash-image
 ```
 
 ## Sending Generated Images
 
 After generating, send to a contact:
 ```bash
-~/code/sms-cli/send-sms "+phone" --image /tmp/output.png
+~/.claude/skills/sms-assistant/scripts/send-sms "+phone" --image /tmp/output.png
 
 # Or with a caption
-~/code/sms-cli/send-sms "+phone" "Here's what I generated!" --image /tmp/output.png
+~/.claude/skills/sms-assistant/scripts/send-sms "+phone" "Here's what I generated!" --image /tmp/output.png
 ```
 
 ## Notes
 
-- API key is loaded from `~/code/.env` (GEMINI_API_KEY)
+- API key is loaded from `~/.claude/secrets.env` (GEMINI_API_KEY)
 - Pro model has better quality but takes 5-15 seconds (thinking mode)
 - Flash model is faster for simpler generations
 - Supported input formats: JPEG, PNG, WebP
