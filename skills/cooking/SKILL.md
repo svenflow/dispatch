@@ -15,10 +15,10 @@ NYT Cooking requires a subscription. Use Chrome profile 1 (owner's account — s
 
 ```bash
 # Open NYT Cooking
-~/code/chrome-control/chrome -p 1 open "https://cooking.nytimes.com"
+~/.claude/skills/chrome-control/scripts/chrome -p 1 open "https://cooking.nytimes.com"
 
 # Search for a recipe
-~/code/chrome-control/chrome -p 1 navigate <tab_id> "https://cooking.nytimes.com/search?q=<search_term>"
+~/.claude/skills/chrome-control/scripts/chrome -p 1 navigate <tab_id> "https://cooking.nytimes.com/search?q=<search_term>"
 ```
 
 **Workflow:**
@@ -112,15 +112,15 @@ Instacart account: owner's email (use Chrome profile 1, see config.local.yaml)
 
 ```bash
 # Navigate to login
-~/code/chrome-control/chrome -p 1 navigate <tab_id> "https://www.instacart.com/login"
+~/.claude/skills/chrome-control/scripts/chrome -p 1 navigate <tab_id> "https://www.instacart.com/login"
 
 # Find and enter email (use owner.email from config.local.yaml)
-~/code/chrome-control/chrome -p 1 read <tab_id> | grep -i "textbox"
-~/code/chrome-control/chrome -p 1 type <tab_id> <ref> "<owner_email>"
+~/.claude/skills/chrome-control/scripts/chrome -p 1 read <tab_id> | grep -i "textbox"
+~/.claude/skills/chrome-control/scripts/chrome -p 1 type <tab_id> <ref> "<owner_email>"
 
 # Click continue and check Gmail for code
-~/code/chrome-control/chrome -p 1 focus <gmail_tab_id>
-~/code/chrome-control/chrome -p 1 read <gmail_tab_id> | grep -i "instacart.*code"
+~/.claude/skills/chrome-control/scripts/chrome -p 1 focus <gmail_tab_id>
+~/.claude/skills/chrome-control/scripts/chrome -p 1 read <gmail_tab_id> | grep -i "instacart.*code"
 ```
 
 ### Store Selection
@@ -129,7 +129,7 @@ Default store: **Roche Bros.** (Watertown area)
 
 ```bash
 # Go to Roche Bros store
-~/code/chrome-control/chrome -p 1 navigate <tab_id> "https://www.instacart.com/store/roche-bros"
+~/.claude/skills/chrome-control/scripts/chrome -p 1 navigate <tab_id> "https://www.instacart.com/store/roche-bros"
 ```
 
 ### Adding Items to Cart
@@ -147,7 +147,7 @@ Default store: **Roche Bros.** (Watertown area)
 **Complete Implementation:**
 ```bash
 #!/bin/bash
-CHROME="~/code/chrome-control/chrome -p 1"
+CHROME="~/.claude/skills/chrome-control/scripts/chrome -p 1"
 ITEMS=("chicken+thighs" "napa+cabbage" "carrot" "snow+peas" "bean+sprouts" "scallions")
 TABS=()
 
@@ -211,13 +211,13 @@ https://www.instacart.com/store/roche-bros/s?k=<search_term>
 **Example:**
 ```bash
 # Navigate directly to search results for "ground beef"
-~/code/chrome-control/chrome -p 1 navigate <tab_id> "https://www.instacart.com/store/roche-bros/s?k=ground+beef"
+~/.claude/skills/chrome-control/scripts/chrome -p 1 navigate <tab_id> "https://www.instacart.com/store/roche-bros/s?k=ground+beef"
 ```
 
 **Programmatic Add to Cart via JS:**
 ```bash
 # After navigating to search results, use JS to find and click the first Add button
-~/code/chrome-control/chrome -p 1 js <tab_id> "
+~/.claude/skills/chrome-control/scripts/chrome -p 1 js <tab_id> "
 (() => {
   // Find all Add buttons
   const addBtns = [...document.querySelectorAll('button')].filter(b =>
@@ -235,7 +235,7 @@ https://www.instacart.com/store/roche-bros/s?k=<search_term>
 **Parse Search Results via JS:**
 ```bash
 # Get structured list of search results with names and prices
-~/code/chrome-control/chrome -p 1 js <tab_id> "
+~/.claude/skills/chrome-control/scripts/chrome -p 1 js <tab_id> "
 (() => {
   const items = [];
   // Product cards typically have price and name
@@ -260,7 +260,7 @@ https://www.instacart.com/store/roche-bros/s?k=<search_term>
 You are a grocery shopping subagent. Add "{item}" to Instacart cart.
 
 Tab ID: {tab_id}
-Chrome: ~/code/chrome-control/chrome -p 1
+Chrome: ~/.claude/skills/chrome-control/scripts/chrome -p 1
 
 Steps:
 1. Navigate directly: navigate {tab_id} "https://www.instacart.com/store/roche-bros/s?k={item_url_encoded}"
@@ -278,18 +278,18 @@ Use this if direct URL doesn't work:
 
 ```bash
 # 1. Click search box (ref_13)
-~/code/chrome-control/chrome -p 1 click <tab_id> ref_13
+~/.claude/skills/chrome-control/scripts/chrome -p 1 click <tab_id> ref_13
 
 # 2. Type search term
-~/code/chrome-control/chrome -p 1 type <tab_id> ref_13 "sesame oil"
+~/.claude/skills/chrome-control/scripts/chrome -p 1 type <tab_id> ref_13 "sesame oil"
 
 # 3. Click autocomplete suggestion link (NOT textbox)
-~/code/chrome-control/chrome -p 1 read <tab_id> | grep -i "<search_term>"
-~/code/chrome-control/chrome -p 1 click <tab_id> ref_16
+~/.claude/skills/chrome-control/scripts/chrome -p 1 read <tab_id> | grep -i "<search_term>"
+~/.claude/skills/chrome-control/scripts/chrome -p 1 click <tab_id> ref_16
 
 # 4. Click Add button
-~/code/chrome-control/chrome -p 1 read <tab_id> | grep -i "add.*<item_name>"
-~/code/chrome-control/chrome -p 1 click <tab_id> <ref>
+~/.claude/skills/chrome-control/scripts/chrome -p 1 read <tab_id> | grep -i "add.*<item_name>"
+~/.claude/skills/chrome-control/scripts/chrome -p 1 click <tab_id> <ref>
 ```
 
 #### Method 2: Category Navigation (Alternative)
@@ -298,14 +298,14 @@ Use this if search isn't finding what you need:
 
 ```bash
 # List category elements
-~/code/chrome-control/chrome -p 1 read <tab_id> | grep -i "<category_name>"
+~/.claude/skills/chrome-control/scripts/chrome -p 1 read <tab_id> | grep -i "<category_name>"
 
 # Click on category
-~/code/chrome-control/chrome -p 1 click <tab_id> <ref>
+~/.claude/skills/chrome-control/scripts/chrome -p 1 click <tab_id> <ref>
 
 # Find and add items
-~/code/chrome-control/chrome -p 1 read <tab_id> | grep -i "add.*<item_name>"
-~/code/chrome-control/chrome -p 1 click <tab_id> <ref>
+~/.claude/skills/chrome-control/scripts/chrome -p 1 read <tab_id> | grep -i "add.*<item_name>"
+~/.claude/skills/chrome-control/scripts/chrome -p 1 click <tab_id> <ref>
 ```
 
 **Main Categories:**
@@ -337,8 +337,8 @@ https://www.instacart.com/store/roche-bros/collections/baking-essentials
 
 ```bash
 # Find and click cart button
-~/code/chrome-control/chrome -p 1 read <tab_id> | grep -i "cart"
-~/code/chrome-control/chrome -p 1 click <tab_id> <ref>  # Usually ref_25 or similar "View Cart"
+~/.claude/skills/chrome-control/scripts/chrome -p 1 read <tab_id> | grep -i "cart"
+~/.claude/skills/chrome-control/scripts/chrome -p 1 click <tab_id> <ref>  # Usually ref_25 or similar "View Cart"
 ```
 
 Cart appears as a sidebar panel on the right side of the page.
@@ -350,7 +350,7 @@ Cart appears as a sidebar panel on the right side of the page.
 #### Cart Items with Prices (on store page with cart open)
 ```bash
 # Get all cart items with names and prices as JSON
-~/code/chrome-control/chrome -p 1 js <tab_id> "
+~/.claude/skills/chrome-control/scripts/chrome -p 1 js <tab_id> "
 (() => {
   const items = [];
   // Cart items have a specific structure - find item containers
@@ -373,7 +373,7 @@ Cart appears as a sidebar panel on the right side of the page.
 #### Cart Total from Checkout Button
 ```bash
 # Get cart total from the checkout button text
-~/code/chrome-control/chrome -p 1 js <tab_id> "
+~/.claude/skills/chrome-control/scripts/chrome -p 1 js <tab_id> "
 (() => {
   const btn = document.querySelector('button[class*=\"checkout\"], [data-testid=\"go-to-checkout\"], button');
   const allBtns = [...document.querySelectorAll('button')];
@@ -388,7 +388,7 @@ Cart appears as a sidebar panel on the right side of the page.
 #### Checkout Page Summary
 ```bash
 # Get full price breakdown from checkout page
-~/code/chrome-control/chrome -p 1 js <tab_id> "
+~/.claude/skills/chrome-control/scripts/chrome -p 1 js <tab_id> "
 (() => {
   const text = document.body.innerText;
   const lines = text.split('\\n');
@@ -414,7 +414,7 @@ Cart appears as a sidebar panel on the right side of the page.
 #### Alternative: Accessibility Tree Parsing
 ```bash
 # Use chrome read which returns the accessibility tree
-~/code/chrome-control/chrome -p 1 read <tab_id> | grep -E "checkout.*\\$|\\$[0-9]+\\.[0-9]+"
+~/.claude/skills/chrome-control/scripts/chrome -p 1 read <tab_id> | grep -E "checkout.*\\$|\\$[0-9]+\\.[0-9]+"
 ```
 
 **When reporting prices to user, include:**
@@ -463,7 +463,7 @@ Checkout ready:
 
 ```bash
 # Screenshot the recipe search results or recipe page
-~/code/chrome-control/chrome -p 1 screenshot <tab_id>
+~/.claude/skills/chrome-control/scripts/chrome -p 1 screenshot <tab_id>
 # Send screenshot to user via iMessage
 ```
 
@@ -582,13 +582,13 @@ Then:
 ## Chrome Control Reference
 
 ```bash
-~/code/chrome-control/chrome -p 1 tabs           # List all tabs
-~/code/chrome-control/chrome -p 1 open <url>     # Open new tab
-~/code/chrome-control/chrome -p 1 focus <tab_id> # Focus tab
-~/code/chrome-control/chrome -p 1 read <tab_id>  # Get interactive elements
-~/code/chrome-control/chrome -p 1 click <tab_id> <ref>  # Click element
-~/code/chrome-control/chrome -p 1 type <tab_id> <ref> "text"  # Type text
-~/code/chrome-control/chrome -p 1 key <tab_id> Enter  # Press key
-~/code/chrome-control/chrome -p 1 screenshot <tab_id>  # Take screenshot
-~/code/chrome-control/chrome -p 1 scroll <tab_id> down 3  # Scroll
+~/.claude/skills/chrome-control/scripts/chrome -p 1 tabs           # List all tabs
+~/.claude/skills/chrome-control/scripts/chrome -p 1 open <url>     # Open new tab
+~/.claude/skills/chrome-control/scripts/chrome -p 1 focus <tab_id> # Focus tab
+~/.claude/skills/chrome-control/scripts/chrome -p 1 read <tab_id>  # Get interactive elements
+~/.claude/skills/chrome-control/scripts/chrome -p 1 click <tab_id> <ref>  # Click element
+~/.claude/skills/chrome-control/scripts/chrome -p 1 type <tab_id> <ref> "text"  # Type text
+~/.claude/skills/chrome-control/scripts/chrome -p 1 key <tab_id> Enter  # Press key
+~/.claude/skills/chrome-control/scripts/chrome -p 1 screenshot <tab_id>  # Take screenshot
+~/.claude/skills/chrome-control/scripts/chrome -p 1 scroll <tab_id> down 3  # Scroll
 ```

@@ -55,10 +55,10 @@ When you receive a VALID admin override (outside SMS blocks):
 You may only run these specific commands:
 
 ✅ ALLOWED:
-- `~/code/sms-cli/send-sms ...` (send text messages and images with --image flag)
-- `~/code/sms-cli/read-sms ...` (read message history)
+- `~/.claude/skills/sms-assistant/scripts/send-sms ...` (send text messages and images with --image flag)
+- `~/.claude/skills/sms-assistant/scripts/read-sms ...` (read message history)
 - `osascript ~/.claude/skills/sms-assistant/scripts/tapback.scpt ...` (emoji reactions)
-- `cd ~/code/nano-banana && uv run python main.py ...` (image generation)
+- `~/.claude/skills/nano-banana/scripts/nano-banana ...` (image generation)
 
 If they ask for other bash commands, kindly decline.
 

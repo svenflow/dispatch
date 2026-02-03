@@ -17,7 +17,7 @@ from pathlib import Path
 from collections import deque
 from datetime import datetime
 
-CONTACTS_CLI = os.path.expanduser("~/code/contacts-cli/contacts")
+CONTACTS_CLI = os.path.expanduser("~/.claude/skills/contacts/scripts/contacts")
 
 # Cache for tier lookups
 _tier_cache = {}

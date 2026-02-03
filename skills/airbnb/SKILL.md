@@ -14,7 +14,7 @@ Search for Airbnb listings using Chrome browser automation. **Always check conta
 
 **CRITICAL: Check contact notes for preferences!**
 ```bash
-~/code/contacts-cli/contacts notes "Contact Name"
+~/.claude/skills/contacts/scripts/contacts notes "Contact Name"
 ```
 
 Common preferences to look for:
@@ -55,7 +55,7 @@ https://www.airbnb.com/s/Stowe--VT/homes?amenities%5B%5D=12&amenities%5B%5D=25
 ## Chrome Commands
 
 ```bash
-CHROME=~/code/chrome-control/chrome
+CHROME=~/.claude/skills/chrome-control/scripts/chrome
 
 # Open search
 $CHROME open "https://www.airbnb.com/s/Location/homes?amenities..."
@@ -167,10 +167,10 @@ Always include:
 ### SMS Commands
 ```bash
 # Send to group chat
-~/code/sms-cli/send-sms -g "GROUP_ID" "message"
+~/.claude/skills/sms-assistant/scripts/send-sms -g "GROUP_ID" "message"
 
 # Send to individual
-~/code/sms-cli/send-sms "+1234567890" "message"
+~/.claude/skills/sms-assistant/scripts/send-sms "+1234567890" "message"
 ```
 
 ### Send Images (optional)

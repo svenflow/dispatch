@@ -18,7 +18,7 @@ class BackendConfig(BaseModel, frozen=True):
     registry_prefix: str   # "" for iMessage, "signal:" for Signal, "test:" for Test
 
     # CLI command templates. {chat_id} is replaced at call site.
-    send_cmd: str          # '~/code/sms-cli/send-sms "{chat_id}"'
+    send_cmd: str          # '~/.claude/skills/sms-assistant/scripts/send-sms "{chat_id}"'
     send_group_cmd: str    # same or different for groups
     history_cmd: str       # CLI template or "" if unavailable
 
@@ -29,17 +29,17 @@ BACKENDS: dict[str, BackendConfig] = {
         label="SMS",
         session_suffix="",
         registry_prefix="",
-        send_cmd='~/code/sms-cli/send-sms "{chat_id}"',
-        send_group_cmd='~/code/sms-cli/send-sms "{chat_id}"',
-        history_cmd='~/code/sms-cli/read-sms --chat "{chat_id}" --limit {limit}',
+        send_cmd='~/.claude/skills/sms-assistant/scripts/send-sms "{chat_id}"',
+        send_group_cmd='~/.claude/skills/sms-assistant/scripts/send-sms "{chat_id}"',
+        history_cmd='~/.claude/skills/sms-assistant/scripts/read-sms --chat "{chat_id}" --limit {limit}',
     ),
     "signal": BackendConfig(
         name="signal",
         label="SIGNAL",
         session_suffix="-signal",
         registry_prefix="signal:",
-        send_cmd='~/code/signal/send-signal "{chat_id}"',
-        send_group_cmd='~/code/signal/send-signal-group "{chat_id}"',
+        send_cmd='~/.claude/skills/signal/scripts/send-signal "{chat_id}"',
+        send_group_cmd='~/.claude/skills/signal/scripts/send-signal-group "{chat_id}"',
         history_cmd="",
     ),
     "test": BackendConfig(

@@ -49,7 +49,7 @@ uv run ~/.claude/skills/tts/scripts/tts.py --file /tmp/extracted.txt -o /tmp/aud
 
 After generating audio, send via iMessage:
 ```bash
-~/code/sms-cli/send-sms "+phone" --image /tmp/output.mp3
+~/.claude/skills/sms-assistant/scripts/send-sms "+phone" --image /tmp/output.mp3
 ```
 
 ## API Key

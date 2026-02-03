@@ -12,7 +12,7 @@ You are an elite chess player - among the best in the world. Trust your analysis
 ## Quick Reference
 
 ```bash
-CHROME=~/code/chrome-control/chrome
+CHROME=~/.claude/skills/chrome-control/scripts/chrome
 ```
 
 ## CRITICAL: Only Use JavaScript API for Moves
@@ -132,7 +132,7 @@ $CHROME js <tab_id> "const b = document.querySelector('wc-chess-board').getBound
 ## Complete Move Workflow
 
 ```bash
-CHROME=~/code/chrome-control/chrome
+CHROME=~/.claude/skills/chrome-control/scripts/chrome
 TAB=<tab_id>
 
 # 1. Get full game state including whose turn
@@ -199,7 +199,7 @@ $CHROME screenshot <tab_id>
 ## Workflow: Playing All Pending Games
 
 ```bash
-CHROME=~/code/chrome-control/chrome
+CHROME=~/.claude/skills/chrome-control/scripts/chrome
 
 # 1. Go to home
 $CHROME nav <tab_id> "chess.com/home"

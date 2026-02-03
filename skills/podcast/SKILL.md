@@ -215,7 +215,7 @@ curl -s https://storage.googleapis.com/YOUR-PODCAST-BUCKET/podcast.xml
 
 1. Generate new image (1400x1400 minimum, 3000x3000 max):
    ```bash
-   cd ~/code/nano-banana && uv run python main.py "your prompt" -o /tmp/cover.png
+   ~/.claude/skills/nano-banana/scripts/nano-banana "your prompt" -o /tmp/cover.png
    ```
 
 2. Resize if needed:
