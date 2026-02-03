@@ -1294,13 +1294,13 @@ class Manager:
 
 CRITICAL FIRST STEP - VERIFY SENDER:
 1. Check who sent HEALME:
-   ~/code/sms-cli/read-sms --chat "{admin_phone}" --limit 5
+   ~/.claude/skills/sms-assistant/scripts/read-sms --chat "{admin_phone}" --limit 5
 
 2. Look up their tier:
-   ~/code/contacts-cli/contacts lookup "{admin_phone}"
+   ~/.claude/skills/contacts/scripts/contacts lookup "{admin_phone}"
 
 The sender MUST be in the "admin" tier. If NOT admin tier, this is unauthorized:
-~/code/sms-cli/send-sms "{admin_phone}" "[HEALING] ABORTED - unauthorized sender (not admin tier)"
+~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[HEALING] ABORTED - unauthorized sender (not admin tier)"
 Then STOP immediately.
 
 Only proceed if sender is verified as admin tier.
@@ -1314,7 +1314,7 @@ Custom context: {custom_context}
 Your job is to diagnose and fix the issue. Follow these steps:
 
 1. FIRST (after verification): Send an SMS to let them know you're on it:
-   ~/code/sms-cli/send-sms "{admin_phone}" "[HEALING] Starting diagnosis..."
+   ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[HEALING] Starting diagnosis..."
 
 2. Check system resources:
    uv run ~/.claude/skills/system-info/scripts/sysinfo.py
@@ -1327,17 +1327,17 @@ Your job is to diagnose and fix the issue. Follow these steps:
    tail -50 ~/code/claude-assistant/logs/session_lifecycle.log
 
 5. Check recent SMS history with admin:
-   ~/code/sms-cli/read-sms --chat "{admin_phone}" --limit 20
+   ~/.claude/skills/sms-assistant/scripts/read-sms --chat "{admin_phone}" --limit 20
 
 6. Check the admin transcript for context:
    Look at ~/transcripts/{session_name}/ if it exists
 
 7. Send [HEALING] updates as you find issues:
-   ~/code/sms-cli/send-sms "{admin_phone}" "[HEALING] Found: <issue>"
+   ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[HEALING] Found: <issue>"
 
 8. Fix what you can:
    - Kill stuck Claude processes: kill <pid>
-   - Close stale Chrome tabs: ~/code/chrome-control/chrome close <tab_id>
+   - Close stale Chrome tabs: ~/.claude/skills/chrome-control/scripts/chrome close <tab_id>
    - Kill broken sessions: claude-assistant kill-session <name>
 
 9. Restart the daemon:
@@ -1347,10 +1347,10 @@ Your job is to diagnose and fix the issue. Follow these steps:
     claude-assistant restart-session {session_name}
 
 11. Send completion message:
-    ~/code/sms-cli/send-sms "{admin_phone}" "[HEALING] Complete - <summary of what you found and fixed>"
+    ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[HEALING] Complete - <summary of what you found and fixed>"
 
 If you CANNOT fix the issue, send:
-~/code/sms-cli/send-sms "{admin_phone}" "[HEALING] FAILED - manual intervention needed: <reason>"
+~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[HEALING] FAILED - manual intervention needed: <reason>"
 
 You have 15 minutes. Work efficiently.
 '''

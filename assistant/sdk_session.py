@@ -358,7 +358,7 @@ class SDKSession:
         # Check if we recently sent a message by looking at recent tool use
         from assistant.backends import get_backend
         backend = get_backend(self.source)
-        # Extract CLI name from send_cmd template (e.g. "send-sms" from '~/code/sms-cli/send-sms "{chat_id}"')
+        # Extract CLI name from send_cmd template (e.g. "send-sms" from '~/.claude/skills/sms-assistant/scripts/send-sms "{chat_id}"')
         send_marker = backend.send_cmd.split("/")[-1].split('"')[0].strip()
         response = getattr(context, 'response', None) or {}
         messages = response.get('messages', []) if isinstance(response, dict) else []

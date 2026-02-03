@@ -641,7 +641,7 @@ From: Admin ({admin_phone})
 {prompt}
 ---END MASTER COMMAND---
 
-Respond via: ~/code/sms-cli/send-sms "{admin_phone}" "[MASTER] your response"
+Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[MASTER] your response"
 """
         await session.inject(wrapped)
         lifecycle_log.info(f"MASTER | INJECTED | prompt_len={len(prompt)}")
