@@ -1,0 +1,249 @@
+#!/usr/bin/env python3
+"""
+Fake contacts CLI for integration testing.
+
+This mimics the real `contacts` CLI but:
+- Uses a test contact database (JSON file)
+- Doesn't touch macOS Contacts.app
+- Logs all operations for test assertions
+
+Usage:
+    test-contacts lookup <phone>
+    test-contacts list [--tier <tier>]
+    test-contacts tier <name> [<new_tier>]
+    test-contacts notes <name> [<new_notes>]
+    test-contacts add <first> <last> <phone> [--tier <tier>]
+
+Environment variables:
+    TEST_CONTACTS_DB   - Path to test contacts JSON (default: /tmp/test-contacts.json)
+    TEST_CONTACTS_LOG  - Path to log file (default: /tmp/test-contacts.log)
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Optional
+
+DB_FILE = os.environ.get('TEST_CONTACTS_DB', '/tmp/test-contacts.json')
+LOG_FILE = os.environ.get('TEST_CONTACTS_LOG', '/tmp/test-contacts.log')
+
+# Default test contacts if DB doesn't exist
+DEFAULT_CONTACTS = {
+    '+16175551234': {
+        'first_name': 'Test',
+        'last_name': 'Admin',
+        'phone': '+16175551234',
+        'tier': 'admin',
+        'notes': 'Test admin user',
+    },
+    '+16175555678': {
+        'first_name': 'Test',
+        'last_name': 'Wife',
+        'phone': '+16175555678',
+        'tier': 'wife',
+        'notes': 'Test wife user',
+    },
+    '+16175559999': {
+        'first_name': 'Test',
+        'last_name': 'Favorite',
+        'phone': '+16175559999',
+        'tier': 'favorite',
+        'notes': '',
+    },
+    '+16175550000': {
+        'first_name': 'Unknown',
+        'last_name': 'Person',
+        'phone': '+16175550000',
+        'tier': None,  # No tier = unknown
+        'notes': '',
+    },
+}
+
+
+def load_db() -> dict:
+    """Load test contacts database."""
+    if Path(DB_FILE).exists():
+        with open(DB_FILE) as f:
+            return json.load(f)
+    return DEFAULT_CONTACTS.copy()
+
+
+def save_db(db: dict):
+    """Save test contacts database."""
+    with open(DB_FILE, 'w') as f:
+        json.dump(db, f, indent=2)
+
+
+def log_operation(operation: str, args: dict, result: Any):
+    """Log operation for test assertions."""
+    entry = {
+        'timestamp': datetime.now().isoformat(),
+        'operation': operation,
+        'args': args,
+        'result': result,
+    }
+    with open(LOG_FILE, 'a') as f:
+        f.write(json.dumps(entry) + '\n')
+
+
+def cmd_lookup(phone: str):
+    """Lookup contact by phone number."""
+    db = load_db()
+    contact = db.get(phone)
+
+    if contact:
+        result = {
+            'name': f"{contact['first_name']} {contact['last_name']}",
+            'first_name': contact['first_name'],
+            'last_name': contact['last_name'],
+            'phone': contact['phone'],
+            'tier': contact['tier'],
+            'notes': contact['notes'],
+        }
+        log_operation('lookup', {'phone': phone}, result)
+        print(json.dumps(result))
+    else:
+        log_operation('lookup', {'phone': phone}, None)
+        print(json.dumps({'error': 'Contact not found'}))
+        sys.exit(1)
+
+
+def cmd_list(tier: Optional[str] = None):
+    """List all contacts, optionally filtered by tier."""
+    db = load_db()
+    contacts = []
+
+    for phone, contact in db.items():
+        if tier is None or contact['tier'] == tier:
+            contacts.append({
+                'name': f"{contact['first_name']} {contact['last_name']}",
+                'phone': contact['phone'],
+                'tier': contact['tier'],
+            })
+
+    log_operation('list', {'tier': tier}, contacts)
+    print(json.dumps(contacts, indent=2))
+
+
+def cmd_tier(name: str, new_tier: Optional[str] = None):
+    """Get or set contact tier."""
+    db = load_db()
+
+    # Find contact by name
+    for phone, contact in db.items():
+        full_name = f"{contact['first_name']} {contact['last_name']}"
+        if full_name.lower() == name.lower():
+            if new_tier is None:
+                # Get tier
+                result = contact['tier'] or 'none'
+                log_operation('tier_get', {'name': name}, result)
+                print(result)
+            else:
+                # Set tier
+                contact['tier'] = new_tier if new_tier != 'none' else None
+                save_db(db)
+                log_operation('tier_set', {'name': name, 'tier': new_tier}, True)
+                print(f"Set {name} tier to {new_tier}")
+            return
+
+    log_operation('tier', {'name': name, 'tier': new_tier}, 'not_found')
+    print(f"Contact not found: {name}", file=sys.stderr)
+    sys.exit(1)
+
+
+def cmd_notes(name: str, new_notes: Optional[str] = None):
+    """Get or set contact notes."""
+    db = load_db()
+
+    # Find contact by name
+    for phone, contact in db.items():
+        full_name = f"{contact['first_name']} {contact['last_name']}"
+        if full_name.lower() == name.lower():
+            if new_notes is None:
+                # Get notes
+                result = contact['notes']
+                log_operation('notes_get', {'name': name}, result)
+                print(result)
+            else:
+                # Set notes
+                contact['notes'] = new_notes
+                save_db(db)
+                log_operation('notes_set', {'name': name, 'notes': new_notes}, True)
+                print(f"Updated notes for {name}")
+            return
+
+    log_operation('notes', {'name': name}, 'not_found')
+    print(f"Contact not found: {name}", file=sys.stderr)
+    sys.exit(1)
+
+
+def cmd_add(first: str, last: str, phone: str, tier: Optional[str] = None):
+    """Add a new contact."""
+    db = load_db()
+
+    if phone in db:
+        log_operation('add', {'first': first, 'last': last, 'phone': phone}, 'exists')
+        print(f"Contact already exists: {phone}", file=sys.stderr)
+        sys.exit(1)
+
+    db[phone] = {
+        'first_name': first,
+        'last_name': last,
+        'phone': phone,
+        'tier': tier,
+        'notes': '',
+    }
+    save_db(db)
+    log_operation('add', {'first': first, 'last': last, 'phone': phone, 'tier': tier}, True)
+    print(f"Added {first} {last} ({phone})")
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Fake contacts CLI for testing')
+    subparsers = parser.add_subparsers(dest='command', required=True)
+
+    # lookup
+    lookup_parser = subparsers.add_parser('lookup')
+    lookup_parser.add_argument('phone')
+
+    # list
+    list_parser = subparsers.add_parser('list')
+    list_parser.add_argument('--tier', default=None)
+
+    # tier
+    tier_parser = subparsers.add_parser('tier')
+    tier_parser.add_argument('name')
+    tier_parser.add_argument('new_tier', nargs='?', default=None)
+
+    # notes
+    notes_parser = subparsers.add_parser('notes')
+    notes_parser.add_argument('name')
+    notes_parser.add_argument('new_notes', nargs='?', default=None)
+
+    # add
+    add_parser = subparsers.add_parser('add')
+    add_parser.add_argument('first')
+    add_parser.add_argument('last')
+    add_parser.add_argument('phone')
+    add_parser.add_argument('--tier', default=None)
+
+    args = parser.parse_args()
+
+    if args.command == 'lookup':
+        cmd_lookup(args.phone)
+    elif args.command == 'list':
+        cmd_list(args.tier)
+    elif args.command == 'tier':
+        cmd_tier(args.name, args.new_tier)
+    elif args.command == 'notes':
+        cmd_notes(args.name, args.new_notes)
+    elif args.command == 'add':
+        cmd_add(args.first, args.last, args.phone, args.tier)
+
+
+if __name__ == '__main__':
+    main()

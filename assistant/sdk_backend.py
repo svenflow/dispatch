@@ -1,0 +1,1111 @@
+"""
+SDKBackend: Manages all Claude Agent SDK sessions.
+
+Replaces the tmux-based SessionManager with ClaudeSDKClient-based sessions.
+All session operations go through this backend.
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import subprocess
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+from assistant.common import (
+    HOME,
+    SKILLS_DIR,
+    TRANSCRIPTS_DIR,
+    UV,
+    MASTER_SESSION,
+    MASTER_TRANSCRIPT_DIR,
+    ensure_transcript_dir,
+    get_session_name,
+    get_group_session_name_from_participants,
+    normalize_chat_id,
+    wrap_sms,
+    wrap_admin,
+    wrap_group_message,
+    format_message_body,
+    get_reply_chain,
+)
+from assistant.sdk_session import SDKSession
+
+log = logging.getLogger(__name__)
+
+# Lifecycle logger (matches current format)
+lifecycle_log = logging.getLogger("lifecycle")
+
+
+class SessionRegistry:
+    """Persistent registry mapping chat_id to session metadata.
+
+    Unified registry - replaces both the old SessionRegistry in manager.py
+    and the _load_registry/_save_registry in cli.py.
+    """
+
+    def __init__(self, registry_file: Path):
+        self._file = registry_file
+        self._registry: Dict[str, Dict[str, Any]] = {}
+        self._dirty = False
+        self._last_save_time = 0.0
+        self._save_interval = 1.0  # Debounce: at most one save per second for frequent updates
+        self._load()
+
+    def _load(self):
+        if self._file.exists():
+            try:
+                self._registry = json.loads(self._file.read_text())
+                log.info(f"Loaded {len(self._registry)} sessions from registry")
+            except Exception as e:
+                log.error(f"Failed to load session registry: {e}")
+                self._registry = {}
+
+    def _save(self):
+        import fcntl
+        self._file.parent.mkdir(parents=True, exist_ok=True)
+        # Atomic write with file locking (bug #12 fix: CLI and daemon race)
+        tmp_path = self._file.with_suffix('.tmp')
+        with open(tmp_path, 'w') as f:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            f.write(json.dumps(self._registry, indent=2, default=str))
+        tmp_path.rename(self._file)  # Atomic rename
+
+    def register(self, chat_id: str, session_name: str, **metadata) -> Dict[str, Any]:
+        if not chat_id:
+            raise ValueError("chat_id cannot be empty")
+        existing = self._registry.get(chat_id, {})
+        session_data = {
+            "chat_id": chat_id,
+            "session_name": session_name,
+            "created_at": existing.get("created_at", datetime.now().isoformat()),
+            "updated_at": datetime.now().isoformat(),
+            **metadata,
+        }
+        self._registry[chat_id] = session_data
+        self._save()
+        return session_data
+
+    def get(self, chat_id: str) -> Optional[Dict[str, Any]]:
+        return self._registry.get(chat_id)
+
+    def get_by_session_name(self, session_name: str) -> Optional[Dict[str, Any]]:
+        for data in self._registry.values():
+            if data.get("session_name") == session_name:
+                return data
+        return None
+
+    def all(self) -> Dict[str, Dict[str, Any]]:
+        return self._registry.copy()
+
+    def remove(self, chat_id: str):
+        if chat_id in self._registry:
+            del self._registry[chat_id]
+            self._save()
+
+    def update_session_id(self, chat_id: str, session_id: str):
+        """Update the SDK session_id for resume support."""
+        if chat_id in self._registry:
+            self._registry[chat_id]["session_id"] = session_id
+            self._registry[chat_id]["updated_at"] = datetime.now().isoformat()
+            self._save()
+
+    def _save_debounced(self):
+        """Save only if enough time has elapsed since last save. Otherwise mark dirty."""
+        import time as _time
+        now = _time.monotonic()
+        if now - self._last_save_time >= self._save_interval:
+            self._save()
+            self._last_save_time = now
+            self._dirty = False
+        else:
+            self._dirty = True
+
+    def flush(self):
+        """Force save if there are pending dirty writes."""
+        if self._dirty:
+            self._save()
+            self._dirty = False
+
+    def update_last_message_time(self, chat_id: str):
+        """Update last_message_time for idle tracking. Uses debounced save."""
+        if chat_id in self._registry:
+            self._registry[chat_id]["last_message_time"] = datetime.now().isoformat()
+            self._registry[chat_id]["updated_at"] = datetime.now().isoformat()
+            self._save_debounced()
+
+
+class SDKBackend:
+    """Agent SDK-based session management using ClaudeSDKClient.
+
+    Replaces the tmux-based SessionManager entirely.
+    """
+
+    def __init__(
+        self,
+        registry: SessionRegistry,
+        contacts_manager=None,
+    ):
+        self.registry = registry
+        self.contacts = contacts_manager
+        self.sessions: Dict[str, SDKSession] = {}  # chat_id -> SDKSession
+        self._lock = asyncio.Lock()
+
+    # ──────────────────────────────────────────────────────────────
+    # Individual sessions
+    # ──────────────────────────────────────────────────────────────
+
+    async def create_session(
+        self,
+        contact_name: str,
+        chat_id: str,
+        tier: str,
+        source: str = "imessage",
+        session_type: str = "individual",
+    ) -> SDKSession:
+        """Create a new SDK session for an individual contact."""
+        async with self._lock:
+            if chat_id in self.sessions and self.sessions[chat_id].is_alive():
+                return self.sessions[chat_id]
+
+            session_name = get_session_name(contact_name, source=source)
+            transcript_dir = ensure_transcript_dir(session_name)
+
+            # For non-default backends, create session-specific CLAUDE.md override
+            self._create_backend_claude_md(transcript_dir, source)
+
+            lifecycle_log.info(
+                f"CREATE | {session_name} | START | contact={contact_name} "
+                f"tier={tier} chat_id={chat_id} source={source}"
+            )
+
+            session = SDKSession(
+                chat_id=chat_id,
+                contact_name=contact_name,
+                tier=tier,
+                cwd=str(transcript_dir),
+                session_type=session_type,
+                source=source,
+            )
+            await session.start(resume_session_id=None)
+            self.sessions[chat_id] = session
+
+            # Defer system prompt to outside the lock
+            session._needs_system_prompt = True
+            session._system_prompt_args = (session_name, contact_name, tier, chat_id, source)
+
+            # Register in persistent registry
+            self.registry.register(
+                chat_id=chat_id,
+                session_name=session_name,
+                transcript_dir=str(transcript_dir),
+                type=session_type,
+                contact_name=contact_name,
+                tier=tier,
+                source=source,
+            )
+
+            lifecycle_log.info(
+                f"CREATE | {session_name} | SUCCESS | contact={contact_name} "
+                f"tier={tier}"
+            )
+
+        # Inject system prompt outside lock (includes slow subprocess for memory)
+        await self._inject_system_prompt_if_needed(session)
+        return session
+
+    async def _create_session_unlocked(
+        self,
+        contact_name: str,
+        chat_id: str,
+        tier: str,
+        source: str = "imessage",
+        session_type: str = "individual",
+    ) -> SDKSession:
+        """Create a session without acquiring the lock (caller must hold it).
+
+        This avoids deadlock when inject_message needs to create + inject atomically.
+        """
+        if chat_id in self.sessions and self.sessions[chat_id].is_alive():
+            return self.sessions[chat_id]
+
+        session_name = get_session_name(contact_name, source=source)
+        transcript_dir = ensure_transcript_dir(session_name)
+
+        self._create_backend_claude_md(transcript_dir, source)
+
+        lifecycle_log.info(
+            f"CREATE | {session_name} | START | contact={contact_name} "
+            f"tier={tier} chat_id={chat_id} source={source}"
+        )
+
+        session = SDKSession(
+            chat_id=chat_id,
+            contact_name=contact_name,
+            tier=tier,
+            cwd=str(transcript_dir),
+            session_type=session_type,
+            source=source,
+        )
+        await session.start(resume_session_id=None)
+        self.sessions[chat_id] = session
+
+        # System prompt injection deferred to _inject_system_prompt_if_needed()
+        # so it can run outside the lock (includes slow subprocess calls)
+        session._needs_system_prompt = True
+        session._system_prompt_args = (session_name, contact_name, tier, chat_id, source)
+
+        self.registry.register(
+            chat_id=chat_id,
+            session_name=session_name,
+            transcript_dir=str(transcript_dir),
+            type=session_type,
+            contact_name=contact_name,
+            tier=tier,
+            source=source,
+        )
+
+        lifecycle_log.info(
+            f"CREATE | {session_name} | SUCCESS | contact={contact_name} tier={tier}"
+        )
+        # Yield control to event loop so other tasks can run during concurrent creations
+        await asyncio.sleep(0)
+        return session
+
+    async def _inject_system_prompt_if_needed(self, session: SDKSession):
+        """Inject the system prompt if the session was just created.
+
+        Called OUTSIDE the lock so the slow subprocess call (_get_memory_summary)
+        doesn't block other session operations.
+        """
+        if not getattr(session, '_needs_system_prompt', False):
+            return
+        session._needs_system_prompt = False
+        args = getattr(session, '_system_prompt_args', None)
+        if not args:
+            return
+        prompt_type = getattr(session, '_system_prompt_type', 'individual')
+        if prompt_type == 'group':
+            system_prompt = await self._build_group_system_prompt(*args)
+        else:
+            system_prompt = await self._build_individual_system_prompt(*args)
+        await session.inject(system_prompt)
+
+    async def inject_message(
+        self,
+        contact_name: str,
+        chat_id: str,
+        text: str,
+        tier: str,
+        attachments: list = None,
+        audio_transcription: str = None,
+        thread_originator_guid: str = None,
+        source: str = "imessage",
+    ) -> bool:
+        """Inject a message into an existing session.
+        Creates session on-demand if missing (lazy creation).
+        """
+        if not chat_id:
+            raise ValueError(f"chat_id cannot be empty for contact {contact_name}")
+
+        # Format message body
+        msg_body = format_message_body(text, attachments, audio_transcription)
+
+        # Prefix chat_id for registry storage (e.g. signal:+1234567890)
+        from assistant.backends import get_backend
+        backend = get_backend(source)
+        registry_chat_id = f"{backend.registry_prefix}{chat_id}" if backend.registry_prefix else chat_id
+        normalized = normalize_chat_id(registry_chat_id)
+
+        # Only hold the lock for session creation check + creation.
+        # Once we have the session, inject outside the lock (session has its own queue).
+        async with self._lock:
+            if normalized not in self.sessions or not self.sessions[normalized].is_alive():
+                await self._create_session_unlocked(contact_name, normalized, tier, source)
+            session = self.sessions.get(normalized)
+
+        if not session:
+            log.error(f"Failed to create session for {chat_id}")
+            return False
+
+        # Inject system prompt outside lock (includes slow subprocess for memory)
+        await self._inject_system_prompt_if_needed(session)
+
+        wrapped = wrap_sms(
+            msg_body, contact_name, tier, chat_id,
+            reply_to_guid=thread_originator_guid, source=source,
+        )
+        await session.inject(wrapped)
+        self.registry.update_last_message_time(normalized)
+        log.info(f"Injected message for {chat_id} via {source}")
+        return True
+
+    # ──────────────────────────────────────────────────────────────
+    # Group sessions
+    # ──────────────────────────────────────────────────────────────
+
+    def get_group_session_name(self, chat_id: str, display_name: str = None,
+                                source: str = "imessage") -> str:
+        """Generate session name for a group chat."""
+        existing = self.registry.get(chat_id)
+        if existing:
+            return existing["session_name"]
+
+        if display_name:
+            safe_name = "".join(c if c.isalnum() else "_" for c in display_name.lower())
+            base_name = f"group-{safe_name[:20]}"
+        else:
+            safe_id = "".join(c if c.isalnum() else "" for c in chat_id)[:12]
+            base_name = f"group-{safe_id}"
+
+        from assistant.backends import get_backend
+        backend = get_backend(source)
+        return f"{base_name}{backend.session_suffix}"
+
+    async def create_group_session(
+        self,
+        chat_id: str,
+        display_name: str = None,
+        participants: list = None,
+        source: str = "imessage",
+    ) -> SDKSession:
+        """Create a group session."""
+        async with self._lock:
+            if chat_id in self.sessions and self.sessions[chat_id].is_alive():
+                return self.sessions[chat_id]
+
+            # Resolve participants from chat.db if not provided (only works for iMessage)
+            if not participants:
+                from assistant.backends import get_backend
+                backend = get_backend(source)
+                if not backend.registry_prefix:  # iMessage has no prefix
+                    participants = self._resolve_group_participants(chat_id)
+
+            session_name = self.get_group_session_name(chat_id, display_name, source)
+            transcript_dir = ensure_transcript_dir(session_name)
+
+            session = SDKSession(
+                chat_id=chat_id,
+                contact_name=display_name or chat_id,
+                tier="admin",  # Groups get full access
+                cwd=str(transcript_dir),
+                session_type="group",
+                source=source,
+            )
+            await session.start(resume_session_id=None)
+            self.sessions[chat_id] = session
+
+            # Always inject system prompt - session reads old messages for context
+            startup = self._build_group_system_prompt(
+                session_name, chat_id, display_name, participants, source
+            )
+            await session.inject(startup)
+
+            self.registry.register(
+                chat_id=chat_id,
+                session_name=session_name,
+                transcript_dir=str(transcript_dir),
+                type="group",
+                display_name=display_name or chat_id,
+                participants=participants or [],
+                source=source,
+            )
+
+            lifecycle_log.info(f"CREATE | {session_name} | SUCCESS | type=group chat_id={chat_id}")
+            return session
+
+    async def _create_group_session_unlocked(
+        self,
+        chat_id: str,
+        display_name: str = None,
+        participants: list = None,
+        source: str = "imessage",
+    ) -> SDKSession:
+        """Create a group session without acquiring the lock (caller must hold it)."""
+        if chat_id in self.sessions and self.sessions[chat_id].is_alive():
+            return self.sessions[chat_id]
+
+        # Resolve participants from chat.db if not provided (only works for iMessage)
+        if not participants:
+            from assistant.backends import get_backend
+            backend = get_backend(source)
+            if not backend.registry_prefix:  # iMessage has no prefix
+                participants = self._resolve_group_participants(chat_id)
+
+        session_name = self.get_group_session_name(chat_id, display_name, source)
+        transcript_dir = ensure_transcript_dir(session_name)
+
+        session = SDKSession(
+            chat_id=chat_id,
+            contact_name=display_name or chat_id,
+            tier="admin",
+            cwd=str(transcript_dir),
+            session_type="group",
+            source=source,
+        )
+        await session.start(resume_session_id=None)
+        self.sessions[chat_id] = session
+
+        # Defer system prompt to outside the lock
+        session._needs_system_prompt = True
+        session._system_prompt_args = (session_name, chat_id, display_name, participants, source)
+        session._system_prompt_type = "group"
+
+        self.registry.register(
+            chat_id=chat_id,
+            session_name=session_name,
+            transcript_dir=str(transcript_dir),
+            type="group",
+            display_name=display_name or chat_id,
+            participants=participants or [],
+            source=source,
+        )
+
+        lifecycle_log.info(f"CREATE | {session_name} | SUCCESS | type=group chat_id={chat_id}")
+        return session
+
+    async def inject_group_message(
+        self,
+        chat_id: str,
+        display_name: str,
+        sender_name: str,
+        sender_tier: str,
+        text: str,
+        attachments: list = None,
+        audio_transcription: str = None,
+        thread_originator_guid: str = None,
+        source: str = "imessage",
+    ) -> bool:
+        """Inject a message into a group session."""
+        if not chat_id:
+            raise ValueError("chat_id cannot be empty for group message")
+
+        msg_body = format_message_body(text, attachments, audio_transcription)
+
+        # Lock only for session creation check; inject happens outside lock
+        async with self._lock:
+            if chat_id not in self.sessions or not self.sessions[chat_id].is_alive():
+                await self._create_group_session_unlocked(chat_id, display_name, source=source)
+            session = self.sessions.get(chat_id)
+
+        if not session:
+            log.error(f"Failed to create group session for {chat_id}")
+            return False
+
+        # Inject system prompt outside lock if session was just created
+        await self._inject_system_prompt_if_needed(session)
+
+        wrapped = wrap_group_message(
+            chat_id, display_name, sender_name, sender_tier,
+            msg_body, reply_to_guid=thread_originator_guid, source=source,
+        )
+        await session.inject(wrapped)
+        self.registry.update_last_message_time(chat_id)
+        return True
+
+    # ──────────────────────────────────────────────────────────────
+    # Background sessions (for nightly consolidation)
+    # ──────────────────────────────────────────────────────────────
+
+    async def create_background_session(
+        self,
+        contact_name: str,
+        chat_id: str,
+        tier: str,
+        source: str = "imessage",
+    ) -> SDKSession:
+        """Create a background session for nightly consolidation."""
+        bg_id = f"{chat_id}-bg"
+
+        async with self._lock:
+            if bg_id in self.sessions and self.sessions[bg_id].is_alive():
+                return self.sessions[bg_id]
+
+            fg_session_name = get_session_name(contact_name, source=source)
+            transcript_dir = ensure_transcript_dir(fg_session_name)
+
+            session = SDKSession(
+                chat_id=bg_id,
+                contact_name=f"{contact_name} (BG)",
+                tier=tier,
+                cwd=str(transcript_dir),
+                session_type="background",
+                source=source,
+            )
+            await session.start()
+            self.sessions[bg_id] = session
+
+            # Inject BG-specific prompt
+            bg_prompt = f"""BACKGROUND SESSION - Memory consolidation for {contact_name}.
+
+This session handles nightly memory processing. Wait for consolidation trigger.
+
+When triggered, run:
+uv run ~/.claude/skills/memory/scripts/memory.py consolidate "{fg_session_name}"
+
+Then review the output and save important memories using:
+uv run ~/.claude/skills/memory/scripts/memory.py save "{fg_session_name}" "memory text" --type TYPE
+
+Finally sync: uv run ~/.claude/skills/memory/scripts/memory.py sync "{fg_session_name}"
+
+Waiting for nightly trigger...
+"""
+            await session.inject(bg_prompt)
+
+            lifecycle_log.info(f"CREATE | {fg_session_name}-bg | SUCCESS | background for {contact_name}")
+            return session
+
+    async def inject_consolidation(self, contact_name: str, chat_id: str):
+        """Trigger nightly consolidation for a contact."""
+        bg_id = f"{chat_id}-bg"
+        fg_session_name = get_session_name(contact_name)
+
+        # Ensure BG session exists
+        if bg_id not in self.sessions or not self.sessions[bg_id].is_alive():
+            reg = self.registry.get(chat_id)
+            tier = reg.get("tier", "admin") if reg else "admin"
+            await self.create_background_session(contact_name, chat_id, tier)
+
+        session = self.sessions.get(bg_id)
+        if not session:
+            log.error(f"Could not create BG session for {contact_name}")
+            return
+
+        consolidation_prompt = f"""
+--- NIGHTLY MEMORY CONSOLIDATION ---
+Time to consolidate memories for {contact_name}.
+
+Run this command to see today's conversations:
+uv run ~/.claude/skills/memory/scripts/memory.py consolidate "{fg_session_name}"
+
+Review the output and save any important memories:
+- Facts about the person
+- Preferences they expressed
+- Projects you worked on together
+- Lessons learned
+
+For each memory, run:
+uv run ~/.claude/skills/memory/scripts/memory.py save "{fg_session_name}" "memory text" --type TYPE
+
+Types: fact, preference, project, lesson, relationship, context
+
+When done, sync the CLAUDE.md:
+uv run ~/.claude/skills/memory/scripts/memory.py sync "{fg_session_name}"
+
+Start now!
+"""
+        await session.inject(consolidation_prompt)
+        log.info(f"Injected consolidation prompt for {contact_name}")
+
+    # ──────────────────────────────────────────────────────────────
+    # Master session
+    # ──────────────────────────────────────────────────────────────
+
+    async def create_master_session(self) -> SDKSession:
+        """Create the always-alive master admin session."""
+        async with self._lock:
+            if MASTER_SESSION in self.sessions and self.sessions[MASTER_SESSION].is_alive():
+                return self.sessions[MASTER_SESSION]
+
+            MASTER_TRANSCRIPT_DIR.mkdir(parents=True, exist_ok=True)
+            claude_symlink = MASTER_TRANSCRIPT_DIR / ".claude"
+            if not claude_symlink.exists():
+                claude_symlink.symlink_to(HOME / ".claude")
+
+            session = SDKSession(
+                chat_id=MASTER_SESSION,
+                contact_name="Master",
+                tier="admin",
+                cwd=str(MASTER_TRANSCRIPT_DIR),
+                session_type="master",
+            )
+            await session.start()
+            self.sessions[MASTER_SESSION] = session
+
+            lifecycle_log.info("MASTER | CREATED")
+            return session
+
+    async def inject_master_prompt(self, admin_phone: str, prompt: str) -> bool:
+        """Inject a prompt into the master session."""
+        if MASTER_SESSION not in self.sessions or not self.sessions[MASTER_SESSION].is_alive():
+            await self.create_master_session()
+
+        session = self.sessions.get(MASTER_SESSION)
+        if not session:
+            return False
+
+        wrapped = f"""---MASTER COMMAND---
+From: Admin ({admin_phone})
+{prompt}
+---END MASTER COMMAND---
+
+Respond via: ~/code/sms-cli/send-sms "{admin_phone}" "[MASTER] your response"
+"""
+        await session.inject(wrapped)
+        lifecycle_log.info(f"MASTER | INJECTED | prompt_len={len(prompt)}")
+        return True
+
+    # ──────────────────────────────────────────────────────────────
+    # Session lifecycle
+    # ──────────────────────────────────────────────────────────────
+
+    async def kill_session(self, chat_id: str) -> bool:
+        """Kill a session (FG + BG)."""
+        async with self._lock:
+            session = self.sessions.pop(chat_id, None)
+            bg_session = self.sessions.pop(f"{chat_id}-bg", None)
+
+        if session:
+            # Save session_id before stopping
+            if session.session_id:
+                self.registry.update_session_id(chat_id, session.session_id)
+            await session.stop()
+        if bg_session:
+            await bg_session.stop()
+
+        lifecycle_log.info(f"KILL | {chat_id} | fg={'yes' if session else 'no'} bg={'yes' if bg_session else 'no'}")
+        return session is not None
+
+    async def kill_all_sessions(self) -> int:
+        """Kill all sessions."""
+        async with self._lock:
+            sessions = list(self.sessions.values())
+            self.sessions.clear()
+
+        # Save session_ids before stopping
+        for s in sessions:
+            if s.session_id and s.chat_id:
+                self.registry.update_session_id(s.chat_id, s.session_id)
+
+        for s in sessions:
+            try:
+                await s.stop()
+            except (Exception, asyncio.CancelledError) as e:
+                log.error(f"Error stopping session {s.contact_name}: {e}")
+            finally:
+                task = asyncio.current_task()
+                if task is not None:
+                    while task.cancelling() > 0:
+                        task.uncancel()
+
+        lifecycle_log.info(f"KILL_ALL | count={len(sessions)}")
+        return len(sessions)
+
+    async def restart_session(self, chat_id: str) -> Optional[SDKSession]:
+        """Kill and recreate a session."""
+        # Save session info before killing
+        reg = self.registry.get(chat_id)
+
+        await self.kill_session(chat_id)
+
+        if reg:
+            lifecycle_log.info(f"RESTART | {reg.get('session_name', chat_id)} | START")
+            session = await self.create_session(
+                reg["contact_name"],
+                chat_id,
+                reg["tier"],
+                reg.get("source", "imessage"),
+                reg.get("type", "individual"),
+            )
+            lifecycle_log.info(f"RESTART | {reg.get('session_name', chat_id)} | COMPLETE")
+            return session
+        return None
+
+    async def check_session_health(self, chat_id: str) -> bool:
+        """Check if a session is healthy. Auto-restarts if not."""
+        session = self.sessions.get(chat_id)
+        if not session:
+            return False
+        if not session.is_healthy():
+            lifecycle_log.info(
+                f"HEALTH_CHECK | {session.contact_name} | UNHEALTHY | "
+                f"alive={session.is_alive()} errors={session._error_count}"
+            )
+            try:
+                # Isolate in separate task to prevent anyio cancel scope leaks
+                restart_task = asyncio.create_task(
+                    self.restart_session(chat_id),
+                    name=f"health-restart-{chat_id}"
+                )
+                await asyncio.wait_for(restart_task, timeout=120)
+            except asyncio.TimeoutError:
+                log.error(f"Health check restart timed out for {chat_id}")
+                restart_task.cancel()
+            except asyncio.CancelledError:
+                task = asyncio.current_task()
+                if task is not None:
+                    while task.cancelling() > 0:
+                        task.uncancel()
+                log.warning(f"CancelledError during health restart of {chat_id}, recovered")
+            except Exception as e:
+                log.error(f"Health check restart failed for {chat_id}: {e}")
+            return False
+        return True
+
+    async def health_check_all(self) -> Dict[str, bool]:
+        """Check all sessions. Auto-restarts unhealthy ones."""
+        results = {}
+        for chat_id in list(self.sessions.keys()):
+            results[chat_id] = await self.check_session_health(chat_id)
+
+        lifecycle_log.info(f"HEALTH_CHECK_ALL | COMPLETE | {sum(results.values())}/{len(results)} healthy")
+        return results
+
+    async def check_idle_sessions(self, timeout_hours: float) -> List[str]:
+        """Kill idle sessions exceeding timeout. Returns chat_ids killed."""
+        now = datetime.now()
+        killed = []
+        # Snapshot under lock to avoid concurrent modification (bug #16 fix)
+        async with self._lock:
+            sessions_snapshot = list(self.sessions.items())
+        for chat_id, session in sessions_snapshot:
+            if chat_id.endswith("-bg") or chat_id == MASTER_SESSION:
+                continue  # Don't idle-kill BG or master sessions
+            idle_seconds = (now - session.last_activity).total_seconds()
+            if idle_seconds > timeout_hours * 3600:
+                idle_hours = idle_seconds / 3600
+                log.info(f"Session {session.contact_name} idle for {idle_hours:.1f}h, killing...")
+                lifecycle_log.info(
+                    f"IDLE_TIMEOUT | {session.contact_name} | KILLING | "
+                    f"idle_hours={idle_hours:.1f} threshold={timeout_hours}"
+                )
+                try:
+                    # Run kill_session in an isolated task so anyio cancel
+                    # scopes inside SDK client.disconnect() can NEVER leak
+                    # CancelledError to the calling task (the main loop).
+                    kill_task = asyncio.create_task(
+                        self.kill_session(chat_id),
+                        name=f"idle-kill-{chat_id}"
+                    )
+                    await asyncio.wait_for(kill_task, timeout=30)
+                except asyncio.TimeoutError:
+                    log.error(f"Idle kill timed out for {chat_id}")
+                    kill_task.cancel()
+                    self.sessions.pop(chat_id, None)
+                except asyncio.CancelledError:
+                    # Belt-and-suspenders: clear any leaked cancellation
+                    task = asyncio.current_task()
+                    if task is not None:
+                        while task.cancelling() > 0:
+                            task.uncancel()
+                    log.warning(f"CancelledError during idle kill of {chat_id}, recovered")
+                except Exception as e:
+                    log.error(f"Idle kill failed for {chat_id}: {e}")
+                killed.append(chat_id)
+        return killed
+
+    async def get_session_info(self, chat_id: str) -> Optional[Dict[str, Any]]:
+        """Get info about a session."""
+        session = self.sessions.get(chat_id)
+        if not session:
+            return None
+        return {
+            "chat_id": chat_id,
+            "contact_name": session.contact_name,
+            "tier": session.tier,
+            "session_type": session.session_type,
+            "source": session.source,
+            "is_alive": session.is_alive(),
+            "is_healthy": session.is_healthy(),
+            "is_busy": session.is_busy,
+            "turn_count": session.turn_count,
+            "session_id": session.session_id,
+            "created_at": session.created_at.isoformat(),
+            "last_activity": session.last_activity.isoformat(),
+            "queue_size": session._message_queue.qsize(),
+        }
+
+    async def get_all_sessions(self) -> List[Dict[str, Any]]:
+        """Get info about all active sessions."""
+        infos = []
+        for chat_id in self.sessions:
+            info = await self.get_session_info(chat_id)
+            if info:
+                infos.append(info)
+        return infos
+
+    async def get_recent_output(self, chat_id: str, lines: int = 30) -> str:
+        """Get recent output from per-session log file."""
+        session = self.sessions.get(chat_id)
+        if not session:
+            return ""
+        from assistant.backends import get_backend
+        backend = get_backend(session.source)
+        session_name = session.contact_name.lower().replace(" ", "-") + backend.session_suffix
+        from assistant.sdk_session import SESSION_LOG_DIR
+        log_path = SESSION_LOG_DIR / f"{session_name}.log"
+        if log_path.exists():
+            # Read only the tail of the file efficiently
+            import os
+            with open(log_path, 'rb') as f:
+                try:
+                    f.seek(0, os.SEEK_END)
+                    size = f.tell()
+                    # Read last 64KB max (enough for ~30 lines)
+                    chunk_size = min(size, 65536)
+                    f.seek(size - chunk_size)
+                    tail = f.read().decode('utf-8', errors='replace')
+                    tail_lines = tail.splitlines()
+                    return "\n".join(tail_lines[-lines:])
+                except Exception:
+                    return ""
+        return ""
+
+    async def shutdown(self):
+        """Clean shutdown: save session_ids, disconnect all clients."""
+        log.info("SHUTDOWN | Saving session_ids and disconnecting all clients...")
+        async with self._lock:
+            sessions = list(self.sessions.values())
+            self.sessions.clear()
+
+        # Save session_ids for future resume
+        for s in sessions:
+            if s.session_id and s.chat_id:
+                self.registry.update_session_id(s.chat_id, s.session_id)
+
+        # Disconnect all
+        for s in sessions:
+            try:
+                await s.stop()
+            except (Exception, asyncio.CancelledError) as e:
+                log.error(f"Error stopping session {s.contact_name}: {e}")
+            finally:
+                # Clear ALL stacked cancellations from SDK anyio internals
+                task = asyncio.current_task()
+                if task is not None:
+                    while task.cancelling() > 0:
+                        task.uncancel()
+
+        lifecycle_log.info(f"SHUTDOWN | COMPLETE | {len(sessions)} sessions stopped")
+
+    # ──────────────────────────────────────────────────────────────
+    # System prompt builders (identical to current tmux prompts)
+    # ──────────────────────────────────────────────────────────────
+
+    async def _build_individual_system_prompt(
+        self,
+        session_name: str,
+        contact_name: str,
+        tier: str,
+        chat_id: str,
+        source: str = "imessage",
+    ) -> str:
+        """Build the startup prompt for an individual session.
+
+        Identical content to the current tmux _inject_system_prompt.
+        """
+        # Get memory summary (async, non-blocking)
+        memory_summary = await self._get_memory_summary(session_name)
+        memory_section = f"\n## About {contact_name}\n\n{memory_summary}\n" if memory_summary else ""
+
+        # Determine send command and history based on source
+        from assistant.backends import get_backend
+        backend = get_backend(source)
+        bare_chat_id = chat_id.removeprefix(backend.registry_prefix) if backend.registry_prefix else chat_id
+        send_cmd = backend.send_cmd.replace("{chat_id}", bare_chat_id)
+        if backend.history_cmd:
+            history_note = f'**FIRST**: Run this command to see recent conversation history:\n{backend.history_cmd.replace("{chat_id}", bare_chat_id).replace("{limit}", "20")}'
+        else:
+            history_note = f"({backend.label} session - no message history command available yet)"
+
+        return f"""SESSION START - INDIVIDUAL {backend.label} CHAT: {contact_name} ({tier} tier)
+Chat ID: {chat_id}
+{memory_section}
+**FIRST**: Read ~/.claude/SOUL.md to understand who you are.
+
+{history_note}
+
+After reading, act based on what you see:
+
+1. **Task was in progress** (last OUT messages show active work):
+   - Pick up EXACTLY where you left off
+   - Do NOT announce restart or say "catching up"
+   - If user asked "how's it going?" = you went offline during work, so continue silently
+
+2. **Unanswered message** (last IN message has no response):
+   - Respond to it naturally
+
+3. **Conversation was idle** (no pending work or questions):
+   - Wait silently for new messages
+
+CRITICAL: Never send restart notifications. Users shouldn't notice session restarts.
+
+**If you need more context** about what you were doing before restart:
+uv run ~/.claude/skills/sms-assistant/scripts/read_transcript.py --session {session_name}
+
+Quick reference:
+- Send message using heredoc (no temp files - avoids race conditions between sessions):
+  {send_cmd} "$(cat <<'ENDMSG'
+  your message here
+  ENDMSG
+  )"
+- NEVER escape exclamation marks. Write "Hello!" NOT "Hello\\!". The CLI handles escaping. \\! sends a literal backslash.
+- Full guidelines: ~/.claude/skills/sms-assistant/SKILL.md
+"""
+
+    async def _build_group_system_prompt(
+        self,
+        session_name: str,
+        chat_id: str,
+        display_name: str = None,
+        participants: list = None,
+        source: str = "imessage",
+    ) -> str:
+        """Build the startup prompt for a group session."""
+        # Build participants list with tiers; fetch all memory summaries in parallel
+        participant_lines = []
+        participants_list = participants or []
+        for participant in participants_list:
+            if self.contacts:
+                contact_info = self.contacts.lookup_phone_by_name(participant)
+                tier = contact_info.get("tier", "unknown") if contact_info else "unknown"
+            else:
+                tier = "unknown"
+            participant_lines.append(f"- {participant} ({tier})")
+
+        # Parallel memory lookups (was sequential, blocking N subprocess calls)
+        memory_results = await asyncio.gather(
+            *(self._get_memory_summary(p) for p in participants_list)
+        ) if participants_list else []
+        memory_parts = []
+        for participant, mem in zip(participants_list, memory_results):
+            if mem:
+                memory_parts.append(f"## About {participant}\n\n{mem}")
+
+        participants_section = "\n".join(participant_lines) if participant_lines else "- (unknown participants)"
+        memory_section = "\n\n".join(memory_parts) if memory_parts else ""
+
+        shown_name = display_name or chat_id
+
+        from assistant.backends import get_backend
+        backend = get_backend(source)
+        send_cmd = backend.send_group_cmd.replace("{chat_id}", chat_id)
+        if backend.history_cmd:
+            history_cmd = backend.history_cmd.replace("{chat_id}", chat_id).replace("{limit}", "20")
+        else:
+            history_cmd = f"uv run ~/.claude/skills/sms-assistant/scripts/read_transcript.py --session {session_name}"
+
+        return f"""SESSION START - GROUP CHAT: {shown_name}
+Chat ID: {chat_id}
+
+Participants:
+{participants_section}
+{memory_section}
+
+**FIRST**: Read ~/.claude/SOUL.md to understand who you are.
+
+Check conversation history: {history_cmd}
+
+After reading, act based on what you see - respond to unanswered messages, continue work in progress, or wait silently.
+
+CRITICAL: Never send restart notifications. Users shouldn't notice session restarts.
+
+**To send a message to this group using heredoc (no temp files - avoids race conditions between sessions):**
+{send_cmd} "$(cat <<'ENDMSG'
+your message here
+ENDMSG
+)"
+
+You MUST call the send command above via Bash to actually send messages. Text output alone does NOT reach users.
+
+NEVER escape exclamation marks. Write "Hello!" NOT "Hello\\!". The CLI handles escaping. \\! sends a literal backslash.
+
+Full guidelines: ~/.claude/skills/sms-assistant/SKILL.md
+"""
+
+    def _create_backend_claude_md(self, transcript_dir: Path, source: str):
+        """Create backend-specific CLAUDE.md override for non-default backends.
+
+        Only created for non-imessage backends to emphasize the correct send commands.
+        """
+        from assistant.backends import get_backend, BACKENDS
+        backend = get_backend(source)
+
+        # Default backend (imessage) doesn't need an override
+        if source == "imessage":
+            return
+
+        claude_md_path = transcript_dir / "CLAUDE.md"
+
+        # Only create if it doesn't exist
+        if claude_md_path.exists():
+            return
+
+        # Build the default backend name for the "NEVER use" warning
+        default_backend = BACKENDS["imessage"]
+        default_send = default_backend.send_cmd.split("/")[-1].split('"')[0].strip()
+
+        content = f"""# {backend.label} Session Override
+
+**CRITICAL: This is a {backend.label} session. You MUST use {backend.label}-specific commands.**
+
+## Sending Messages
+
+**For individual {backend.label} messages:**
+```bash
+{backend.send_cmd}
+```
+
+**For {backend.label} group messages:**
+```bash
+{backend.send_group_cmd}
+```
+
+**NEVER use {default_send} in {backend.label} sessions** - it will send via {default_backend.label} instead of {backend.label}, causing duplicate responses and confusion.
+
+All other system documentation applies normally (see ~/.claude/CLAUDE.md via symlink).
+"""
+
+        claude_md_path.write_text(content)
+        log.info(f"Created {backend.label}-specific CLAUDE.md at {claude_md_path}")
+
+    def _resolve_group_participants(self, chat_id: str) -> list:
+        """Resolve group participants from chat.db and contacts."""
+        import sqlite3
+        from assistant.common import MESSAGES_DB
+        try:
+            conn = sqlite3.connect(str(MESSAGES_DB))
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT h.id
+                FROM handle h
+                JOIN chat_handle_join chj ON h.ROWID = chj.handle_id
+                JOIN chat c ON chj.chat_id = c.ROWID
+                WHERE c.chat_identifier = ?
+            """, (chat_id,))
+            phones = [row[0] for row in cursor.fetchall()]
+            conn.close()
+
+            names = []
+            for phone in phones:
+                if self.contacts:
+                    contact = self.contacts.lookup_identifier(phone)
+                    if contact:
+                        names.append(contact["name"])
+                    else:
+                        names.append(phone)
+                else:
+                    names.append(phone)
+            return names
+        except Exception as e:
+            log.warning(f"Failed to resolve group participants for {chat_id}: {e}")
+            return []
+
+    async def _get_memory_summary(self, contact_name: str) -> str:
+        """Get memory summary for a contact from DuckDB (async, non-blocking)."""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                UV, "run", str(SKILLS_DIR / "memory/scripts/memory.py"), "summary", contact_name,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=str(SKILLS_DIR / "memory"),
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
+            output = stdout.decode().strip()
+            if output and not output.startswith("SUMMARY|") and "No memories" not in output:
+                return output
+        except Exception as e:
+            log.warning(f"Could not load memory summary for {contact_name}: {e}")
+        return ""

@@ -1,0 +1,71 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
+"""Read test message history from inbox + outbox."""
+
+import argparse
+import json
+import sys
+from datetime import datetime
+from pathlib import Path
+
+INBOX = Path.home() / ".claude/test-messages/inbox"
+OUTBOX = Path.home() / ".claude/test-messages/outbox"
+
+
+def load_messages(directory: Path, direction: str) -> list[dict]:
+    """Load all JSON messages from a directory."""
+    msgs = []
+    if not directory.exists():
+        return msgs
+    for f in directory.glob("*.json"):
+        try:
+            data = json.loads(f.read_text())
+            data.setdefault("direction", direction)
+            msgs.append(data)
+        except (json.JSONDecodeError, Exception):
+            continue
+    return msgs
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Read test message history")
+    parser.add_argument("--chat", required=True, help="Chat ID to filter by")
+    parser.add_argument("--limit", type=int, default=20, help="Max messages to show")
+    args = parser.parse_args()
+
+    chat_id = args.chat
+
+    # Load from both directories
+    messages = load_messages(INBOX, "IN") + load_messages(OUTBOX, "OUT")
+
+    # Filter by chat_id
+    messages = [m for m in messages if m.get("chat_identifier") == chat_id or m.get("phone") == chat_id]
+
+    # Sort by timestamp
+    messages.sort(key=lambda m: m.get("timestamp", 0))
+
+    # Limit
+    messages = messages[-args.limit:]
+
+    if not messages:
+        print(f"# Chat: {chat_id} (no messages)")
+        return
+
+    print(f"# Chat: {chat_id}")
+    print()
+    for msg in messages:
+        ts = msg.get("timestamp", 0)
+        if isinstance(ts, (int, float)):
+            dt = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            dt = str(ts)
+        direction = msg.get("direction", "?")
+        text = msg.get("text", "")
+        print(f"{dt} | {chat_id} | {direction} | {text}")
+
+
+if __name__ == "__main__":
+    main()

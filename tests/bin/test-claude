@@ -1,0 +1,131 @@
+#!/usr/bin/env python3
+"""
+Fake Claude CLI for integration testing.
+
+This mimics the real `claude` CLI but:
+- Never calls the Anthropic API
+- Logs all inputs to a file for test assertions
+- Returns canned responses or echoes input
+
+Usage:
+    test-claude [options] [prompt]
+
+Environment variables:
+    TEST_CLAUDE_LOG     - Path to log file (default: /tmp/test-claude.log)
+    TEST_CLAUDE_MODE    - Response mode: echo, canned, slow, error (default: canned)
+    TEST_CLAUDE_DELAY   - Delay in seconds for slow mode (default: 1)
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+from typing import Optional
+
+LOG_FILE = os.environ.get('TEST_CLAUDE_LOG', '/tmp/test-claude.log')
+MODE = os.environ.get('TEST_CLAUDE_MODE', 'canned')
+DELAY = float(os.environ.get('TEST_CLAUDE_DELAY', '1'))
+
+CANNED_RESPONSES = {
+    'default': "I'm test-claude. I received your message and I'm responding with a canned response.",
+    'sms': "Got it! I'll help you with that.",
+    'greeting': "Hello! How can I help you today?",
+    'error': "I encountered an error processing your request.",
+}
+
+
+def log_invocation(args: argparse.Namespace, stdin_content: Optional[str]):
+    """Log this invocation for test assertions."""
+    entry = {
+        'timestamp': datetime.now().isoformat(),
+        'cwd': os.getcwd(),
+        'args': vars(args),
+        'stdin': stdin_content,
+        'env': {
+            'TEST_CLAUDE_MODE': MODE,
+        }
+    }
+
+    with open(LOG_FILE, 'a') as f:
+        f.write(json.dumps(entry) + '\n')
+
+
+def get_response(prompt: Optional[str]) -> str:
+    """Generate response based on mode and prompt."""
+    if MODE == 'echo':
+        return f"Echo: {prompt or 'no prompt'}"
+
+    elif MODE == 'error':
+        print("Error: Simulated error from test-claude", file=sys.stderr)
+        sys.exit(1)
+
+    elif MODE == 'slow':
+        time.sleep(DELAY)
+        return CANNED_RESPONSES['default']
+
+    else:  # canned mode
+        if prompt:
+            prompt_lower = prompt.lower()
+            if any(word in prompt_lower for word in ['hello', 'hi', 'hey']):
+                return CANNED_RESPONSES['greeting']
+            if 'sms' in prompt_lower or 'message' in prompt_lower:
+                return CANNED_RESPONSES['sms']
+        return CANNED_RESPONSES['default']
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Fake Claude CLI for testing')
+    parser.add_argument('-r', '--resume', action='store_true',
+                        help='Resume previous conversation')
+    parser.add_argument('-p', '--print', dest='print_mode', action='store_true',
+                        help='Print mode (non-interactive)')
+    parser.add_argument('-c', '--continue', dest='continue_mode', action='store_true',
+                        help='Continue mode')
+    parser.add_argument('--dangerously-skip-permissions', action='store_true',
+                        help='Skip permission prompts')
+    parser.add_argument('--allowedTools', nargs='*',
+                        help='Allowed tools')
+    parser.add_argument('--model', type=str,
+                        help='Model to use')
+    parser.add_argument('prompt', nargs='?', default=None,
+                        help='Initial prompt')
+
+    args = parser.parse_args()
+
+    # Check for stdin input
+    stdin_content = None
+    if not sys.stdin.isatty():
+        stdin_content = sys.stdin.read()
+
+    # Log this invocation
+    log_invocation(args, stdin_content)
+
+    # Determine the prompt (from args or stdin)
+    prompt = args.prompt or stdin_content
+
+    # If in resume mode without prompt, simulate interactive session
+    if args.resume and not prompt:
+        # Simulate waiting for input (in real tests, input comes via tmux)
+        print("test-claude ready (resume mode)", flush=True)
+        # Read lines from stdin in a loop
+        try:
+            while True:
+                line = input()
+                if line.strip():
+                    response = get_response(line)
+                    print(response, flush=True)
+        except EOFError:
+            pass
+        return
+
+    # Generate and print response
+    response = get_response(prompt)
+    print(response)
+
+
+if __name__ == '__main__':
+    main()

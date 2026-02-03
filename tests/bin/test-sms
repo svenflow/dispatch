@@ -1,0 +1,74 @@
+#!/usr/bin/env python3
+"""
+Fake SMS sender for integration testing.
+
+This mimics the real `send-sms` CLI but:
+- Never actually sends messages
+- Logs all "sent" messages to a file for test assertions
+- Can simulate various failure modes
+
+Usage:
+    test-sms <phone> <message>
+    test-sms <phone> -  # Read message from stdin
+
+Environment variables:
+    TEST_SMS_LOG    - Path to log file (default: /tmp/test-sms.log)
+    TEST_SMS_MODE   - Mode: success, fail, slow (default: success)
+    TEST_SMS_DELAY  - Delay in seconds for slow mode (default: 2)
+"""
+
+import json
+import os
+import sys
+import time
+from datetime import datetime
+
+LOG_FILE = os.environ.get('TEST_SMS_LOG', '/tmp/test-sms.log')
+MODE = os.environ.get('TEST_SMS_MODE', 'success')
+DELAY = float(os.environ.get('TEST_SMS_DELAY', '2'))
+
+
+def log_message(phone: str, message: str, success: bool):
+    """Log this message for test assertions."""
+    entry = {
+        'timestamp': datetime.now().isoformat(),
+        'phone': phone,
+        'message': message,
+        'success': success,
+        'mode': MODE,
+    }
+
+    with open(LOG_FILE, 'a') as f:
+        f.write(json.dumps(entry) + '\n')
+
+
+def main():
+    if len(sys.argv) < 3:
+        print("Usage: test-sms <phone> <message>", file=sys.stderr)
+        print("       test-sms <phone> -  # Read from stdin", file=sys.stderr)
+        sys.exit(1)
+
+    phone = sys.argv[1]
+
+    # Get message from args or stdin
+    if sys.argv[2] == '-':
+        message = sys.stdin.read().strip()
+    else:
+        message = ' '.join(sys.argv[2:])
+
+    # Simulate different modes
+    if MODE == 'fail':
+        log_message(phone, message, success=False)
+        print(f"Error: Failed to send message to {phone}", file=sys.stderr)
+        sys.exit(1)
+
+    elif MODE == 'slow':
+        time.sleep(DELAY)
+
+    # Success case
+    log_message(phone, message, success=True)
+    print(f"Message sent to {phone}")
+
+
+if __name__ == '__main__':
+    main()

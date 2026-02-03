@@ -1,0 +1,43 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
+"""Send a test message. Writes JSON to ~/.claude/test-messages/outbox/."""
+
+import json
+import sys
+import time
+from pathlib import Path
+
+OUTBOX = Path.home() / ".claude/test-messages/outbox"
+
+
+def main():
+    if len(sys.argv) < 3:
+        print(f"Usage: {sys.argv[0]} <chat_id> <message>", file=sys.stderr)
+        sys.exit(1)
+
+    chat_id = sys.argv[1]
+    message = sys.argv[2]
+
+    OUTBOX.mkdir(parents=True, exist_ok=True)
+
+    ts = time.time()
+    filename = f"{int(ts * 1000)}.json"
+
+    msg = {
+        "chat_identifier": chat_id,
+        "phone": chat_id,
+        "text": message,
+        "timestamp": ts,
+        "direction": "OUT",
+    }
+
+    outpath = OUTBOX / filename
+    outpath.write_text(json.dumps(msg, indent=2))
+    print(f"SENT|{chat_id}")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.nicklaude.claude-assistant</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/USERNAME/code/claude-assistant/bin/claude-assistant</string>
+        <string>start</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/USERNAME/code/claude-assistant</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/USERNAME/code/claude-assistant/logs/launchd.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/USERNAME/code/claude-assistant/logs/launchd.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>/Users/USERNAME</string>
+        <key>DISABLE_SEARCH_DAEMON</key>
+        <string>1</string>
+    </dict>
+</dict>
+</plist>

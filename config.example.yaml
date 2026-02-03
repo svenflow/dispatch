@@ -1,0 +1,41 @@
+# config.example.yaml — Copy to config.local.yaml and fill in your values.
+# config.local.yaml is gitignored. This file is checked in as a template.
+
+owner:
+  name: "Your Name"
+  phone: "+1XXXXXXXXXX"
+  email: "you@example.com"
+
+wife:
+  name: "Partner Name"  # Remove section if not applicable
+
+assistant:
+  name: "Nicklaude"
+  email: "assistant@example.com"
+
+signal:
+  account: "+1XXXXXXXXXX"
+
+hue:
+  bridges:
+    home:
+      ip: "10.10.10.X"
+    office:
+      ip: "10.10.10.X"
+
+lutron:
+  bridge_ip: "10.10.10.X"
+
+podcast:
+  bucket: "your-podcast-bucket"
+  title: "Your Audio Articles"
+  email: "you@example.com"
+
+chrome:
+  profiles:
+    0:
+      name: "assistant"
+      email: "assistant@example.com"
+    1:
+      name: "owner"
+      email: "you@example.com"
