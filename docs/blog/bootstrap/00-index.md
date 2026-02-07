@@ -17,8 +17,8 @@ This folder contains ordered prompts to guide Claude in recreating the entire pe
 | 03 | `03-identity-setup.md` | Configure identity and create config.local.yaml |
 | 04 | `04-messaging-core.md` | Daemon that polls iMessage and pipes to Claude |
 | 05 | `05-contacts-tiers.md` | Contact lookup and permission tiers |
-| 06 | `06-skills-system.md` | Skills folder structure, SKILL.md format |
-| 07 | `07-session-management.md` | SDK sessions, resume, per-contact isolation |
+| 06 | `06-skills-system.md` | Skills folder structure, SKILL.md format, session management |
+| 07 | ~~`07-session-management.md`~~ | *(Merged into 06)* |
 | 08 | `08-browser-automation.md` | Chrome control extension |
 | 09 | `09-smart-home.md` | Hue, Lutron, Sonos integrations |
 | 10 | `10-signal-integration.md` | Adding Signal as second channel |

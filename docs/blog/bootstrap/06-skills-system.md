@@ -78,9 +78,30 @@ description: Control Philips Hue lights. Use when asked about lights, brightness
 - "Office"
 ```
 
-## Step 2: Symlink for Session Access
+## Step 2: Symlink the Skills Folder (Not Individual Skills)
 
-Each contact's transcript directory needs access to skills:
+**Important:** Symlink the entire skills folder so new skills are automatically available:
+
+```bash
+# ~/.claude/skills should be a symlink to the dispatch skills folder
+# This way, any new skill added to dispatch/skills is automatically available
+ln -s ~/dispatch/skills ~/.claude/skills
+
+# Verify it's a folder symlink (not individual skill symlinks)
+ls -la ~/.claude/skills
+# Should show: ~/.claude/skills -> ~/dispatch/skills
+```
+
+**Don't do this** (individual symlinks require manual updates):
+```bash
+# BAD - requires adding symlink for each new skill
+ln -s ~/dispatch/skills/hue ~/.claude/skills/hue
+ln -s ~/dispatch/skills/sonos ~/.claude/skills/sonos
+```
+
+## Step 3: Transcript Directory Access
+
+Each contact's transcript directory needs access to skills via the `.claude` symlink:
 
 ```bash
 # When creating a new session
@@ -89,10 +110,10 @@ ln -s ~/.claude ~/transcripts/john-doe/.claude
 ```
 
 Now when Claude runs in `~/transcripts/john-doe/`, it sees:
-- `.claude/skills/` → all skills
+- `.claude/skills/` → all skills (via the chained symlinks)
 - `.claude/CLAUDE.md` → global instructions
 
-## Step 3: Core Skills to Build First
+## Step 4: Core Skills to Build First
 
 ### contacts/
 ```bash
@@ -119,7 +140,7 @@ If not, create the directory structure now:
 mkdir -p ~/.claude/skills/sms-assistant/scripts
 ```
 
-## Step 4: Skill Discovery
+## Step 5: Skill Discovery
 
 Claude Code automatically discovers skills from SKILL.md frontmatter. The key fields:
 
@@ -132,7 +153,7 @@ description: When to use  # Triggers skill loading
 
 When a user message matches the description, Claude loads the full SKILL.md.
 
-## Step 5: Writing Good SKILL.md
+## Step 6: Writing Good SKILL.md
 
 ### Do:
 - Start with a quick reference (copy-paste commands)
@@ -201,12 +222,97 @@ echo "Turned on $ROOM"
 
 ## Verification Checklist
 
-- [ ] `~/.claude/skills/` directory exists
+- [ ] `~/.claude/skills` is a symlink to `~/dispatch/skills` (folder symlink, not individual)
 - [ ] At least sms-assistant and contacts skills present
 - [ ] Each skill has SKILL.md with proper frontmatter
 - [ ] Scripts are executable (`chmod +x`)
-- [ ] Symlink works in transcript directories
+- [ ] Transcript directories have `.claude` symlink to `~/.claude`
+
+```bash
+# Verify folder symlink (not individual skills)
+ls -la ~/.claude/skills
+# Should show: ~/.claude/skills -> ~/dispatch/skills
+
+# Verify all skills are accessible
+ls ~/.claude/skills/ | wc -l
+# Should show 29+ skills
+
+# Verify transcript access works
+ls ~/transcripts/*/.claude/skills/ | head -5
+```
+
+---
+
+## Session Management (How It Works)
+
+Each contact gets their own persistent Claude session with context that survives across messages and daemon restarts.
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                     SDKBackend                          │
+│                                                         │
+│  sessions = {                                           │
+│    "+15551234567": SDKSession(contact="John"),         │
+│    "+15559876543": SDKSession(contact="Jane"),         │
+│    "abc123...":    SDKSession(group="Family Chat"),    │
+│  }                                                      │
+│                                                         │
+│  Each SDKSession has:                                   │
+│    - ClaudeSDKClient instance                          │
+│    - Message queue (async)                              │
+│    - Session ID (for resume)                           │
+│    - Run loop (processes queue)                        │
+└─────────────────────────────────────────────────────────┘
+```
+
+### Key Files
+
+Session management lives in `~/dispatch/assistant/`:
+- `sdk_session.py` - The SDKSession class
+- `sdk_backend.py` - The SDKBackend that manages all sessions
+- `common.py` - Shared utilities
+
+### Session Registry
+
+Tracks session metadata in `~/dispatch/state/sessions.json`:
+
+```json
+{
+  "+15551234567": {
+    "session_name": "john-doe",
+    "contact_name": "John Doe",
+    "tier": "favorite",
+    "session_id": "abc-123-def",
+    "last_message_time": "2026-02-07T14:30:00"
+  }
+}
+```
+
+The `session_id` enables resume after daemon restarts.
+
+### Key Behaviors
+
+1. **Lazy creation**: Sessions created on first message, not at daemon startup
+2. **Auto-resume**: On restart, sessions resume with full context via session_id
+3. **Health checks**: Run every 5 minutes, restart unhealthy sessions
+4. **Idle reaping**: Sessions idle for 2+ hours are killed to free resources
+5. **Steering**: New messages while Claude is responding are handled naturally
+
+### Session Verification
+
+```bash
+# Check active sessions
+~/dispatch/bin/claude-assistant status
+
+# Check registry has entries
+cat ~/dispatch/state/sessions.json | jq keys
+
+# Verify sessions have session_id for resume
+cat ~/dispatch/state/sessions.json | jq '.[].session_id'
+```
 
 ## What's Next
 
-`07-session-management.md` covers persistent sessions so Claude remembers context across messages.
+`08-browser-automation.md` covers Chrome control for web tasks.
