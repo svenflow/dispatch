@@ -331,11 +331,31 @@ launchctl unload ~/Library/LaunchAgents/com.dispatch.assistant.plist
 ## Verification Checklist
 
 - [ ] Daemon starts (`claude-assistant start` succeeds, logs show polling)
-- [ ] send-sms successfully sends iMessages to admin
+- [ ] send-sms successfully sends text messages to admin
+- [ ] send-sms successfully sends images to admin (test with `--image`)
 - [ ] Daemon sees incoming messages in logs (will show "Unknown sender" until contacts/tiers are set up in step 05)
 - [ ] State persists across restarts (last_rowid.txt)
 - [ ] Messages aren't processed twice
 - [ ] LaunchAgent is loaded (`launchctl list | grep dispatch`) and daemon survives reboot
+
+### Testing Image Sending
+
+```bash
+# Create a simple test image
+echo "Test" | convert label:@- /tmp/test-image.png 2>/dev/null || \
+  printf '\x89PNG\r\n\x1a\n' > /tmp/test-image.png  # Minimal PNG if ImageMagick not installed
+
+# Or use any existing image
+ls ~/Pictures/*.png | head -1
+
+# Send image with message
+~/.claude/skills/sms-assistant/scripts/send-sms "+1ADMIN_PHONE" --image /tmp/test-image.png "Test image from setup!"
+
+# Send image without message
+~/.claude/skills/sms-assistant/scripts/send-sms "+1ADMIN_PHONE" --image /tmp/test-image.png
+```
+
+Verify the image appears in Messages.app on your phone.
 
 > **Note:** At this stage, the daemon can send outgoing messages and detect incoming ones, but it won't route incoming messages to Claude sessions yet. That requires the contacts & tiers system in step 05.
 
