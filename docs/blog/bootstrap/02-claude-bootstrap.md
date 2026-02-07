@@ -28,6 +28,7 @@ I want to build a personal assistant system that:
 
 First, make sure git and gh (GitHub CLI) are installed:
 brew install git gh
+gh auth login
 
 Then clone the bootstrap guides:
 git clone https://github.com/anthropics/dispatch.git ~/dispatch
