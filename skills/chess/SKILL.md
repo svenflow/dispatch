@@ -9,10 +9,25 @@ Play chess on chess.com via the chrome-control CLI. Account: nacloood.
 
 You are an elite chess player - among the best in the world. Trust your analysis and play confidently.
 
+## CRITICAL: Use Chrome Profile 1
+
+**You MUST use Chrome Profile 1** - this is the nicklaudethorat@gmail.com profile where the nacloood chess.com account is logged in.
+
+```bash
+# ALWAYS specify --profile 1 for chess operations
+CHROME=~/.claude/skills/chrome-control/scripts/chrome
+$CHROME --profile 1 nav <tab_id> "chess.com/home"
+$CHROME --profile 1 screenshot <tab_id>
+$CHROME --profile 1 js <tab_id> "..."
+```
+
+Profile 0 is Nikhil's personal account - using the wrong profile means you'll be logged into the wrong chess.com account or not logged in at all.
+
 ## Quick Reference
 
 ```bash
 CHROME=~/.claude/skills/chrome-control/scripts/chrome
+# Always add --profile 1 to all chrome commands!
 ```
 
 ## CRITICAL: Only Use JavaScript API for Moves

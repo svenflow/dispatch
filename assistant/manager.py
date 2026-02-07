@@ -104,7 +104,8 @@ class ContactsManager:
 
     def __init__(self):
         import sys
-        sys.path.insert(0, str(HOME / "code/contacts-cli"))
+        # contacts_core.py is in the skills folder
+        sys.path.insert(0, str(HOME / "dispatch/skills/contacts/scripts"))
         from contacts_core import lookup_phone_sqlite, lookup_email_sqlite, list_contacts_sqlite
         self._lookup_phone = lookup_phone_sqlite
         self._lookup_email = lookup_email_sqlite
@@ -1323,8 +1324,8 @@ Your job is to diagnose and fix the issue. Follow these steps:
    claude-assistant status
 
 4. Check recent logs for errors:
-   tail -100 ~/code/claude-assistant/logs/manager.log | grep -iE "(error|fail|exception)"
-   tail -50 ~/code/claude-assistant/logs/session_lifecycle.log
+   tail -100 ~/dispatch/logs/manager.log | grep -iE "(error|fail|exception)"
+   tail -50 ~/dispatch/logs/session_lifecycle.log
 
 5. Check recent SMS history with admin:
    ~/.claude/skills/sms-assistant/scripts/read-sms --chat "{admin_phone}" --limit 20
@@ -1751,10 +1752,12 @@ You have 15 minutes. Work efficiently.
                 spurious_cancel_count += 1
                 log.warning(f"Spurious CancelledError in main loop (#{spurious_cancel_count}), "
                             f"cleared {cancel_depth} cancellation(s)")
-                if spurious_cancel_count >= 100:
+                if spurious_cancel_count >= 500:
                     log.error("Too many spurious CancelledErrors, shutting down to avoid infinite loop")
                     await self._shutdown()
                     break
+                # Small yield to break tight loops if cancel keeps firing
+                await asyncio.sleep(0.01)
                 continue
             except Exception as e:
                 log.error(f"Error in main loop: {e}")

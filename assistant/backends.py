@@ -47,9 +47,9 @@ BACKENDS: dict[str, BackendConfig] = {
         label="TEST",
         session_suffix="-test",
         registry_prefix="test:",
-        send_cmd='~/code/claude-assistant/tools/test-send "{chat_id}"',
-        send_group_cmd='~/code/claude-assistant/tools/test-send "{chat_id}"',
-        history_cmd='~/code/claude-assistant/tools/test-read --chat "{chat_id}" --limit {limit}',
+        send_cmd='~/dispatch/tools/test-send "{chat_id}"',
+        send_group_cmd='~/dispatch/tools/test-send "{chat_id}"',
+        history_cmd='~/dispatch/tools/test-read --chat "{chat_id}" --limit {limit}',
     ),
 }
 

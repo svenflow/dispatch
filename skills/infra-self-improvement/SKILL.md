@@ -13,7 +13,7 @@ When modifying the claude-assistant system, follow this guide to ensure you don'
 
 ## Pre-Change Checklist
 
-Before editing any file in `~/code/claude-assistant/assistant/`:
+Before editing any file in `~/dispatch/assistant/`:
 
 1. **Check daemon status**: `claude-assistant status`
 2. **Note active sessions**: Don't restart during active conversations
@@ -25,7 +25,7 @@ Before editing any file in `~/code/claude-assistant/assistant/`:
 ### Tier 1: Unit Tests (always run, no cost)
 
 ```bash
-cd ~/code/claude-assistant
+cd ~/dispatch
 uv run --group dev pytest tests/ -v --ignore=tests/unit/test_tts_chunk.py
 ```
 
@@ -43,7 +43,7 @@ uv run --group dev pytest tests/ -v --ignore=tests/unit/test_tts_chunk.py
 ### Tier 2: Smoke Tests - No API (run before daemon restart)
 
 ```bash
-cd ~/code/claude-assistant
+cd ~/dispatch
 uv run python tests/smoke/run_smoke_tests.py --skip-api
 ```
 
@@ -57,7 +57,7 @@ Tests real integrations without API cost (~1.3s):
 ### Tier 3: Smoke Tests - With API (run for SDK changes)
 
 ```bash
-cd ~/code/claude-assistant
+cd ~/dispatch
 uv run python tests/smoke/run_smoke_tests.py
 ```
 

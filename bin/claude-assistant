@@ -2,7 +2,7 @@
 # Claude Assistant CLI wrapper
 # Runs the Python CLI using uv
 
-ASSISTANT_DIR="$HOME/code/claude-assistant"
+ASSISTANT_DIR="$HOME/dispatch"
 UV="$HOME/.local/bin/uv"
 
 cd "$ASSISTANT_DIR" && exec "$UV" run python -m assistant.cli "$@"

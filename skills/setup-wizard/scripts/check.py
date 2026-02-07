@@ -313,10 +313,10 @@ def phase6_daemon():
           required=False)
 
     # State directory
-    state_dir = Path.home() / "code" / "claude-assistant" / "state"
+    state_dir = Path.home() / "dispatch" / "state"
     check("Daemon state directory",
           state_dir.is_dir(),
-          fix_hint="Run: mkdir -p ~/code/claude-assistant/state")
+          fix_hint="Run: mkdir -p ~/dispatch/state")
 
     check("Session registry (sessions.json)",
           (state_dir / "sessions.json").exists() if state_dir.is_dir() else False,
@@ -324,10 +324,10 @@ def phase6_daemon():
           required=False)
 
     # Logs directory
-    logs_dir = Path.home() / "code" / "claude-assistant" / "logs"
+    logs_dir = Path.home() / "dispatch" / "logs"
     check("Daemon logs directory",
           logs_dir.is_dir() and can_write_dir(logs_dir),
-          fix_hint="Run: mkdir -p ~/code/claude-assistant/logs")
+          fix_hint="Run: mkdir -p ~/dispatch/logs")
 
     # Daemon running check
     daemon_running = run_silent("claude-assistant status 2>/dev/null | grep -q 'running'")

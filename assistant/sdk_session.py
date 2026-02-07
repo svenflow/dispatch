@@ -34,7 +34,7 @@ from assistant.common import SKILLS_DIR, UV
 log = logging.getLogger(__name__)
 
 # Per-session log directory
-SESSION_LOG_DIR = Path.home() / "code/claude-assistant/logs/sessions"
+SESSION_LOG_DIR = Path.home() / "dispatch/logs/sessions"
 SESSION_LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -116,35 +116,20 @@ class SDKSession:
         log.info(f"[{self.contact_name}] SDK session started (resume={resume_session_id})")
 
     async def stop(self):
-        """Disconnect client and cancel task.
+        """Stop the session by cancelling its task.
 
-        IMPORTANT: client.disconnect() is run in an isolated task because
-        the SDK uses anyio cancel scopes internally that propagate
-        CancelledError to the calling task. Running in a separate task
-        ensures cancellation cannot leak to the main event loop.
+        IMPORTANT: We intentionally do NOT call client.disconnect().
+        The SDK client uses anyio internally, and anyio's cancel scopes
+        propagate CancelledError to ALL tasks in the event loop, not just
+        the calling task. This crashes the main daemon loop.
+
+        Instead, we just abandon the client. The underlying Claude CLI
+        subprocess will terminate when its stdin/stdout pipes close
+        (which happens when the client object gets garbage collected).
         """
         self.running = False
-        if self._client:
-            client = self._client
-            self._client = None
-
-            async def _isolated_disconnect():
-                try:
-                    await client.disconnect()
-                except (Exception, asyncio.CancelledError):
-                    pass
-
-            try:
-                disconnect_task = asyncio.create_task(_isolated_disconnect())
-                await asyncio.wait_for(asyncio.shield(disconnect_task), timeout=10)
-            except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
-                pass
-            finally:
-                # No matter what, clear any cancellation leaked to us
-                task = asyncio.current_task()
-                if task is not None:
-                    while task.cancelling() > 0:
-                        task.uncancel()
+        # Don't call disconnect - just abandon the client to avoid anyio cancel scope leaks
+        self._client = None
 
         if self._task:
             self._task.cancel()

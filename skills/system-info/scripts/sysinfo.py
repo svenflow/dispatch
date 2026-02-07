@@ -132,7 +132,7 @@ def get_claude_processes():
 
 def get_sdk_sessions():
     """Get active SDK sessions from the registry."""
-    registry_path = Path.home() / "code/claude-assistant/state/session_registry.json"
+    registry_path = Path.home() / "dispatch/state/sessions.json"
     if not registry_path.exists():
         return []
 

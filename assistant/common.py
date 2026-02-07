@@ -14,7 +14,7 @@ from typing import Any, Dict, Optional
 
 # Paths
 HOME = Path.home()
-ASSISTANT_DIR = HOME / "code/claude-assistant"
+ASSISTANT_DIR = HOME / "dispatch"
 STATE_DIR = ASSISTANT_DIR / "state"
 LOGS_DIR = ASSISTANT_DIR / "logs"
 SESSION_LOG_DIR = LOGS_DIR / "sessions"
@@ -23,7 +23,7 @@ MESSAGES_DB = HOME / "Library/Messages/chat.db"
 SKILLS_DIR = HOME / ".claude/skills"
 TRANSCRIPTS_DIR = HOME / "transcripts"
 CLAUDE = HOME / ".local/bin/claude"
-CLAUDE_ASSISTANT_CLI = str(HOME / "code/claude-assistant/bin/claude-assistant")
+CLAUDE_ASSISTANT_CLI = str(HOME / "dispatch/bin/claude-assistant")
 UV = str(HOME / ".local/bin/uv")
 BUN = HOME / ".bun/bin/bun"
 
@@ -48,7 +48,7 @@ def signal_account() -> str:
 
 # Backward compat — will be removed once all callers use signal_account()
 SIGNAL_ACCOUNT = None  # Placeholder; callers must use signal_account()
-SIGNAL_DIR = HOME / "code/signal"
+SIGNAL_DIR = HOME / ".claude/skills/signal"
 
 
 def normalize_chat_id(chat_id: str) -> str:

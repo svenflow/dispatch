@@ -3,7 +3,7 @@
 Usage from any skill script:
     import sys
     from pathlib import Path
-    sys.path.insert(0, str(Path.home() / "code/claude-assistant/skills/_lib"))
+    sys.path.insert(0, str(Path.home() / "dispatch/skills/_lib"))
     from config import cfg
 
     BRIDGE_IP = cfg("lutron.bridge_ip")
@@ -13,7 +13,7 @@ import yaml
 from pathlib import Path
 from typing import Any
 
-_CONFIG_FILE = Path.home() / "code/claude-assistant/config.local.yaml"
+_CONFIG_FILE = Path.home() / "dispatch/config.local.yaml"
 _config: dict | None = None
 
 

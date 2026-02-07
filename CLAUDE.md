@@ -10,16 +10,16 @@ Put things where they belong:
 - **Code** → `~/code/`
 - **Documents** → `~/Documents/`
 - **Skills** → `~/.claude/skills/`
-- **This project** → `~/code/claude-assistant/`
+- **This project** → `~/dispatch/`
 
 ## Python Environment
 
 **ALWAYS use `uv` for Python package management, NEVER pip3.**
 
-This project uses a venv at `~/code/claude-assistant/.venv/`
+This project uses a venv at `~/dispatch/.venv/`
 
 ```bash
-cd ~/code/claude-assistant
+cd ~/dispatch
 
 # Install packages - ALWAYS add to pyproject.toml, never bare uv pip install
 # 1. Edit pyproject.toml to add the dependency
@@ -50,7 +50,7 @@ Contacts are organized by tier (via macOS Contacts groups):
 The system uses the **Claude Agent SDK** (`claude_agent_sdk`) to manage sessions. Each contact gets an in-process `ClaudeSDKClient` instance — no tmux, no subprocess shells.
 
 ```
-~/code/claude-assistant/
+~/dispatch/
 ├── assistant/
 │   ├── manager.py       # Main daemon: polls messages, routes to sessions
 │   ├── sdk_backend.py   # SDKBackend: manages all SDK sessions
@@ -60,7 +60,7 @@ The system uses the **Claude Agent SDK** (`claude_agent_sdk`) to manage sessions
 │   └── common.py        # Shared constants and helpers
 ├── state/               # Persistent state
 │   ├── last_rowid.txt   # Last processed iMessage ROWID
-│   └── session_registry.json  # Maps chat_id → session metadata
+│   └── sessions.json  # Maps chat_id → session metadata
 ├── logs/
 │   ├── manager.log      # Main daemon log
 │   ├── session_lifecycle.log  # Session create/kill/restart events
@@ -134,7 +134,7 @@ When a session is created (first message from contact):
 **CRITICAL: Always run integration tests when touching daemon/manager/CLI/backend code.**
 
 ```bash
-cd ~/code/claude-assistant
+cd ~/dispatch
 
 # Run ALL tests - DO THIS BEFORE COMMITTING
 uv run --group dev pytest tests/ -v
