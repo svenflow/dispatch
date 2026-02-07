@@ -273,3 +273,64 @@ The production code uses SQLite against the AddressBook database (much faster th
 ```
 
 The `contacts_core.py` handles this automatically — it checks the root DB first, and falls back to scanning source databases if the root is empty. If contacts lookup returns `None` despite contacts being visible in Contacts.app, this is likely the issue.
+
+## Final Verification: Transcript Folder Structure
+
+Before moving to the next step, verify that transcript folders have the correct structure for skill access:
+
+```bash
+# Check all transcript folders have .claude symlink
+for dir in ~/transcripts/*/; do
+  session=$(basename "$dir")
+  if [ -L "$dir/.claude" ]; then
+    target=$(readlink "$dir/.claude")
+    echo "✓ $session -> $target"
+  else
+    echo "✗ $session: missing .claude symlink"
+    # Fix it:
+    ln -s ~/.claude "$dir/.claude"
+    echo "  -> created symlink"
+  fi
+done
+
+# Verify skills are accessible
+ls ~/transcripts/*/.claude/skills/ | head -5
+
+# Verify CLAUDE.md is accessible
+head -1 ~/transcripts/*/.claude/CLAUDE.md
+```
+
+Each transcript folder should have:
+- `.claude` symlink pointing to `~/.claude`
+- Access to all skills via `.claude/skills/`
+- Access to `CLAUDE.md` via `.claude/CLAUDE.md`
+
+## Group Chat Verification
+
+Group chats work differently from individual chats:
+- Use hex UUID as chat_id (not phone numbers)
+- Use `display_name` instead of `contact_name`
+- Default to admin tier (since groups are manually configured)
+
+**Verify group chat routing works:**
+
+```bash
+# 1. Check active group sessions
+~/dispatch/bin/claude-assistant status
+# Should show group sessions like: group-foo-bar, nikhil-pangserve-ryan, etc.
+
+# 2. Find a group chat ID to test
+~/.claude/skills/sms-assistant/scripts/read-sms --list | grep -i group
+
+# 3. Send a test message to the group
+~/.claude/skills/sms-assistant/scripts/send-sms "GROUP_HEX_ID" "test from setup"
+
+# 4. Verify group members' contact notes are loaded
+# Group sessions should read contact notes for all participants
+# Check the session's CLAUDE.md or initial prompt includes participant info
+```
+
+**Group chat gotchas:**
+- Group sessions use `display_name` field (human-friendly name)
+- If `contact_name` is missing, the code should fallback to `display_name`
+- Group chat IDs are hex UUIDs like `b3d258b9a4de447ca412eb335c82a077`
