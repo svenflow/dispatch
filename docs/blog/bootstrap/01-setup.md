@@ -193,7 +193,7 @@ claude "Hello, are you there?"
 
 ## What's Next
 
-With the machine set up, you're ready to build the messaging daemon in `02-messaging-core.md`.
+With the machine set up, you're ready to hand off to Claude using `02-claude-bootstrap.md`.
 
 ---
 

@@ -1,4 +1,4 @@
-# 04: Skills System
+# 05: Skills System
 
 ## Goal
 
@@ -109,7 +109,7 @@ The meta-skill that teaches Claude how to handle SMS:
 - When to stay quiet vs respond
 
 ### send-sms (already built)
-If you followed 02-messaging-core.md, it's already in the right place:
+If you followed 03-messaging-core.md, it's already in the right place:
 ```bash
 ls ~/.claude/skills/sms-assistant/scripts/send-sms
 ```
@@ -209,4 +209,4 @@ echo "Turned on $ROOM"
 
 ## What's Next
 
-`05-session-management.md` covers persistent sessions so Claude remembers context across messages.
+`06-session-management.md` covers persistent sessions so Claude remembers context across messages.
