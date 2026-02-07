@@ -37,6 +37,15 @@ def get_pid() -> Optional[int]:
         pid = int(PID_FILE.read_text().strip())
         # Check if process is actually running
         os.kill(pid, 0)
+        # Verify it's actually our daemon (not a reused PID after reboot)
+        import subprocess
+        result = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "command="],
+            capture_output=True, text=True
+        )
+        if "assistant" not in result.stdout:
+            PID_FILE.unlink(missing_ok=True)
+            return None
         return pid
     except (ValueError, ProcessLookupError, PermissionError):
         # PID file exists but process is dead
