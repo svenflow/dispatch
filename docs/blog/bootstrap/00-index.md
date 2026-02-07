@@ -13,27 +13,27 @@ This folder contains ordered prompts to guide Claude in recreating the entire pe
 | # | File | What You Build |
 |---|------|----------------|
 | 01 | `01-setup.md` | Human setup (no Claude yet) - accounts, permissions, tools |
-| 02 | `02-messaging-core.md` | Daemon that polls iMessage and pipes to Claude |
-| 03 | `03-contacts-tiers.md` | Contact lookup and permission tiers |
-| 04 | `04-skills-system.md` | Skills folder structure, SKILL.md format |
-| 05 | `05-session-management.md` | SDK sessions, resume, per-contact isolation |
-| 06 | `06-browser-automation.md` | Chrome control extension |
-| 07 | `07-smart-home.md` | Hue, Lutron, Sonos integrations |
-| 08 | `08-signal-integration.md` | Adding Signal as second channel |
-| 09 | `09-health-reliability.md` | Health checks, idle reaping, error recovery |
-| 10 | `10-testing.md` | Test suite with FakeClaudeSDKClient |
-| 11 | `11-open-source.md` | Sanitizing for public release |
+| 02 | `02-claude-bootstrap.md` | Hand off to Claude with the prompt to start |
+| 03 | `03-messaging-core.md` | Daemon that polls iMessage and pipes to Claude |
+| 04 | `04-contacts-tiers.md` | Contact lookup and permission tiers |
+| 05 | `05-skills-system.md` | Skills folder structure, SKILL.md format |
+| 06 | `06-session-management.md` | SDK sessions, resume, per-contact isolation |
+| 07 | `07-browser-automation.md` | Chrome control extension |
+| 08 | `08-smart-home.md` | Hue, Lutron, Sonos integrations |
+| 09 | `09-signal-integration.md` | Adding Signal as second channel |
+| 10 | `10-health-reliability.md` | Health checks, idle reaping, error recovery |
+| 11 | `11-testing.md` | Test suite with FakeClaudeSDKClient |
+| 12 | `12-open-source.md` | Sanitizing for public release |
 
 ## How to Use
 
-1. Start with `01-setup.md` and complete it fully
-2. Move to the next file only when the previous is working
-3. Each file has verification steps - don't skip them
-4. The system is designed to be useful at each stage (you can stop at 03 and have a working assistant)
+1. **You (human)**: Complete `01-setup.md` manually
+2. **You (human)**: Start Claude and give it the prompt from `02-claude-bootstrap.md`
+3. **Claude**: Works through guides 03-12 autonomously
 
 ## Minimum Viable System
 
-After completing files 01-03, you'll have:
+After Claude completes guides 03-04, you'll have:
 - A daemon polling iMessage every 100ms
 - Messages from approved contacts routed to Claude
 - Claude responding via the send-sms CLI
