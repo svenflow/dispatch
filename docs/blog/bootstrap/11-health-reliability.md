@@ -1,4 +1,4 @@
-# 10: Health Checks and Reliability
+# 11: Health Checks and Reliability
 
 ## Goal
 
@@ -142,7 +142,7 @@ claude-assistant status
 
 ## What's Next
 
-`11-testing.md` covers the test suite and how to test without hitting the Claude API.
+`12-testing.md` covers the test suite and how to test without hitting the Claude API.
 
 ---
 

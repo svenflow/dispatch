@@ -1,4 +1,4 @@
-# 08: Smart Home Integration
+# 09: Smart Home Integration
 
 ## Goal
 
@@ -152,4 +152,4 @@ Claude will:
 
 ## What's Next
 
-`09-signal-integration.md` adds Signal as a second messaging channel alongside iMessage.
+`10-signal-integration.md` adds Signal as a second messaging channel alongside iMessage.

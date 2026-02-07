@@ -1,4 +1,4 @@
-# 11: Testing
+# 12: Testing
 
 ## Goal
 
@@ -199,7 +199,7 @@ A PostToolUse hook automatically runs linters after edits:
 
 ## What's Next
 
-`12-open-source.md` covers sanitizing the codebase for public release.
+`13-open-source.md` covers sanitizing the codebase for public release.
 
 ---
 

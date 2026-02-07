@@ -1,4 +1,4 @@
-# 06: Session Management
+# 07: Session Management
 
 ## Goal
 
@@ -254,9 +254,9 @@ async def reap_idle_sessions(self, timeout_hours: float = 2.0):
 ## What's Next
 
 The next guides (not yet written) cover:
-- `07-browser-automation.md` - Chrome control extension
-- `08-smart-home.md` - Hue, Lutron, Sonos integrations
-- `09-signal-integration.md` - Adding Signal as second channel
+- `08-browser-automation.md` - Chrome control extension
+- `09-smart-home.md` - Hue, Lutron, Sonos integrations
+- `10-signal-integration.md` - Adding Signal as second channel
 
 ---
 

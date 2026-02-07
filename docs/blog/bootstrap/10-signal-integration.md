@@ -1,4 +1,4 @@
-# 09: Signal Integration
+# 10: Signal Integration
 
 ## Goal
 
@@ -167,7 +167,7 @@ The manager daemon already supports Signal as a backend. In [`assistant/manager.
 
 ## What's Next
 
-`10-health-reliability.md` covers health checks, idle session cleanup, and error recovery.
+`11-health-reliability.md` covers health checks, idle session cleanup, and error recovery.
 
 ---
 

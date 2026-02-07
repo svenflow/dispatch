@@ -1,4 +1,4 @@
-# 04: Contacts and Tier System
+# 05: Contacts and Tier System
 
 ## Goal
 
@@ -204,7 +204,7 @@ This creates a simple approval workflow without complex UIs.
 
 ## What's Next
 
-With tiers working, `05-skills-system.md` covers the skills folder structure so Claude can discover and use capabilities.
+With tiers working, `06-skills-system.md` covers the skills folder structure so Claude can discover and use capabilities.
 
 ---
 

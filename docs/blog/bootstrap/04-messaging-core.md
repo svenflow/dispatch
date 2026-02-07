@@ -1,4 +1,4 @@
-# 03: Messaging Core Daemon
+# 04: Messaging Core Daemon
 
 ## Goal
 
@@ -338,7 +338,7 @@ launchctl unload ~/Library/LaunchAgents/com.dispatch.assistant.plist
 
 ## What's Next
 
-This basic daemon works but has no access control. In `04-contacts-tiers.md`, we add contact lookup and permission tiers so only approved people can interact.
+This basic daemon works but has no access control. In `05-contacts-tiers.md`, we add contact lookup and permission tiers so only approved people can interact.
 
 ---
 
