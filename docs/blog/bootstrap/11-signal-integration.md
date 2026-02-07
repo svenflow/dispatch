@@ -1,4 +1,4 @@
-# 10: Signal Integration
+# 11: Signal Integration
 
 ## Goal
 
@@ -167,7 +167,7 @@ The manager daemon already supports Signal as a backend. In [`assistant/manager.
 
 ## What's Next
 
-`11-health-reliability.md` covers health checks, idle session cleanup, and error recovery.
+`12-smart-home.md` covers integrating Philips Hue, Lutron Caseta, and Sonos for smart home control.
 
 ---
 

@@ -20,10 +20,10 @@ This folder contains ordered prompts to guide Claude in recreating the entire pe
 | 06 | `06-skills-system.md` | Skills folder structure, SKILL.md format, session management |
 | 07 | ~~`07-session-management.md`~~ | *(Merged into 06)* |
 | 08 | `08-browser-automation.md` | Chrome control extension |
-| 09 | `09-smart-home.md` | Hue, Lutron, Sonos integrations |
-| 10 | `10-signal-integration.md` | Adding Signal as second channel |
-| 11 | `11-health-reliability.md` | Health checks, idle reaping, error recovery |
-| 12 | `12-testing.md` | Test suite with FakeClaudeSDKClient |
+| 09 | `09-health-reliability.md` | Health checks, idle reaping, error recovery |
+| 10 | `10-testing.md` | Test suite with FakeClaudeSDKClient |
+| 11 | `11-signal-integration.md` | Adding Signal as second channel |
+| 12 | `12-smart-home.md` | Hue, Lutron, Sonos integrations |
 | 13 | `13-open-source.md` | Sanitizing for public release |
 
 ## How to Use

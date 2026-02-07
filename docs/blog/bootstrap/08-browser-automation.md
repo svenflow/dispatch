@@ -183,7 +183,7 @@ The [`SKILL.md`](https://github.com/nicklaude/dispatch/blob/main/skills/chrome-c
 
 ## What's Next
 
-`09-smart-home.md` covers Hue, Lutron, and Sonos integrations for home automation.
+`09-health-reliability.md` covers health checks, idle reaping, and error recovery.
 
 ---
 

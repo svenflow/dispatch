@@ -1,4 +1,4 @@
-# 12: Testing
+# 10: Testing
 
 ## Goal
 
@@ -199,7 +199,7 @@ A PostToolUse hook automatically runs linters after edits:
 
 ## What's Next
 
-`13-open-source.md` covers sanitizing the codebase for public release.
+`11-signal-integration.md` covers adding Signal as a second messaging channel.
 
 ---
 

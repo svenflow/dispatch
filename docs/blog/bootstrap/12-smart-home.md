@@ -1,4 +1,4 @@
-# 09: Smart Home Integration
+# 12: Smart Home Integration
 
 ## Goal
 
@@ -152,4 +152,4 @@ Claude will:
 
 ## What's Next
 
-`10-signal-integration.md` adds Signal as a second messaging channel alongside iMessage.
+`13-open-source.md` covers sanitizing the system for public release.
