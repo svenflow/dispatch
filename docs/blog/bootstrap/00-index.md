@@ -12,17 +12,16 @@ This folder contains ordered prompts to guide Claude in recreating the entire pe
 
 | # | File | What You Build |
 |---|------|----------------|
-| 00 | `00-setup.md` | Machine setup, accounts, permissions |
-| 01 | `01-messaging-core.md` | Daemon that polls iMessage and pipes to Claude |
-| 02 | `02-contacts-tiers.md` | Contact lookup and permission tiers |
-| 03 | `03-send-receive.md` | Sending messages back, conversation flow |
+| 01 | `01-setup.md` | Machine setup, accounts, permissions |
+| 02 | `02-messaging-core.md` | Daemon that polls iMessage and pipes to Claude |
+| 03 | `03-contacts-tiers.md` | Contact lookup and permission tiers |
 | 04 | `04-skills-system.md` | Skills folder structure, SKILL.md format |
 | 05 | `05-session-management.md` | SDK sessions, resume, per-contact isolation |
-| 06 | `06-signal-integration.md` | Adding Signal as second channel |
-| 07 | `07-health-reliability.md` | Health checks, idle reaping, error recovery |
-| 08 | `08-testing.md` | Test suite with FakeClaudeSDKClient |
-| 09 | `09-smart-home.md` | Hue, Lutron, Sonos integrations |
-| 10 | `10-browser-automation.md` | Chrome control extension |
+| 06 | `06-browser-automation.md` | Chrome control extension |
+| 07 | `07-smart-home.md` | Hue, Lutron, Sonos integrations |
+| 08 | `08-signal-integration.md` | Adding Signal as second channel |
+| 09 | `09-health-reliability.md` | Health checks, idle reaping, error recovery |
+| 10 | `10-testing.md` | Test suite with FakeClaudeSDKClient |
 | 11 | `11-open-source.md` | Sanitizing for public release |
 
 ## How to Use
