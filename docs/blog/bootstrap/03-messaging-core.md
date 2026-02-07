@@ -263,7 +263,68 @@ ps aux | grep poller.py
 kill $(cat ~/dispatch/state/daemon.pid)
 ```
 
-Later we'll add LaunchAgent for auto-start on boot.
+## Step 6: Auto-Start on Boot (LaunchAgent)
+
+Create a LaunchAgent so the daemon starts automatically:
+
+Create `~/Library/LaunchAgents/com.dispatch.assistant.plist`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.dispatch.assistant</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/YOUR_USERNAME/dispatch/bin/claude-assistant</string>
+        <string>start</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/YOUR_USERNAME/dispatch</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/YOUR_USERNAME/dispatch/logs/launchd.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/YOUR_USERNAME/dispatch/logs/launchd.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>/Users/YOUR_USERNAME</string>
+    </dict>
+</dict>
+</plist>
+```
+
+**Important:** Replace `YOUR_USERNAME` with your actual username.
+
+Load the LaunchAgent:
+
+```bash
+# Load it (starts immediately and on boot)
+launchctl load ~/Library/LaunchAgents/com.dispatch.assistant.plist
+
+# Check status
+launchctl list | grep dispatch
+
+# Unload if needed
+launchctl unload ~/Library/LaunchAgents/com.dispatch.assistant.plist
+```
+
+**GitHub reference:** See [`launchd/com.nicklaude.claude-assistant.plist`](https://github.com/nicklaude/dispatch/blob/main/launchd/com.nicklaude.claude-assistant.plist) for a working example.
 
 ## Verification Checklist
 
@@ -272,6 +333,8 @@ Later we'll add LaunchAgent for auto-start on boot.
 - [ ] Claude receives messages and can call send-sms
 - [ ] State persists across restarts (last_rowid.txt)
 - [ ] Messages aren't processed twice
+- [ ] LaunchAgent is loaded (`launchctl list | grep dispatch`)
+- [ ] Daemon survives reboot
 
 ## What's Next
 
