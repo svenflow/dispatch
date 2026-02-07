@@ -23,8 +23,8 @@
    - Chrome extension for web instead of APIs
 
 2. **Claude has its own identity** (partially implemented)
-   - Own Google account (nicklaude@gmail.com) - infrastructure ready
-   - Own X/Twitter account (@nicklaudethorat) - planned, not yet integrated
+   - Own Google account (assistant@gmail.com) - infrastructure ready
+   - Own X/Twitter account (@assistantbot) - planned, not yet integrated
    - Own Chrome profile - FULLY WORKING with multi-profile support
    - Can send emails, browse, order things (with payment consent)
    - Advanced Chrome capabilities: debugger API, network/console monitoring, screenshot chunking
@@ -250,7 +250,7 @@
 - **Open source release preparation** - Cleaning up for public GitHub repo
 
 ### Planned (Not Yet Implemented)
-- X/Twitter integration (account exists: @nicklaudethorat, not wired up)
+- X/Twitter integration (account exists: @assistantbot, not wired up)
 - General tier handling (HaikuHandler exists but not active - unknowns ignored)
 
 ### Archived

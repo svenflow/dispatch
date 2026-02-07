@@ -44,7 +44,7 @@ Extracted from 179 unique SMS requests across 30 transcript files.
 ### Afternoon
 - **Second Chrome profile** - "i logged into a second profile in chrome can you see it"
 - **Profile permissions** - Establishing read-only default for owner's account
-  - nicklaude@gmail.com = Claude's account (full autonomy)
+  - assistant@gmail.com = Claude's account (full autonomy)
   - owner@gmail.com = Owner's account (read-only, needs consent)
 - **Gmail access** - "show me my latest email in owner@gmail.com profile"
 
@@ -126,7 +126,7 @@ Extracted from 179 unique SMS requests across 30 transcript files.
 - **Rust rewrite begun** - Started parallel implementation at ~/dispatch/prototypes/claude-assistant-rs/
   - Goal: Performance, type safety, and cleaner architecture
   - Coexists with Python daemon during transition
-- **Search daemon (nicklaude-search)** - Local semantic search service
+- **Search daemon (dispatch-search)** - Local semantic search service
   - Full-text search with FTS5
   - Vector embeddings via node-llama-cpp
   - Hybrid retrieval pipeline
@@ -137,7 +137,7 @@ Extracted from 179 unique SMS requests across 30 transcript files.
 ## Day 5+: January 28, 2026 onwards - Search & Scale
 
 ### Search Infrastructure
-- **nicklaude-search daemon** - Comprehensive local search service
+- **dispatch-search daemon** - Comprehensive local search service
   - FTS (Full-Text Search) for keyword matching
   - Vector embeddings for semantic similarity
   - Hybrid retrieval combining both approaches
@@ -308,8 +308,8 @@ Extracted from 179 unique SMS requests across 30 transcript files.
 - Gradual migration possible once new version proves stable
 
 ### Identity
-- Claude has its own Google account (nicklaude@gmail.com)
-- Claude has its own X/Twitter account (planned: @nicklaudethorat)
+- Claude has its own Google account (assistant@gmail.com)
+- Claude has its own X/Twitter account (planned: @assistantbot)
 - Claude has its own Chrome profile (working)
 - Payments still require human consent
 

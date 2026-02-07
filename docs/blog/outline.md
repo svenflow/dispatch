@@ -481,7 +481,7 @@ uv run ~/.claude/skills/tts/scripts/tts.py "article.txt" -o /tmp/audio.mp3
 ### Step 9.3: Private Podcast Feed
 Host on GCS bucket, subscribe in any podcast app:
 ```
-https://storage.googleapis.com/nicklaude-podcast/podcast.xml
+https://storage.googleapis.com/dispatch-podcast/podcast.xml
 ```
 
 **Critical step**: Before TTS, convert raw text to podcast script format! Raw markdown/tables sound terrible. Use Gemini to rewrite into natural spoken prose first.
@@ -538,8 +538,8 @@ The SDK-based architecture enables direct session introspection without parsing 
 ### Step 10.3: Search Daemon
 The assistant spawns a TypeScript daemon for local file search capabilities:
 ```bash
-~/code/nicklaude-search/           # Search daemon code
-~/code/nicklaude-search/search-daemon.log  # Search operations log
+~/code/dispatch-search/           # Search daemon code
+~/code/dispatch-search/search-daemon.log  # Search operations log
 ```
 
 The search daemon is spawned by the main daemon and provides fast local file indexing and search.
@@ -607,7 +607,7 @@ The dream is eventually having Claude sessions self-modify their skill files whe
 │   ├── sms-cli/              # SMS sending CLI
 │   ├── signal/               # Signal sending CLIs
 │   ├── contacts-cli/         # Contacts.app CLI wrapper
-│   ├── nicklaude-search/     # Search daemon (TypeScript)
+│   ├── dispatch-search/     # Search daemon (TypeScript)
 │   └── podcast-feed/         # Podcast RSS generator
 ├── transcripts/
 │   ├── john-smith/           # Per-contact conversation dir
