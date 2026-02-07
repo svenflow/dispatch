@@ -1,0 +1,867 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["typer", "rich", "pyobjc-framework-ApplicationServices", "pyobjc-framework-Quartz", "pyobjc-framework-Cocoa"]
+# ///
+"""
+axctl - macOS Accessibility CLI
+
+Identical read API to pyax, with added interaction capabilities.
+
+Read commands:
+  axctl tree "App Name" --json       # Dump accessibility tree
+  axctl tree "App Name" --list-actions  # Show available actions
+
+Interact commands:
+  axctl click "App Name" --id <ref>  # Click element by ref ID
+  axctl type "App Name" --id <ref> "text"  # Type into element
+  axctl action "App Name" --id <ref> "AXPress"  # Perform action
+"""
+
+import json
+import sys
+import re
+from typing import Optional, Annotated
+from enum import Enum
+
+import typer
+from rich.console import Console
+from rich.json import JSON
+
+from ApplicationServices import (
+    AXUIElementCopyAttributeNames,
+    AXUIElementCopyAttributeValue,
+    AXUIElementCopyParameterizedAttributeNames,
+    AXUIElementCopyActionNames,
+    AXUIElementCreateApplication,
+    AXUIElementCopyActionDescription,
+    AXUIElementPerformAction,
+    AXUIElementSetAttributeValue,
+    AXValueRef,
+    AXValueGetType,
+    kAXValueAXErrorType,
+)
+from Quartz import (
+    CGWindowListCopyWindowInfo,
+    kCGWindowListExcludeDesktopElements,
+    kCGNullWindowID,
+)
+from Foundation import NSKeyedUnarchiver
+from Cocoa import NSData
+
+app = typer.Typer(no_args_is_help=True)
+console = Console()
+
+DEFAULT_ATTRIBUTES = ["AXRole", "AXTitle", "AXValue"]
+
+
+# ============================================================================
+# Core accessibility helpers (matching pyax internals)
+# ============================================================================
+
+def _unarchive_object(val):
+    if isinstance(val, NSData):
+        try:
+            return NSKeyedUnarchiver.unarchiveObjectWithData_(val)
+        except Exception:
+            return val
+    return val
+
+
+def get_application_by_name(name: str):
+    """Get application AXUIElement by name."""
+    wl = CGWindowListCopyWindowInfo(kCGWindowListExcludeDesktopElements, kCGNullWindowID)
+    for w in wl:
+        if name == w.valueForKey_("kCGWindowOwnerName"):
+            pid = int(w.valueForKey_("kCGWindowOwnerPID"))
+            return AXUIElementCreateApplication(pid)
+    return None
+
+
+def get_attribute_names(element):
+    """Get list of attribute names for element."""
+    err, attrs = AXUIElementCopyAttributeNames(element, None)
+    return sorted(list(attrs)) if attrs else []
+
+
+def get_parameterized_attribute_names(element):
+    """Get list of parameterized attribute names."""
+    err, attrs = AXUIElementCopyParameterizedAttributeNames(element, None)
+    return sorted(list(attrs)) if attrs else []
+
+
+def get_attribute_value(element, attribute):
+    """Get attribute value."""
+    err, value = AXUIElementCopyAttributeValue(element, attribute, None)
+    return _unarchive_object(value)
+
+
+def get_actions(element):
+    """Get list of available actions."""
+    err, actions = AXUIElementCopyActionNames(element, None)
+    return sorted(list(actions)) if actions else []
+
+
+def get_action_description(element, action_name):
+    """Get description for an action."""
+    err, desc = AXUIElementCopyActionDescription(element, action_name, None)
+    return desc
+
+
+def perform_action(element, action_name):
+    """Perform an action on element."""
+    return AXUIElementPerformAction(element, action_name)
+
+
+def set_attribute_value(element, attribute, value):
+    """Set an attribute value."""
+    return AXUIElementSetAttributeValue(element, attribute, value)
+
+
+def get_children(element):
+    """Get child elements."""
+    children = get_attribute_value(element, "AXChildren")
+    return list(children) if children else []
+
+
+# ============================================================================
+# JSON encoder for AX types
+# ============================================================================
+
+def _default_json_encoder(obj):
+    """Encoder for non-standard types."""
+    if hasattr(obj, 'serializable'):
+        try:
+            return obj.serializable()
+        except Exception:
+            pass
+    # Handle NSPoint, NSSize, NSRect, etc.
+    if hasattr(obj, '__iter__') and not isinstance(obj, (str, bytes)):
+        try:
+            return list(obj)
+        except Exception:
+            pass
+    return repr(obj)
+
+
+# ============================================================================
+# Tree building with ref IDs
+# ============================================================================
+
+class TreeBuilder:
+    """Build accessibility tree with ref IDs for interaction."""
+
+    def __init__(self, attributes: list[str], all_attributes: bool,
+                 list_attributes: bool, list_actions: bool):
+        self.attributes = attributes
+        self.all_attributes = all_attributes
+        self.list_attributes = list_attributes
+        self.list_actions = list_actions
+        self._ref_counter = 0
+        self._ref_map = {}  # ref -> element
+
+    def _next_ref(self):
+        """Get next ref ID."""
+        ref = f"ref_{self._ref_counter}"
+        self._ref_counter += 1
+        return ref
+
+    def _element_to_dict(self, element):
+        """Convert element to dict with attributes."""
+        attr_names = get_attribute_names(element)
+
+        if self.all_attributes:
+            attr_list = sorted(attr_names)
+        else:
+            # Always include requested attributes in order, matching pyax behavior
+            attr_list = sorted(
+                self.attributes,
+                key=lambda x: [
+                    DEFAULT_ATTRIBUTES.index(x) if x in DEFAULT_ATTRIBUTES else len(self.attributes),
+                    x
+                ]
+            )
+
+        obj = {}
+        for attr_name in attr_list:
+            # Always include the attribute, even if null (matching pyax)
+            obj[attr_name] = get_attribute_value(element, attr_name)
+
+        if self.list_attributes:
+            obj["attributes"] = sorted(
+                attr_names + get_parameterized_attribute_names(element)
+            )
+
+        if self.list_actions:
+            actions = get_actions(element)
+            obj["actions"] = {
+                action: get_action_description(element, action)
+                for action in actions
+            }
+
+        return obj
+
+    def build_tree(self, element, add_refs: bool = False) -> dict:
+        """Recursively build tree structure."""
+        obj = self._element_to_dict(element)
+
+        if add_refs:
+            ref = self._next_ref()
+            obj["_ref"] = ref
+            self._ref_map[ref] = element
+
+        children = get_children(element)
+        obj["AXChildren"] = [
+            self.build_tree(child, add_refs) for child in children
+        ]
+
+        return obj
+
+    def get_element_by_ref(self, ref: str):
+        """Get element by ref ID."""
+        return self._ref_map.get(ref)
+
+
+# ============================================================================
+# Element search
+# ============================================================================
+
+def search_tree(element, match_func, max_depth: int = 50, current_depth: int = 0):
+    """Search tree for matching elements."""
+    if current_depth > max_depth:
+        return []
+
+    results = []
+    if match_func(element):
+        results.append(element)
+
+    for child in get_children(element):
+        results.extend(search_tree(child, match_func, max_depth, current_depth + 1))
+
+    return results
+
+
+def find_by_title(element, title: str):
+    """Find elements by AXTitle."""
+    return search_tree(element, lambda e: get_attribute_value(e, "AXTitle") == title)
+
+
+def find_by_value(element, value: str):
+    """Find elements by AXValue."""
+    return search_tree(element, lambda e: get_attribute_value(e, "AXValue") == value)
+
+
+def find_by_role(element, role: str):
+    """Find elements by AXRole."""
+    return search_tree(element, lambda e: get_attribute_value(e, "AXRole") == role)
+
+
+def find_by_description(element, desc: str):
+    """Find elements by AXDescription."""
+    return search_tree(element, lambda e: get_attribute_value(e, "AXDescription") == desc)
+
+
+def find_element_by_ref(root, ref: str, add_refs_builder: TreeBuilder = None):
+    """Find element by ref ID (requires tree with refs built first)."""
+    if add_refs_builder:
+        return add_refs_builder.get_element_by_ref(ref)
+
+    # Fallback: build tree with refs
+    builder = TreeBuilder(DEFAULT_ATTRIBUTES, False, False, False)
+    builder.build_tree(root, add_refs=True)
+    return builder.get_element_by_ref(ref)
+
+
+# ============================================================================
+# CLI Commands
+# ============================================================================
+
+@app.command()
+def tree(
+    app_name: Annotated[str, typer.Argument(help="Application name")],
+    web: Annotated[bool, typer.Option("--web", "-w", help="Only output web area subtree")] = False,
+    dom_id: Annotated[Optional[str], typer.Option("--dom-id", help="Only output subtree of DOM node ID")] = None,
+    attribute: Annotated[Optional[list[str]], typer.Option("--attribute", "-a", help="Show provided attributes")] = None,
+    all_attributes: Annotated[bool, typer.Option("--all-attributes/--no-all-attributes", help="Show all available attributes")] = False,
+    list_attributes: Annotated[bool, typer.Option("--list-attributes/--no-list-attributes", help="List available attributes")] = False,
+    list_actions: Annotated[bool, typer.Option("--list-actions/--no-list-actions", help="List available actions")] = False,
+    json_output: Annotated[bool, typer.Option("--json/--no-json", help="Output in JSON format")] = False,
+    refs: Annotated[bool, typer.Option("--refs/--no-refs", help="Include ref IDs for interaction")] = False,
+):
+    """
+    Dump accessibility tree for an application.
+
+    Identical API to pyax tree command, with optional --refs for interaction.
+    """
+    app_element = get_application_by_name(app_name)
+    if not app_element:
+        console.print(f"[red]Error: application '{app_name}' not found[/red]", file=sys.stderr)
+        raise typer.Exit(1)
+
+    element = app_element
+
+    # Handle web/dom-id options
+    if web or dom_id:
+        # Search for web area
+        web_areas = find_by_role(app_element, "AXWebArea")
+        if not web_areas:
+            console.print("[red]Error: no web area found[/red]", file=sys.stderr)
+            raise typer.Exit(1)
+        element = web_areas[0]
+
+    if dom_id:
+        # Search for DOM ID
+        matches = search_tree(element, lambda e: get_attribute_value(e, "AXDOMIdentifier") == dom_id)
+        if not matches:
+            console.print(f"[red]Error: can't find '{dom_id}' DOM identifier in tree[/red]", file=sys.stderr)
+            raise typer.Exit(1)
+        element = matches[0]
+
+    attributes = attribute if attribute else DEFAULT_ATTRIBUTES.copy()
+
+    builder = TreeBuilder(attributes, all_attributes, list_attributes, list_actions)
+    data = builder.build_tree(element, add_refs=refs)
+
+    if json_output:
+        console.print(JSON.from_data(data, default=_default_json_encoder))
+    else:
+        _print_tree(data)
+
+
+def _print_tree(data, indent=0):
+    """Print tree in human-readable format."""
+    role = data.get("AXRole", "Unknown")
+    attrs = {k: v for k, v in data.items() if k not in ("AXRole", "AXChildren", "attributes", "actions", "_ref") and v is not None}
+
+    attr_str = " ".join([f"{k}={repr(v)}" for k, v in attrs.items()])
+    ref_str = f" [{data['_ref']}]" if "_ref" in data else ""
+
+    console.print(f"{' ' * indent}[bold red]{role}[/bold red] {attr_str}[dim]{ref_str}[/dim]")
+
+    if "actions" in data and data["actions"]:
+        actions_str = ", ".join(data["actions"].keys())
+        console.print(f"{' ' * indent}  [dim]actions: {actions_str}[/dim]")
+
+    for child in data.get("AXChildren", []):
+        _print_tree(child, indent + 1)
+
+
+@app.command()
+def click(
+    app_name: Annotated[str, typer.Argument(help="Application name")],
+    ref: Annotated[Optional[str], typer.Option("--ref", "-r", help="Element ref ID")] = None,
+    title: Annotated[Optional[str], typer.Option("--title", "-t", help="Find by AXTitle")] = None,
+    value: Annotated[Optional[str], typer.Option("--value", "-v", help="Find by AXValue")] = None,
+    role: Annotated[Optional[str], typer.Option("--role", help="Find by AXRole")] = None,
+    desc: Annotated[Optional[str], typer.Option("--desc", "-d", help="Find by AXDescription")] = None,
+    index: Annotated[int, typer.Option("--index", "-i", help="Which match to use (0-indexed)")] = 0,
+):
+    """
+    Click an element by ref ID or search criteria.
+
+    Examples:
+      axctl click "System Settings" --ref ref_5
+      axctl click "System Settings" --title "Notes"
+      axctl click "System Settings" --value "iCloud" --index 0
+    """
+    app_element = get_application_by_name(app_name)
+    if not app_element:
+        console.print(f"[red]Error: application '{app_name}' not found[/red]", file=sys.stderr)
+        raise typer.Exit(1)
+
+    element = None
+
+    if ref:
+        # Build tree with refs to find element
+        builder = TreeBuilder(DEFAULT_ATTRIBUTES, False, False, False)
+        builder.build_tree(app_element, add_refs=True)
+        element = builder.get_element_by_ref(ref)
+        if not element:
+            console.print(f"[red]Error: ref '{ref}' not found[/red]", file=sys.stderr)
+            raise typer.Exit(1)
+    else:
+        # Search by criteria
+        matches = []
+        if title:
+            matches = find_by_title(app_element, title)
+        elif value:
+            matches = find_by_value(app_element, value)
+        elif role:
+            matches = find_by_role(app_element, role)
+        elif desc:
+            matches = find_by_description(app_element, desc)
+        else:
+            console.print("[red]Error: specify --ref, --title, --value, --role, or --desc[/red]", file=sys.stderr)
+            raise typer.Exit(1)
+
+        if not matches:
+            console.print("[red]Error: no matching elements found[/red]", file=sys.stderr)
+            raise typer.Exit(1)
+
+        if index >= len(matches):
+            console.print(f"[red]Error: index {index} out of range (found {len(matches)} matches)[/red]", file=sys.stderr)
+            raise typer.Exit(1)
+
+        element = matches[index]
+
+    # Try AXPress action
+    actions = get_actions(element)
+    if "AXPress" in actions:
+        result = perform_action(element, "AXPress")
+        console.print(f"[green]Performed AXPress[/green]")
+    elif "AXOpen" in actions:
+        result = perform_action(element, "AXOpen")
+        console.print(f"[green]Performed AXOpen[/green]")
+    elif actions:
+        # Use first available action
+        result = perform_action(element, actions[0])
+        console.print(f"[green]Performed {actions[0]}[/green]")
+    else:
+        console.print("[yellow]Warning: no actions available, trying AXPress anyway[/yellow]", file=sys.stderr)
+        result = perform_action(element, "AXPress")
+
+
+@app.command()
+def action(
+    app_name: Annotated[str, typer.Argument(help="Application name")],
+    action_name: Annotated[str, typer.Argument(help="Action to perform (e.g., AXPress, AXOpen)")],
+    ref: Annotated[Optional[str], typer.Option("--ref", "-r", help="Element ref ID")] = None,
+    title: Annotated[Optional[str], typer.Option("--title", "-t", help="Find by AXTitle")] = None,
+    value: Annotated[Optional[str], typer.Option("--value", "-v", help="Find by AXValue")] = None,
+    role: Annotated[Optional[str], typer.Option("--role", help="Find by AXRole")] = None,
+    desc: Annotated[Optional[str], typer.Option("--desc", "-d", help="Find by AXDescription")] = None,
+    index: Annotated[int, typer.Option("--index", "-i", help="Which match to use")] = 0,
+):
+    """
+    Perform a specific action on an element.
+
+    Examples:
+      axctl action "System Settings" AXPress --title "Notes"
+      axctl action "Finder" AXOpen --role AXRow --index 0
+    """
+    app_element = get_application_by_name(app_name)
+    if not app_element:
+        console.print(f"[red]Error: application '{app_name}' not found[/red]", file=sys.stderr)
+        raise typer.Exit(1)
+
+    element = None
+
+    if ref:
+        builder = TreeBuilder(DEFAULT_ATTRIBUTES, False, False, False)
+        builder.build_tree(app_element, add_refs=True)
+        element = builder.get_element_by_ref(ref)
+        if not element:
+            console.print(f"[red]Error: ref '{ref}' not found[/red]", file=sys.stderr)
+            raise typer.Exit(1)
+    else:
+        matches = []
+        if title:
+            matches = find_by_title(app_element, title)
+        elif value:
+            matches = find_by_value(app_element, value)
+        elif role:
+            matches = find_by_role(app_element, role)
+        elif desc:
+            matches = find_by_description(app_element, desc)
+        else:
+            console.print("[red]Error: specify --ref, --title, --value, --role, or --desc[/red]", file=sys.stderr)
+            raise typer.Exit(1)
+
+        if not matches:
+            console.print("[red]Error: no matching elements found[/red]", file=sys.stderr)
+            raise typer.Exit(1)
+
+        if index >= len(matches):
+            console.print(f"[red]Error: index {index} out of range (found {len(matches)} matches)[/red]", file=sys.stderr)
+            raise typer.Exit(1)
+
+        element = matches[index]
+
+    result = perform_action(element, action_name)
+    console.print(f"[green]Performed {action_name}[/green]")
+
+
+@app.command(name="type")
+def type_text(
+    app_name: Annotated[str, typer.Argument(help="Application name")],
+    text: Annotated[str, typer.Argument(help="Text to type")],
+    ref: Annotated[Optional[str], typer.Option("--ref", "-r", help="Element ref ID")] = None,
+    title: Annotated[Optional[str], typer.Option("--title", "-t", help="Find by AXTitle")] = None,
+    role: Annotated[Optional[str], typer.Option("--role", help="Find by AXRole")] = None,
+    desc: Annotated[Optional[str], typer.Option("--desc", "-d", help="Find by AXDescription")] = None,
+    index: Annotated[int, typer.Option("--index", "-i", help="Which match to use")] = 0,
+):
+    """
+    Type text into an element by setting AXValue.
+
+    Examples:
+      axctl type "Safari" "hello world" --role AXTextField
+    """
+    app_element = get_application_by_name(app_name)
+    if not app_element:
+        console.print(f"[red]Error: application '{app_name}' not found[/red]", file=sys.stderr)
+        raise typer.Exit(1)
+
+    element = None
+
+    if ref:
+        builder = TreeBuilder(DEFAULT_ATTRIBUTES, False, False, False)
+        builder.build_tree(app_element, add_refs=True)
+        element = builder.get_element_by_ref(ref)
+        if not element:
+            console.print(f"[red]Error: ref '{ref}' not found[/red]", file=sys.stderr)
+            raise typer.Exit(1)
+    else:
+        matches = []
+        if title:
+            matches = find_by_title(app_element, title)
+        elif role:
+            matches = find_by_role(app_element, role)
+        elif desc:
+            matches = find_by_description(app_element, desc)
+        else:
+            console.print("[red]Error: specify --ref, --title, --role, or --desc[/red]", file=sys.stderr)
+            raise typer.Exit(1)
+
+        if not matches:
+            console.print("[red]Error: no matching elements found[/red]", file=sys.stderr)
+            raise typer.Exit(1)
+
+        if index >= len(matches):
+            console.print(f"[red]Error: index {index} out of range (found {len(matches)} matches)[/red]", file=sys.stderr)
+            raise typer.Exit(1)
+
+        element = matches[index]
+
+    # Focus the element first if possible
+    actions = get_actions(element)
+    if "AXFocus" in actions:
+        perform_action(element, "AXFocus")
+
+    # Set the value
+    set_attribute_value(element, "AXValue", text)
+    console.print(f"[green]Set AXValue to: {text}[/green]")
+
+
+@app.command()
+def search(
+    app_name: Annotated[str, typer.Argument(help="Application name")],
+    title: Annotated[Optional[str], typer.Option("--title", "-t", help="Find by AXTitle")] = None,
+    value: Annotated[Optional[str], typer.Option("--value", "-v", help="Find by AXValue")] = None,
+    role: Annotated[Optional[str], typer.Option("--role", help="Find by AXRole")] = None,
+    desc: Annotated[Optional[str], typer.Option("--desc", "-d", help="Find by AXDescription")] = None,
+    contains: Annotated[Optional[str], typer.Option("--contains", "-c", help="Search AXTitle/AXValue containing text")] = None,
+    list_actions: Annotated[bool, typer.Option("--list-actions/--no-list-actions", help="Show available actions")] = False,
+    json_output: Annotated[bool, typer.Option("--json/--no-json", help="Output in JSON")] = False,
+):
+    """
+    Search for elements matching criteria.
+
+    Examples:
+      axctl search "System Settings" --contains "iCloud"
+      axctl search "System Settings" --role AXButton --list-actions
+    """
+    app_element = get_application_by_name(app_name)
+    if not app_element:
+        console.print(f"[red]Error: application '{app_name}' not found[/red]", file=sys.stderr)
+        raise typer.Exit(1)
+
+    matches = []
+
+    if title:
+        matches = find_by_title(app_element, title)
+    elif value:
+        matches = find_by_value(app_element, value)
+    elif role:
+        matches = find_by_role(app_element, role)
+    elif desc:
+        matches = find_by_description(app_element, desc)
+    elif contains:
+        def contains_match(e):
+            t = get_attribute_value(e, "AXTitle") or ""
+            v = get_attribute_value(e, "AXValue") or ""
+            d = get_attribute_value(e, "AXDescription") or ""
+            return contains.lower() in str(t).lower() or contains.lower() in str(v).lower() or contains.lower() in str(d).lower()
+        matches = search_tree(app_element, contains_match)
+    else:
+        console.print("[red]Error: specify --title, --value, --role, --desc, or --contains[/red]", file=sys.stderr)
+        raise typer.Exit(1)
+
+    if not matches:
+        console.print("[yellow]No matches found[/yellow]")
+        return
+
+    results = []
+    for i, elem in enumerate(matches):
+        obj = {
+            "index": i,
+            "AXRole": get_attribute_value(elem, "AXRole"),
+            "AXTitle": get_attribute_value(elem, "AXTitle"),
+            "AXValue": get_attribute_value(elem, "AXValue"),
+            "AXDescription": get_attribute_value(elem, "AXDescription"),
+        }
+        if list_actions:
+            actions = get_actions(elem)
+            obj["actions"] = {a: get_action_description(elem, a) for a in actions}
+        results.append(obj)
+
+    if json_output:
+        console.print(JSON.from_data(results, default=_default_json_encoder))
+    else:
+        for r in results:
+            idx = r["index"]
+            role = r["AXRole"]
+            title = r["AXTitle"]
+            value = r["AXValue"]
+            desc = r["AXDescription"]
+
+            attrs = []
+            if title:
+                attrs.append(f"title={repr(title)}")
+            if value:
+                attrs.append(f"value={repr(value)}")
+            if desc:
+                attrs.append(f"desc={repr(desc)}")
+
+            console.print(f"[bold cyan][{idx}][/bold cyan] [bold red]{role}[/bold red] {' '.join(attrs)}")
+
+            if list_actions and r.get("actions"):
+                actions_str = ", ".join(r["actions"].keys())
+                console.print(f"    [dim]actions: {actions_str}[/dim]")
+
+
+@app.command()
+def apps():
+    """
+    List running applications with windows.
+
+    Examples:
+      axctl apps
+      axctl apps --json
+    """
+    wl = CGWindowListCopyWindowInfo(kCGWindowListExcludeDesktopElements, kCGNullWindowID)
+    seen = {}
+    for w in wl:
+        name = w.valueForKey_("kCGWindowOwnerName")
+        pid = int(w.valueForKey_("kCGWindowOwnerPID"))
+        if name and name not in seen:
+            seen[name] = pid
+
+    for name in sorted(seen.keys()):
+        console.print(f"[bold cyan]{name}[/bold cyan] (pid: {seen[name]})")
+
+
+@app.command()
+def focus(
+    app_name: Annotated[str, typer.Argument(help="Application name to focus/activate")],
+):
+    """
+    Focus/activate an application and bring it to front.
+
+    Examples:
+      axctl focus "System Settings"
+      axctl focus "Finder"
+    """
+    app_element = get_application_by_name(app_name)
+    if not app_element:
+        console.print(f"[red]Error: application '{app_name}' not found[/red]", file=sys.stderr)
+        raise typer.Exit(1)
+
+    # Try to raise/activate the app
+    actions = get_actions(app_element)
+    if "AXRaise" in actions:
+        perform_action(app_element, "AXRaise")
+
+    # Also set AXFrontmost if possible
+    set_attribute_value(app_element, "AXFrontmost", True)
+    console.print(f"[green]Focused {app_name}[/green]")
+
+
+@app.command()
+def get(
+    app_name: Annotated[str, typer.Argument(help="Application name")],
+    attribute: Annotated[str, typer.Argument(help="Attribute name to get (e.g., AXValue, AXTitle)")],
+    ref: Annotated[Optional[str], typer.Option("--ref", "-r", help="Element ref ID")] = None,
+    title: Annotated[Optional[str], typer.Option("--title", "-t", help="Find by AXTitle")] = None,
+    value: Annotated[Optional[str], typer.Option("--value", "-v", help="Find by AXValue")] = None,
+    role: Annotated[Optional[str], typer.Option("--role", help="Find by AXRole")] = None,
+    desc: Annotated[Optional[str], typer.Option("--desc", "-d", help="Find by AXDescription")] = None,
+    index: Annotated[int, typer.Option("--index", "-i", help="Which match to use")] = 0,
+):
+    """
+    Get an attribute value from an element.
+
+    Examples:
+      axctl get "System Settings" AXValue --role AXCheckBox --index 0
+      axctl get "Notes" AXValue --role AXTextArea
+    """
+    app_element = get_application_by_name(app_name)
+    if not app_element:
+        console.print(f"[red]Error: application '{app_name}' not found[/red]", file=sys.stderr)
+        raise typer.Exit(1)
+
+    element = None
+
+    if ref:
+        builder = TreeBuilder(DEFAULT_ATTRIBUTES, False, False, False)
+        builder.build_tree(app_element, add_refs=True)
+        element = builder.get_element_by_ref(ref)
+        if not element:
+            console.print(f"[red]Error: ref '{ref}' not found[/red]", file=sys.stderr)
+            raise typer.Exit(1)
+    elif title or value or role or desc:
+        matches = []
+        if title:
+            matches = find_by_title(app_element, title)
+        elif value:
+            matches = find_by_value(app_element, value)
+        elif role:
+            matches = find_by_role(app_element, role)
+        elif desc:
+            matches = find_by_description(app_element, desc)
+
+        if not matches:
+            console.print("[red]Error: no matching elements found[/red]", file=sys.stderr)
+            raise typer.Exit(1)
+
+        if index >= len(matches):
+            console.print(f"[red]Error: index {index} out of range (found {len(matches)} matches)[/red]", file=sys.stderr)
+            raise typer.Exit(1)
+
+        element = matches[index]
+    else:
+        # Get attribute from root app element
+        element = app_element
+
+    result = get_attribute_value(element, attribute)
+    console.print(result)
+
+
+@app.command(name="set")
+def set_attr(
+    app_name: Annotated[str, typer.Argument(help="Application name")],
+    attribute: Annotated[str, typer.Argument(help="Attribute name to set")],
+    attr_value: Annotated[str, typer.Argument(help="Value to set")],
+    ref: Annotated[Optional[str], typer.Option("--ref", "-r", help="Element ref ID")] = None,
+    title: Annotated[Optional[str], typer.Option("--title", "-t", help="Find by AXTitle")] = None,
+    role: Annotated[Optional[str], typer.Option("--role", help="Find by AXRole")] = None,
+    desc: Annotated[Optional[str], typer.Option("--desc", "-d", help="Find by AXDescription")] = None,
+    index: Annotated[int, typer.Option("--index", "-i", help="Which match to use")] = 0,
+    bool_value: Annotated[bool, typer.Option("--bool/--no-bool", help="Interpret value as boolean")] = False,
+    int_value: Annotated[bool, typer.Option("--int/--no-int", help="Interpret value as integer")] = False,
+):
+    """
+    Set an attribute value on an element.
+
+    Examples:
+      axctl set "Notes" AXValue "Hello world" --role AXTextArea
+      axctl set "System Settings" AXValue 1 --role AXCheckBox --int
+    """
+    app_element = get_application_by_name(app_name)
+    if not app_element:
+        console.print(f"[red]Error: application '{app_name}' not found[/red]", file=sys.stderr)
+        raise typer.Exit(1)
+
+    element = None
+
+    if ref:
+        builder = TreeBuilder(DEFAULT_ATTRIBUTES, False, False, False)
+        builder.build_tree(app_element, add_refs=True)
+        element = builder.get_element_by_ref(ref)
+        if not element:
+            console.print(f"[red]Error: ref '{ref}' not found[/red]", file=sys.stderr)
+            raise typer.Exit(1)
+    else:
+        matches = []
+        if title:
+            matches = find_by_title(app_element, title)
+        elif role:
+            matches = find_by_role(app_element, role)
+        elif desc:
+            matches = find_by_description(app_element, desc)
+        else:
+            console.print("[red]Error: specify --ref, --title, --role, or --desc[/red]", file=sys.stderr)
+            raise typer.Exit(1)
+
+        if not matches:
+            console.print("[red]Error: no matching elements found[/red]", file=sys.stderr)
+            raise typer.Exit(1)
+
+        if index >= len(matches):
+            console.print(f"[red]Error: index {index} out of range (found {len(matches)} matches)[/red]", file=sys.stderr)
+            raise typer.Exit(1)
+
+        element = matches[index]
+
+    # Convert value type
+    final_value = attr_value
+    if bool_value:
+        final_value = attr_value.lower() in ("true", "1", "yes", "on")
+    elif int_value:
+        final_value = int(attr_value)
+
+    set_attribute_value(element, attribute, final_value)
+    console.print(f"[green]Set {attribute} = {final_value}[/green]")
+
+
+@app.command()
+def wait(
+    app_name: Annotated[str, typer.Argument(help="Application name")],
+    title: Annotated[Optional[str], typer.Option("--title", "-t", help="Wait for element with AXTitle")] = None,
+    value: Annotated[Optional[str], typer.Option("--value", "-v", help="Wait for element with AXValue")] = None,
+    role: Annotated[Optional[str], typer.Option("--role", help="Wait for element with AXRole")] = None,
+    contains: Annotated[Optional[str], typer.Option("--contains", "-c", help="Wait for element containing text")] = None,
+    timeout: Annotated[int, typer.Option("--timeout", help="Timeout in seconds")] = 30,
+    interval: Annotated[float, typer.Option("--interval", help="Poll interval in seconds")] = 0.5,
+):
+    """
+    Wait for an element to appear.
+
+    Examples:
+      axctl wait "System Settings" --title "Notes" --timeout 10
+      axctl wait "Safari" --contains "Loading" --timeout 60
+    """
+    import time
+
+    if not (title or value or role or contains):
+        console.print("[red]Error: specify --title, --value, --role, or --contains[/red]", file=sys.stderr)
+        raise typer.Exit(1)
+
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        app_element = get_application_by_name(app_name)
+        if app_element:
+            matches = []
+            if title:
+                matches = find_by_title(app_element, title)
+            elif value:
+                matches = find_by_value(app_element, value)
+            elif role:
+                matches = find_by_role(app_element, role)
+            elif contains:
+                def contains_match(e):
+                    t = get_attribute_value(e, "AXTitle") or ""
+                    v = get_attribute_value(e, "AXValue") or ""
+                    d = get_attribute_value(e, "AXDescription") or ""
+                    return contains.lower() in str(t).lower() or contains.lower() in str(v).lower() or contains.lower() in str(d).lower()
+                matches = search_tree(app_element, contains_match)
+
+            if matches:
+                elapsed = time.time() - start_time
+                console.print(f"[green]Found element after {elapsed:.1f}s[/green]")
+                return
+
+        time.sleep(interval)
+
+    console.print(f"[red]Timeout after {timeout}s - element not found[/red]", file=sys.stderr)
+    raise typer.Exit(1)
+
+
+@app.command()
+def version():
+    """Print version."""
+    console.print("axctl 1.0.0")
+
+
+if __name__ == "__main__":
+    app()
