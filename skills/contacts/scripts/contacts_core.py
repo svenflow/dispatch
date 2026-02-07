@@ -13,7 +13,8 @@ import subprocess
 from pathlib import Path
 from typing import Optional, Dict, List
 
-ADDRESSBOOK_DB = Path.home() / "Library/Application Support/AddressBook/AddressBook-v22.abcddb"
+ADDRESSBOOK_DIR = Path.home() / "Library/Application Support/AddressBook"
+ADDRESSBOOK_DB = ADDRESSBOOK_DIR / "AddressBook-v22.abcddb"
 
 # Map group names to tier strings
 TIER_GROUP_MAP = {
@@ -29,9 +30,46 @@ TIER_GROUP_MAP = {
 # SQLite read path (fast, no Contacts.app dependency)
 # ──────────────────────────────────────────────────────────────
 
+def _find_addressbook_db() -> Path:
+    """Find the AddressBook database, checking per-source DBs if root is empty.
+
+    macOS may store contacts in per-source databases under Sources/<UUID>/
+    instead of the root AddressBook-v22.abcddb, especially with iCloud sync.
+    """
+    # Check root DB first
+    if ADDRESSBOOK_DB.exists():
+        try:
+            conn = sqlite3.connect(f"file:{ADDRESSBOOK_DB}?mode=ro", uri=True, timeout=5)
+            count = conn.execute("SELECT COUNT(*) FROM ZABCDRECORD WHERE ZFIRSTNAME IS NOT NULL OR ZLASTNAME IS NOT NULL").fetchone()[0]
+            conn.close()
+            if count > 0:
+                return ADDRESSBOOK_DB
+        except Exception:
+            pass
+
+    # Check per-source databases
+    sources_dir = ADDRESSBOOK_DIR / "Sources"
+    if sources_dir.exists():
+        for source_dir in sources_dir.iterdir():
+            source_db = source_dir / "AddressBook-v22.abcddb"
+            if source_db.exists():
+                try:
+                    conn = sqlite3.connect(f"file:{source_db}?mode=ro", uri=True, timeout=5)
+                    count = conn.execute("SELECT COUNT(*) FROM ZABCDRECORD WHERE ZFIRSTNAME IS NOT NULL OR ZLASTNAME IS NOT NULL").fetchone()[0]
+                    conn.close()
+                    if count > 0:
+                        return source_db
+                except Exception:
+                    continue
+
+    # Fallback to root
+    return ADDRESSBOOK_DB
+
+
 def _get_db_connection() -> sqlite3.Connection:
     """Open a read-only connection to the AddressBook database."""
-    uri = f"file:{ADDRESSBOOK_DB}?mode=ro"
+    db_path = _find_addressbook_db()
+    uri = f"file:{db_path}?mode=ro"
     conn = sqlite3.connect(uri, uri=True, timeout=5)
     conn.row_factory = sqlite3.Row
     return conn

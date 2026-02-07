@@ -25,19 +25,51 @@ Without access control, anyone who texts your assistant's number gets full acces
 
 ## Step 1: Use macOS Contacts for Tier Assignment
 
-The cleanest approach: use Contacts.app groups.
+The cleanest approach: use Contacts.app groups. The group names must be exactly:
+- `Claude Admin`
+- `Claude Wife`
+- `Claude Family`
+- `Claude Favorites`
+- `Claude Bots`
 
-1. Open **Contacts.app**
-2. Create groups: `Admin`, `Wife`, `Family`, `Favorite`, `Bots`
-3. Add contacts to appropriate groups
-4. Your assistant reads these groups to determine tier
+### If contacts are already syncing via iCloud
 
-**Verify groups exist:**
+If your contacts and groups are already in iCloud and syncing to this Mac, verify:
 ```bash
 osascript -e 'tell application "Contacts" to get name of groups'
+# Should include: Claude Admin, Claude Wife, Claude Family, Claude Favorites, Claude Bots
 ```
 
-You should see your tier groups in the output.
+> **Troubleshooting iCloud sync:** If contacts aren't appearing, check System Settings → Apple ID → iCloud → Show All → Contacts is ON. Toggle it off and back on to force a resync. Also check that contacts are stored in iCloud (not "On My Mac") on the source device.
+
+### If creating contacts from scratch
+
+Create the groups and contacts via AppleScript:
+
+```bash
+osascript <<'APPLESCRIPT'
+tell application "Contacts"
+    make new group with properties {name:"Claude Admin"}
+    make new group with properties {name:"Claude Wife"}
+    make new group with properties {name:"Claude Family"}
+    make new group with properties {name:"Claude Favorites"}
+    make new group with properties {name:"Claude Bots"}
+
+    -- Example: add admin contact
+    set admin to make new person with properties {first name:"John", last name:"Smith"}
+    make new phone at end of phones of admin with properties {label:"mobile", value:"+15551234567"}
+    add admin to group "Claude Admin"
+
+    save
+end tell
+APPLESCRIPT
+```
+
+**Verify groups and contacts:**
+```bash
+osascript -e 'tell application "Contacts" to get name of groups'
+osascript -e 'tell application "Contacts" to get name of every person of group "Claude Admin"'
+```
 
 ## Step 2: Contacts Lookup CLI
 
@@ -195,12 +227,11 @@ This creates a simple approval workflow without complex UIs.
 
 ## Verification Checklist
 
-- [ ] Contacts.app has Admin, Wife, Family, Favorite, Bots groups
-- [ ] lookup.py correctly identifies tiers
-- [ ] Unknown senders are ignored (no response)
-- [ ] Admin gets full access
-- [ ] Family gets appropriate restrictions
-- [ ] Tier is included in prompts to Claude
+- [ ] Contacts.app has Claude Admin, Claude Wife, Claude Family, Claude Favorites, Claude Bots groups
+- [ ] `lookup_phone_sqlite('+1ADMIN_PHONE')` returns `{'name': ..., 'tier': 'admin'}`
+- [ ] Unknown senders are ignored (no response in daemon logs)
+- [ ] Admin messages create a Claude session and get a response
+- [ ] Full back-and-forth works: admin texts → daemon routes → Claude replies via send-sms
 
 ## What's Next
 
@@ -208,11 +239,37 @@ With tiers working, `06-skills-system.md` covers the skills folder structure so 
 
 ---
 
-## Alternative: SQLite Instead of AppleScript
+## Wiring Checklist (When Using Existing Repo Code)
 
-AppleScript can be slow. For faster lookups, Contacts.app syncs to:
+The repo already contains `contacts_core.py` with SQLite-based lookups. To wire it up:
+
+```bash
+# 1. Verify the contacts skill is symlinked
+ls ~/.claude/skills/contacts  # Should point to ~/dispatch/skills/contacts
+
+# 2. Test the lookup
+cd ~/dispatch
+uv run python -c "
+import sys; sys.path.insert(0, 'skills/contacts/scripts')
+from contacts_core import lookup_phone_sqlite
+print(lookup_phone_sqlite('+1ADMIN_PHONE'))
+"
+# Should print: {'name': 'Your Name', 'phone': '+1...', 'tier': 'admin'}
+
+# 3. Restart daemon so it picks up the contacts
+~/dispatch/bin/claude-assistant stop && sleep 2 && ~/dispatch/bin/claude-assistant start
+```
+
+## SQLite Lookup: Per-Source Database Gotcha
+
+The production code uses SQLite against the AddressBook database (much faster than AppleScript):
 ```
 ~/Library/Application Support/AddressBook/AddressBook-v22.abcddb
 ```
 
-You can query this SQLite database directly, but the schema is complex. AppleScript is simpler to start.
+**Important:** On some macOS setups, the root database is empty and contacts live in per-source databases:
+```
+~/Library/Application Support/AddressBook/Sources/<UUID>/AddressBook-v22.abcddb
+```
+
+The `contacts_core.py` handles this automatically — it checks the root DB first, and falls back to scanning source databases if the root is empty. If contacts lookup returns `None` despite contacts being visible in Contacts.app, this is likely the issue.
