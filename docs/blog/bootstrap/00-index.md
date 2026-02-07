@@ -12,7 +12,7 @@ This folder contains ordered prompts to guide Claude in recreating the entire pe
 
 | # | File | What You Build |
 |---|------|----------------|
-| 01 | `01-setup.md` | Machine setup, accounts, permissions |
+| 01 | `01-setup.md` | Human setup (no Claude yet) - accounts, permissions, tools |
 | 02 | `02-messaging-core.md` | Daemon that polls iMessage and pipes to Claude |
 | 03 | `03-contacts-tiers.md` | Contact lookup and permission tiers |
 | 04 | `04-skills-system.md` | Skills folder structure, SKILL.md format |

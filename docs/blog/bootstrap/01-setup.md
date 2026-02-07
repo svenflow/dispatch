@@ -1,4 +1,4 @@
-# 01: Machine Setup
+# 01: Human Setup (No Claude Yet)
 
 ## Goal
 
