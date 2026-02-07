@@ -26,8 +26,8 @@ I want to build a personal assistant system that:
 - Has contact tiers (admin, family, favorite, etc.)
 - Supports browser automation, smart home, and more
 
-First, make sure git is installed:
-brew install git
+First, make sure git and gh (GitHub CLI) are installed:
+brew install git gh
 
 Then clone the bootstrap guides:
 git clone https://github.com/anthropics/dispatch.git ~/dispatch
