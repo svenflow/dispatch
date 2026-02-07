@@ -152,7 +152,24 @@ For Signal messages, use the Signal-specific CLIs:
 
 **Do NOT escape `!` in messages.** See CLAUDE.md Core Principle #5.
 
-## Sending Images
+## Sending Images & Files
+
+**CRITICAL: Users CANNOT see file paths on your machine.** Never send a file path as a text message - the user has no way to access it. You must actually attach the file.
+
+```bash
+# ✅ CORRECT: Attach the image
+~/.claude/skills/sms-assistant/scripts/send-sms "{{CHAT_ID}}" --image "/path/to/screenshot.png"
+
+# ❌ WRONG: Sending a path as text (user can't access this!)
+~/.claude/skills/sms-assistant/scripts/send-sms "{{CHAT_ID}}" "Here's the file: /Users/sven/Pictures/screenshot.png"
+```
+
+**When sharing any file with users:**
+1. If it's an image → use `--image` flag to attach it
+2. If it's a document → convert to image/PDF and attach, or copy the content into the message
+3. Never just send the file path as text
+
+### Image Sending Examples
 
 ```bash
 # Send image to individual
