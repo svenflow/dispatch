@@ -52,20 +52,35 @@ Before anything else, create a Gmail account for your assistant. This will be us
 3. Enable iMessage in Messages.app
 4. Verify you can send/receive iMessages
 
-## Step 5: Enable iCloud Sync
+## Step 5: Prevent Sleep (Amphetamine)
 
-Make sure these are syncing via iCloud (System Settings > Apple ID > iCloud):
+This Mac needs to run 24/7. Install **Amphetamine** from the Mac App Store:
 
-- **Contacts** - Required for tier system (reading contact groups)
-- **Messages** - Core functionality
-- **Notes** - Useful for persistent memory/scratchpad
+```bash
+open "macappstore://apps.apple.com/app/id937984704"
+```
+
+This opens the App Store to Amphetamine (free). Install it, then:
+1. Open Amphetamine — pill icon appears in the menu bar
+2. **Preferences → General**: Enable **"Launch Amphetamine at login"**
+3. **Start a new session** → Select **"Indefinitely"**
+
+## Step 6: Enable iCloud Sync
+
+Make sure these are syncing via iCloud (System Settings > Apple ID > iCloud > Show More Apps):
+
+- **Contacts** — Required for tier system (reading contact groups). **Make sure the toggle is ON.**
+- **Messages** — Core functionality
+- **Notes** — Useful for persistent memory/scratchpad
 
 Verify sync is working:
-1. Open Contacts.app - should see your contacts
-2. Open Notes.app - should see your notes
-3. Open Messages.app - should see message history
+1. Open Contacts.app — should see your contacts (not just 1 local contact)
+2. Open Notes.app — should see your notes
+3. Open Messages.app — should see message history
 
-## Step 6: Set Up Terminal
+> **Troubleshooting:** If contacts aren't syncing, go to System Settings → Apple ID → iCloud → "Show More Apps" (or "See All") and make sure Contacts is toggled ON. You may need to sign out and back into iCloud if it's stuck.
+
+## Step 7: Set Up Terminal
 
 You can use any terminal. Popular options:
 - **Terminal.app** (built-in)
@@ -74,7 +89,7 @@ You can use any terminal. Popular options:
 
 Whichever terminal you choose, you'll grant it Full Disk Access later.
 
-## Step 7: Install Homebrew and Prerequisites
+## Step 8: Install Homebrew and Prerequisites
 
 ```bash
 # Homebrew (macOS package manager - install this FIRST)
@@ -122,7 +137,7 @@ echo 'alias cl="claude --dangerously-skip-permissions"' >> ~/.zshrc
 source ~/.zshrc
 ```
 
-## Step 8: Install Google Chrome
+## Step 9: Install Google Chrome
 
 Chrome is used for browser automation. The assistant can control Chrome to browse the web, fill forms, etc.
 
@@ -142,7 +157,7 @@ brew install --cask google-chrome
 - Automation scripts know exactly where to find downloaded files
 - No prompts interrupting automated workflows
 
-## Step 9: Grant Full Disk Access
+## Step 10: Grant Full Disk Access
 
 The daemon needs to read `~/Library/Messages/chat.db`. This requires Full Disk Access.
 
@@ -157,7 +172,7 @@ sqlite3 ~/Library/Messages/chat.db "SELECT COUNT(*) FROM message;"
 
 If you get a number (not an error), permissions are correct.
 
-## Step 10: Grant Accessibility Permissions
+## Step 11: Grant Accessibility Permissions
 
 For browser automation and UI control, you'll need:
 
@@ -165,7 +180,7 @@ For browser automation and UI control, you'll need:
 2. Add your terminal (Terminal.app, iTerm2, or Ghostty)
 3. Later: add any automation tools (cliclick, etc.)
 
-## Step 11: Create Directory Structure
+## Step 12: Create Directory Structure
 
 ```bash
 mkdir -p ~/code
@@ -174,7 +189,7 @@ mkdir -p ~/.claude/skills
 mkdir -p ~/.claude/test-messages
 ```
 
-## Step 12: Set Up Claude Code
+## Step 13: Set Up Claude Code
 
 ```bash
 # Authenticate with Anthropic
@@ -189,6 +204,8 @@ claude "Hello, are you there?"
 - [ ] Dedicated Gmail account created
 - [ ] Mac is set up with dedicated iCloud account (using that Gmail)
 - [ ] iMessage is working (send yourself a test message from your phone)
+- [ ] Amphetamine installed, set to launch at login, running indefinitely
+- [ ] iCloud Contacts syncing (contacts visible in Contacts.app)
 - [ ] Homebrew installed (`brew --version` works)
 - [ ] Terminal has Full Disk Access
 - [ ] `sqlite3 ~/Library/Messages/chat.db` works
