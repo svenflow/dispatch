@@ -41,6 +41,14 @@ def load_config() -> dict:
 
 def get_value(config: dict, dotpath: str) -> str:
     """Get a value from config using dot notation."""
+    # Shortcuts
+    shortcuts = {
+        "self": "assistant.name",
+        "self.name": "assistant.name",
+        "self.email": "assistant.email",
+    }
+    dotpath = shortcuts.get(dotpath, dotpath)
+
     keys = dotpath.split(".")
     value = config
 

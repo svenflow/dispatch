@@ -25,6 +25,8 @@ config.example.yaml  ──copy──▶  config.local.yaml
 **GitHub:**
 - Template: [`config.example.yaml`](https://github.com/nicklaude/dispatch/blob/main/config.example.yaml)
 - Loader: [`assistant/config.py`](https://github.com/nicklaude/dispatch/blob/main/assistant/config.py)
+- Identity CLI: [`bin/identity`](https://github.com/nicklaude/dispatch/blob/main/bin/identity)
+- SOUL template: [`templates/SOUL.md`](https://github.com/nicklaude/dispatch/blob/main/templates/SOUL.md)
 
 ## Step 1: Copy the Template
 
@@ -154,6 +156,46 @@ hue_ip = get("hue.bridges.home.ip")
 | `lutron` | Lutron Caseta bridge | No |
 | `chrome` | Browser profile mapping | No |
 
+## Step 6: Identity CLI for Dynamic Prompts
+
+The `identity` CLI reads from your config and outputs values for use in skills:
+
+**GitHub:** [`bin/identity`](https://github.com/nicklaude/dispatch/blob/main/bin/identity)
+
+```bash
+# Test the identity CLI
+~/dispatch/bin/identity owner.name      # → "John Smith"
+~/dispatch/bin/identity owner.phone     # → "+15551234567"
+~/dispatch/bin/identity assistant.email # → "jarvis@example.com"
+~/dispatch/bin/identity wife.name       # → "Jane Smith"
+```
+
+### Dynamic Prompts in Skills
+
+Skills use the `!`command`` syntax to inject identity at runtime:
+
+```markdown
+# In any SKILL.md
+The owner is !`identity owner.name` and their email is !`identity owner.email`.
+```
+
+When Claude Code loads the skill, it:
+1. Runs `identity owner.name`
+2. Replaces the placeholder with the output
+3. Claude sees the actual value
+
+This keeps PII out of checked-in files while still personalizing skills.
+
+## Step 7: Set Up SOUL.md
+
+Copy the SOUL template and it will auto-fill from your config:
+
+```bash
+cp ~/dispatch/templates/SOUL.md ~/.claude/SOUL.md
+```
+
+The template uses dynamic prompts like `!`identity owner.name`` throughout, so your identity is injected at runtime.
+
 ## Verification Checklist
 
 - [ ] `config.local.yaml` exists
@@ -161,7 +203,8 @@ hue_ip = get("hue.bridges.home.ip")
 - [ ] Owner name/phone/email filled in
 - [ ] Assistant name filled in
 - [ ] Config loads without errors
-- [ ] `get("owner.name")` returns your name
+- [ ] `identity owner.name` returns your name
+- [ ] SOUL.md copied to `~/.claude/`
 
 ## What's Next
 
