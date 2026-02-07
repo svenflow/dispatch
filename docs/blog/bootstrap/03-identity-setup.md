@@ -27,6 +27,7 @@ config.example.yaml  ──copy──▶  config.local.yaml
 - Loader: [`assistant/config.py`](https://github.com/nicklaude/dispatch/blob/main/assistant/config.py)
 - Identity CLI: [`bin/identity`](https://github.com/nicklaude/dispatch/blob/main/bin/identity)
 - SOUL template: [`templates/SOUL.md`](https://github.com/nicklaude/dispatch/blob/main/templates/SOUL.md)
+- Global CLAUDE.md template: [`templates/CLAUDE.global.md`](https://github.com/nicklaude/dispatch/blob/main/templates/CLAUDE.global.md)
 
 ## Step 1: Copy the Template
 
@@ -186,15 +187,25 @@ When Claude Code loads the skill, it:
 
 This keeps PII out of checked-in files while still personalizing skills.
 
-## Step 7: Set Up SOUL.md
+## Step 7: Set Up Global CLAUDE.md
 
-Copy the SOUL template and it will auto-fill from your config:
+Copy the global CLAUDE.md template - this provides system-wide instructions for all Claude sessions:
+
+```bash
+cp ~/dispatch/templates/CLAUDE.global.md ~/.claude/CLAUDE.md
+```
+
+This template uses dynamic prompts like `!`identity owner.name`` so your identity is injected at runtime without hardcoding PII.
+
+## Step 8: Set Up SOUL.md
+
+Copy the SOUL template - this defines the assistant's personality:
 
 ```bash
 cp ~/dispatch/templates/SOUL.md ~/.claude/SOUL.md
 ```
 
-The template uses dynamic prompts like `!`identity owner.name`` throughout, so your identity is injected at runtime.
+The template uses dynamic prompts throughout, so your identity is injected at runtime.
 
 ## Verification Checklist
 
@@ -204,6 +215,8 @@ The template uses dynamic prompts like `!`identity owner.name`` throughout, so y
 - [ ] Assistant name filled in
 - [ ] Config loads without errors
 - [ ] `identity owner.name` returns your name
+- [ ] `identity self` returns assistant name
+- [ ] CLAUDE.md copied to `~/.claude/`
 - [ ] SOUL.md copied to `~/.claude/`
 
 ## What's Next
