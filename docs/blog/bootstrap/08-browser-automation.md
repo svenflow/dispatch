@@ -52,23 +52,57 @@ The complete implementation includes:
 | `extension/content.js` | Content script (11KB) |
 | `SKILL.md` | Claude documentation |
 
-## Step 1: Install the Extension
+## Step 1: Load the Extension in Chrome
+
+1. Go to `chrome://extensions`
+2. Enable "Developer mode" (top right toggle)
+3. Click "Load unpacked"
+4. Select `~/dispatch/skills/chrome-control/extension/`
+5. **Copy the extension ID** (shown under the extension name, e.g., `deamgongmklmhlafakppcjffdpkmacjk`)
+
+## Step 2: Install Native Messaging Host
 
 ```bash
-# Clone if you haven't already
 cd ~/dispatch/skills/chrome-control
 
-# Install native messaging host
+# Install native messaging host (creates manifest with placeholder)
 ./scripts/install_native_host.sh
 ```
 
-Then load the extension in Chrome:
-1. Go to `chrome://extensions`
-2. Enable "Developer mode"
-3. Click "Load unpacked"
-4. Select `~/dispatch/skills/chrome-control/extension/`
+**Important:** The install script creates a manifest with a wildcard origin. You must update it with your specific extension ID:
 
-## Step 2: Verify CLI Works
+```bash
+# Edit the native host manifest
+cat > ~/Library/Application\ Support/Google/Chrome/NativeMessagingHosts/com.dispatch.chrome_control.json << EOF
+{
+  "name": "com.dispatch.chrome_control",
+  "description": "Chrome Control Native Messaging Host",
+  "path": "$HOME/.claude/skills/chrome-control/scripts/native_host",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://YOUR_EXTENSION_ID_HERE/"
+  ]
+}
+EOF
+```
+
+Replace `YOUR_EXTENSION_ID_HERE` with the ID you copied in Step 1.
+
+## Step 3: Reload Extension and Verify
+
+1. Go back to `chrome://extensions`
+2. Click the refresh icon on Chrome Control extension
+3. Verify the connection:
+
+```bash
+# Should show your profile
+~/dispatch/skills/chrome-control/scripts/chrome profiles
+
+# Should list open tabs
+~/dispatch/skills/chrome-control/scripts/chrome tabs
+```
+
+## Step 4: Key Commands
 
 ```bash
 # List Chrome profiles
