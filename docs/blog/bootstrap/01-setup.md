@@ -177,28 +177,97 @@ brew install --cask google-chrome
 - Automation scripts know exactly where to find downloaded files
 - No prompts interrupting automated workflows
 
-## Step 10: Grant Full Disk Access
+## Step 10: Grant macOS Permissions
 
-The daemon needs to read `~/Library/Messages/chat.db`. This requires Full Disk Access.
+The assistant needs several macOS permissions to function. Grant ALL of these now to avoid issues later.
 
-1. Open **System Settings > Privacy & Security > Full Disk Access**
-2. Click + and add your terminal (Terminal.app, iTerm2, or Ghostty)
-3. You may also need to add the Python interpreter later
+### Open System Settings > Privacy & Security
+
+You'll be adding your terminal (Terminal.app, iTerm2, or Ghostty) to multiple permission categories.
+
+### 10a. Full Disk Access (Required)
+
+Needed to read the iMessage database (`~/Library/Messages/chat.db`).
+
+1. Open **Privacy & Security > Full Disk Access**
+2. Click + and add your terminal
+3. Restart your terminal after granting
 
 **Test it works:**
 ```bash
 sqlite3 ~/Library/Messages/chat.db "SELECT COUNT(*) FROM message;"
 ```
+If you get a number (not an error), it's working.
 
-If you get a number (not an error), permissions are correct.
+### 10b. Automation (Required)
 
-## Step 11: Grant Accessibility Permissions
+Needed to control Messages.app, Reminders.app, Contacts.app, and Notes.app via AppleScript.
 
-For browser automation and UI control, you'll need:
+1. Open **Privacy & Security > Automation**
+2. Add your terminal
+3. Enable all app toggles (Messages, Reminders, Contacts, Notes, System Events)
 
-1. **System Settings > Privacy & Security > Accessibility**
-2. Add your terminal (Terminal.app, iTerm2, or Ghostty)
-3. Later: add any automation tools (cliclick, etc.)
+**Test it works:**
+```bash
+osascript -e 'tell application "Messages" to count of chats'
+osascript -e 'tell application "Reminders" to count of lists'
+osascript -e 'tell application "Contacts" to count of people'
+```
+Each should return a number without errors or hanging.
+
+### 10c. Accessibility (Required for screen clicking)
+
+Needed for `cliclick` and other UI automation.
+
+1. Open **Privacy & Security > Accessibility**
+2. Add your terminal
+3. Later: add `cliclick` when you install it
+
+**Test it works:**
+```bash
+brew install cliclick
+cliclick p:.
+# Should print coordinates without errors
+```
+
+### 10d. Contacts Access (Required)
+
+The tier system reads contact groups from Contacts.app.
+
+1. Open **Privacy & Security > Contacts**
+2. Add your terminal
+
+This is usually granted automatically when you first run an AppleScript that accesses Contacts, but check it's enabled.
+
+### 10e. Reminders Access (Optional but recommended)
+
+Needed for the reminder/scheduling system.
+
+1. Open **Privacy & Security > Reminders**
+2. Add your terminal
+
+### 10f. Screen & System Audio Recording (Optional)
+
+Needed for taking screenshots with `screencapture`.
+
+1. Open **Privacy & Security > Screen & System Audio Recording**
+2. Add your terminal
+
+**Test it works:**
+```bash
+screencapture -x /tmp/test.png && echo "Screenshot saved" && rm /tmp/test.png
+```
+
+### Permission Troubleshooting
+
+If osascript commands hang forever:
+- You may need to **restart your Mac** after granting Automation permissions
+- Check that the app isn't showing a permission dialog in the background
+- Try running the command from Terminal.app first (it sometimes gets permissions more reliably)
+
+If permissions don't stick:
+- Some permissions require a terminal restart
+- Full Disk Access often requires logging out and back in
 
 ## Step 12: Create Directory Structure
 
@@ -221,17 +290,26 @@ claude "Hello, are you there?"
 
 ## Verification Checklist
 
+### Account Setup
 - [ ] Dedicated Gmail account created
 - [ ] Mac is set up with dedicated iCloud account (using that Gmail)
 - [ ] iMessage is working (send yourself a test message from your phone)
-- [ ] Amphetamine installed, set to launch at login, running indefinitely
 - [ ] iCloud Contacts syncing (contacts visible in Contacts.app)
+
+### System Configuration
+- [ ] Amphetamine installed, set to launch at login, running indefinitely
 - [ ] Homebrew installed (`brew --version` works)
-- [ ] Terminal has Full Disk Access
-- [ ] `sqlite3 ~/Library/Messages/chat.db` works
 - [ ] `uv --version` works
 - [ ] `claude "hello"` responds
-- [ ] Directory structure exists
+- [ ] Directory structure exists (`~/code`, `~/transcripts`, `~/.claude/skills`)
+
+### Permissions (test each with the command shown)
+- [ ] Full Disk Access: `sqlite3 ~/Library/Messages/chat.db "SELECT 1;"` returns 1
+- [ ] Automation/Messages: `osascript -e 'tell application "Messages" to count of chats'` returns a number
+- [ ] Automation/Contacts: `osascript -e 'tell application "Contacts" to count of people'` returns a number
+- [ ] Automation/Reminders: `osascript -e 'tell application "Reminders" to count of lists'` returns a number
+- [ ] Accessibility: `cliclick p:.` prints coordinates
+- [ ] Screen Recording: `screencapture -x /tmp/test.png && rm /tmp/test.png && echo OK` prints OK
 
 ## What's Next
 

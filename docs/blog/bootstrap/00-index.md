@@ -25,12 +25,13 @@ This folder contains ordered prompts to guide Claude in recreating the entire pe
 | 11 | `11-signal-integration.md` | Adding Signal as second channel |
 | 12 | `12-smart-home.md` | Hue, Lutron, Sonos integrations |
 | 13 | `13-open-source.md` | Sanitizing for public release |
+| 14 | `14-reminders.md` | Scheduled tasks and cron reminders |
 
 ## How to Use
 
 1. **You (human)**: Complete `01-setup.md` manually
 2. **You (human)**: Start Claude and give it the prompt from `02-claude-bootstrap.md`
-3. **Claude**: Works through guides 03-13 autonomously
+3. **Claude**: Works through guides 03-14 autonomously
 
 ## Minimum Viable System
 
