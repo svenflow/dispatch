@@ -330,17 +330,18 @@ launchctl unload ~/Library/LaunchAgents/com.dispatch.assistant.plist
 
 ## Verification Checklist
 
-- [ ] Poller runs and prints incoming messages
-- [ ] send-sms successfully sends iMessages
-- [ ] Claude receives messages and can call send-sms
+- [ ] Daemon starts (`claude-assistant start` succeeds, logs show polling)
+- [ ] send-sms successfully sends iMessages to admin
+- [ ] Daemon sees incoming messages in logs (will show "Unknown sender" until contacts/tiers are set up in step 05)
 - [ ] State persists across restarts (last_rowid.txt)
 - [ ] Messages aren't processed twice
-- [ ] LaunchAgent is loaded (`launchctl list | grep dispatch`)
-- [ ] Daemon survives reboot
+- [ ] LaunchAgent is loaded (`launchctl list | grep dispatch`) and daemon survives reboot
+
+> **Note:** At this stage, the daemon can send outgoing messages and detect incoming ones, but it won't route incoming messages to Claude sessions yet. That requires the contacts & tiers system in step 05.
 
 ## What's Next
 
-This basic daemon works but has no access control. In `05-contacts-tiers.md`, we add contact lookup and permission tiers so only approved people can interact.
+This basic daemon works but has no access control. In `05-contacts-tiers.md`, we add contact lookup and permission tiers so the daemon can route incoming messages from approved contacts to Claude sessions.
 
 ---
 
@@ -349,6 +350,12 @@ This basic daemon works but has no access control. In `05-contacts-tiers.md`, we
 If you cloned the repo and the code already exists, the steps are:
 
 ```bash
+# 0. Ensure skills are symlinked (should be done in step 03)
+# The daemon and send-sms need these to exist:
+ls ~/.claude/skills/sms-assistant  # Should point to ~/dispatch/skills/sms-assistant
+ls ~/.claude/skills/contacts       # Should point to ~/dispatch/skills/contacts
+ls ~/.claude/skills/signal         # Should point to ~/dispatch/skills/signal
+
 # 1. Install Python dependencies
 cd ~/dispatch
 uv sync
@@ -367,7 +374,31 @@ sqlite3 ~/Library/Messages/chat.db "SELECT MAX(ROWID) FROM message"
 ~/.claude/skills/sms-assistant/scripts/send-sms "+1XXXXXXXXXX" "test"
 ```
 
-If `bin/claude-assistant` fails with `uv: No such file or directory`, check the `UV=` path in the script. Homebrew installs uv to `/opt/homebrew/bin/uv`, while the curl installer puts it at `~/.local/bin/uv`.
+If `bin/claude-assistant` fails with `uv: No such file or directory`, check the `UV=` path in the script **and** in `assistant/cli.py` and `assistant/common.py`. Homebrew installs uv to `/opt/homebrew/bin/uv`, while the curl installer puts it at `~/.local/bin/uv`. The code uses `shutil.which("uv")` with a fallback to `~/.local/bin/uv`.
+
+### Testing the Full Outgoing Flow
+
+```bash
+# 1. Start the daemon
+~/dispatch/bin/claude-assistant start
+
+# 2. Check it's running and polling
+~/dispatch/bin/claude-assistant status
+tail -20 ~/dispatch/logs/manager.log
+# Should show: "Starting from ROWID: XXXX"
+
+# 3. Send a test message to the ADMIN ONLY
+~/.claude/skills/sms-assistant/scripts/send-sms "+1ADMIN_PHONE" "Hello from the assistant!"
+
+# 4. Reply from your phone and check logs
+tail -5 ~/dispatch/logs/manager.log
+# Should show: "Processing message XXXX from +1ADMIN_PHONE: ..."
+# Will also show: "Unknown sender ... ignoring" — this is expected!
+# Incoming routing is wired up in 05-contacts-tiers.md.
+
+# 5. Stop the daemon when done testing
+~/dispatch/bin/claude-assistant stop
+```
 
 ---
 

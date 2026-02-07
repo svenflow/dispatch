@@ -24,7 +24,8 @@ SKILLS_DIR = HOME / ".claude/skills"
 TRANSCRIPTS_DIR = HOME / "transcripts"
 CLAUDE = HOME / ".local/bin/claude"
 CLAUDE_ASSISTANT_CLI = str(HOME / "dispatch/bin/claude-assistant")
-UV = str(HOME / ".local/bin/uv")
+import shutil as _shutil
+UV = _shutil.which("uv") or str(HOME / ".local/bin/uv")
 BUN = HOME / ".bun/bin/bun"
 
 # Master session config

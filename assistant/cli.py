@@ -22,7 +22,8 @@ PID_FILE = STATE_DIR / "daemon.pid"
 LOG_FILE = LOGS_DIR / "manager.log"
 
 # Commands
-UV = str(Path.home() / ".local/bin/uv")
+import shutil
+UV = shutil.which("uv") or str(Path.home() / ".local/bin/uv")
 
 # IPC socket
 IPC_SOCKET = Path("/tmp/claude-assistant.sock")
