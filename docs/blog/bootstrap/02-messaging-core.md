@@ -55,7 +55,9 @@ LIMIT 100;
 
 ## Step 1: Basic Poller
 
-Create `~/code/assistant/poller.py`:
+Create `~/dispatch/assistant/poller.py`:
+
+**Note:** We use `~/dispatch/` as the project root throughout this guide. The actual production system uses this same structure.
 
 ```python
 #!/usr/bin/env python3
@@ -66,7 +68,7 @@ import time
 from pathlib import Path
 
 MESSAGES_DB = Path.home() / "Library/Messages/chat.db"
-STATE_FILE = Path.home() / "code/assistant/state/last_rowid.txt"
+STATE_FILE = Path.home() / "dispatch/state/last_rowid.txt"
 POLL_INTERVAL = 0.1  # 100ms
 
 def get_last_rowid() -> int:
@@ -137,15 +139,15 @@ if __name__ == "__main__":
 
 **Test it:**
 ```bash
-mkdir -p ~/code/assistant/state
-python3 ~/code/assistant/poller.py
+mkdir -p ~/dispatch/state
+uv run ~/dispatch/assistant/poller.py
 ```
 
 Send yourself an iMessage - you should see it print.
 
 ## Step 2: Claude Session Integration
 
-Now pipe messages into Claude. Create `~/code/assistant/session.py`:
+Now pipe messages into Claude. Create `~/dispatch/assistant/session.py`:
 
 ```python
 #!/usr/bin/env python3
@@ -181,7 +183,9 @@ Respond naturally. To reply, use: send-sms "{sender}" "your message"
 
 ## Step 3: Send SMS CLI
 
-Create `~/code/assistant/send-sms`:
+Create `~/.claude/skills/sms-assistant/scripts/send-sms`:
+
+**Note:** We place this in the skills directory so Claude sessions can discover it via the SKILL.md system (covered in 04-skills-system.md).
 
 ```bash
 #!/bin/bash
@@ -208,8 +212,9 @@ echo "SENT|$RECIPIENT"
 
 Make it executable and test:
 ```bash
-chmod +x ~/code/assistant/send-sms
-~/code/assistant/send-sms "+15551234567" "Hello from the assistant!"
+mkdir -p ~/.claude/skills/sms-assistant/scripts
+chmod +x ~/.claude/skills/sms-assistant/scripts/send-sms
+~/.claude/skills/sms-assistant/scripts/send-sms "+15551234567" "Hello from the assistant!"
 ```
 
 ## Step 4: Wire It Together
@@ -217,7 +222,7 @@ chmod +x ~/code/assistant/send-sms
 Update `poller.py` to call Claude:
 
 ```python
-from session import inject_message
+from assistant.session import inject_message
 
 def main():
     print("Starting message poller...")
@@ -244,15 +249,18 @@ def main():
 For now, use a simple approach:
 
 ```bash
+# Create logs directory
+mkdir -p ~/dispatch/logs
+
 # Run in background
-nohup python3 ~/code/assistant/poller.py > ~/code/assistant/logs/daemon.log 2>&1 &
-echo $! > ~/code/assistant/state/daemon.pid
+nohup uv run ~/dispatch/assistant/poller.py > ~/dispatch/logs/daemon.log 2>&1 &
+echo $! > ~/dispatch/state/daemon.pid
 
 # Check if running
 ps aux | grep poller.py
 
 # Stop
-kill $(cat ~/code/assistant/state/daemon.pid)
+kill $(cat ~/dispatch/state/daemon.pid)
 ```
 
 Later we'll add LaunchAgent for auto-start on boot.

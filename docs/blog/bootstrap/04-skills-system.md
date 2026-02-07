@@ -99,7 +99,7 @@ Now when Claude runs in `~/transcripts/john-doe/`, it sees:
 #!/bin/bash
 # ~/.claude/skills/contacts/scripts/lookup
 # Look up a contact by name or phone
-python3 ~/.claude/skills/contacts/scripts/contacts_core.py lookup "$@"
+uv run ~/.claude/skills/contacts/scripts/lookup.py "$@"
 ```
 
 ### sms-assistant/
@@ -109,10 +109,14 @@ The meta-skill that teaches Claude how to handle SMS:
 - When to stay quiet vs respond
 
 ### send-sms (already built)
-Move it into skills:
+If you followed 02-messaging-core.md, it's already in the right place:
+```bash
+ls ~/.claude/skills/sms-assistant/scripts/send-sms
+```
+
+If not, create the directory structure now:
 ```bash
 mkdir -p ~/.claude/skills/sms-assistant/scripts
-mv ~/code/assistant/send-sms ~/.claude/skills/sms-assistant/scripts/
 ```
 
 ## Step 4: Skill Discovery
@@ -153,7 +157,7 @@ description: Control Philips Hue lights (on/off, brightness, colors). Use when a
 
 # Philips Hue Control
 
-Control lights via the Hue bridge at 10.10.10.23.
+Control lights via your Hue bridge. Set the bridge IP in `~/.claude/secrets.env` as `HUE_BRIDGE_IP`.
 
 ## Quick Reference
 
@@ -186,8 +190,11 @@ warm, cool, daylight, red, blue, green, purple, orange, pink
 `~/.claude/skills/hue/scripts/hue-on`:
 ```bash
 #!/bin/bash
+# Load secrets (HUE_BRIDGE_IP, HUE_TOKEN)
+source ~/.claude/secrets.env
+
 ROOM="$1"
-curl -s -X PUT "http://10.10.10.23/api/$HUE_TOKEN/groups/$ROOM/action" \
+curl -s -X PUT "http://${HUE_BRIDGE_IP}/api/${HUE_TOKEN}/groups/${ROOM}/action" \
   -d '{"on":true}'
 echo "Turned on $ROOM"
 ```

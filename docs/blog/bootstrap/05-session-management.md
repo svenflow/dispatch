@@ -19,16 +19,24 @@ The Claude Agent SDK provides:
 - **In-process management**: No subprocess shells to manage
 
 ```python
-from claude_agent_sdk import ClaudeSDKClient
+from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions
 
-async with ClaudeSDKClient(options) as client:
-    await client.connect()
+# Create options
+options = ClaudeAgentOptions(
+    cwd="/path/to/working/dir",
+    model="opus",
+)
 
-    # First message
-    await client.query("Hello!")
+# Create client and connect
+client = ClaudeSDKClient(options=options)
+await client.connect()
 
-    # Later message - Claude remembers the first
-    await client.query("What did I just say?")
+# Send a message
+await client.query("Hello!")
+
+# Receive responses (runs until turn complete)
+async for message in client.receive_messages():
+    print(message)  # Handle AssistantMessage, ResultMessage, etc.
 ```
 
 ## Architecture
@@ -51,9 +59,16 @@ async with ClaudeSDKClient(options) as client:
 └─────────────────────────────────────────────────────────┘
 ```
 
+## Implementation Files
+
+The session management system consists of these files in `~/dispatch/assistant/`:
+- `sdk_session.py` - The SDKSession class
+- `sdk_backend.py` - The SDKBackend that manages all sessions
+- `common.py` - Shared utilities (paths, normalization, message wrapping)
+
 ## Step 1: Session Registry
 
-Track session metadata in `state/sessions.json`:
+Track session metadata in `~/dispatch/state/sessions.json`:
 
 ```json
 {
@@ -73,44 +88,53 @@ The `session_id` is the magic - pass it to `ClaudeSDKClient` to resume.
 ## Step 2: SDKSession Class
 
 ```python
+import asyncio
+from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions
+
 class SDKSession:
-    def __init__(self, contact_name: str, tier: str, chat_id: str):
+    def __init__(self, contact_name: str, tier: str, chat_id: str, cwd: str):
         self.contact_name = contact_name
         self.tier = tier
         self.chat_id = chat_id
+        self.cwd = cwd
         self._client = None
         self._queue = asyncio.Queue()
         self._running = False
 
     async def start(self, resume_session_id: str = None):
         """Start the SDK client and run loop."""
-        options = ClaudeSDKClientOptions(
-            model="claude-sonnet-4-20250514",
-            working_directory=f"~/transcripts/{self.session_name}",
+        options = ClaudeAgentOptions(
+            cwd=self.cwd,
+            model="opus",
         )
 
-        self._client = ClaudeSDKClient(options)
+        # Resume is passed via options, not a separate method
+        if resume_session_id:
+            options.resume = resume_session_id
+
+        self._client = ClaudeSDKClient(options=options)
         await self._client.connect()
 
-        if resume_session_id:
-            # Resume existing conversation
-            await self._client.resume(resume_session_id)
-        else:
-            # New session - inject system prompt
-            await self._inject_system_prompt()
-
         self._running = True
+        # Start both sender and receiver loops
         asyncio.create_task(self._run_loop())
+        asyncio.create_task(self._receive_loop())
 
-    async def inject_message(self, text: str):
+    async def inject(self, text: str):
         """Queue a message for processing."""
         await self._queue.put(text)
 
     async def _run_loop(self):
-        """Process messages from queue."""
+        """Send messages from queue to Claude."""
         while self._running:
             text = await self._queue.get()
             await self._client.query(text)
+
+    async def _receive_loop(self):
+        """Handle responses from Claude."""
+        async for message in self._client.receive_messages():
+            # Handle AssistantMessage, ResultMessage, etc.
+            pass  # Actual handling code here
 ```
 
 ## Step 3: Lazy Session Creation
@@ -118,10 +142,12 @@ class SDKSession:
 Don't create sessions until needed:
 
 ```python
+from pathlib import Path
+
 class SDKBackend:
     def __init__(self):
         self.sessions = {}
-        self.registry = SessionRegistry("state/sessions.json")
+        self.registry = SessionRegistry(Path.home() / "dispatch/state/sessions.json")
 
     async def inject_message(self, chat_id: str, text: str, contact_info: dict):
         """Route message to session, creating if needed."""
@@ -134,10 +160,16 @@ class SDKBackend:
         await self.sessions[chat_id].inject_message(text)
 
     async def _create_session(self, chat_id: str, contact_info: dict):
+        # Create transcript directory for this session
+        session_name = contact_info['name'].lower().replace(" ", "-")
+        transcript_dir = Path.home() / "transcripts" / session_name
+        transcript_dir.mkdir(parents=True, exist_ok=True)
+
         session = SDKSession(
             contact_name=contact_info['name'],
             tier=contact_info['tier'],
-            chat_id=chat_id
+            chat_id=chat_id,
+            cwd=str(transcript_dir)
         )
 
         # Check for existing session to resume
@@ -221,7 +253,10 @@ async def reap_idle_sessions(self, timeout_hours: float = 2.0):
 
 ## What's Next
 
-`06-signal-integration.md` adds Signal as a second messaging channel.
+The next guides (not yet written) cover:
+- `06-browser-automation.md` - Chrome control extension
+- `07-smart-home.md` - Hue, Lutron, Sonos integrations
+- `08-signal-integration.md` - Adding Signal as second channel
 
 ---
 

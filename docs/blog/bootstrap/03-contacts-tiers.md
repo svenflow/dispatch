@@ -20,6 +20,7 @@ Without access control, anyone who texts your assistant's number gets full acces
 | **wife/partner** | Significant other | Full access, warmer tone |
 | **family** | Close family | Read-only. Mutations need admin approval |
 | **favorite** | Trusted friends | Own session, restricted tools |
+| **bots** | AI agents | Like favorite, with loop detection |
 | **unknown** | Everyone else | Ignored - no response |
 
 ## Step 1: Use macOS Contacts for Tier Assignment
@@ -27,13 +28,20 @@ Without access control, anyone who texts your assistant's number gets full acces
 The cleanest approach: use Contacts.app groups.
 
 1. Open **Contacts.app**
-2. Create groups: `Admin`, `Wife`, `Family`, `Favorite`
+2. Create groups: `Admin`, `Wife`, `Family`, `Favorite`, `Bots`
 3. Add contacts to appropriate groups
 4. Your assistant reads these groups to determine tier
 
+**Verify groups exist:**
+```bash
+osascript -e 'tell application "Contacts" to get name of groups'
+```
+
+You should see your tier groups in the output.
+
 ## Step 2: Contacts Lookup CLI
 
-Create `~/code/assistant/contacts.py`:
+Create `~/.claude/skills/contacts/scripts/lookup.py`:
 
 ```python
 #!/usr/bin/env python3
@@ -93,6 +101,8 @@ def lookup_contact(phone: str) -> dict:
         tier = 'family'
     elif 'favorite' in groups:
         tier = 'favorite'
+    elif 'bots' in groups:
+        tier = 'bots'
     else:
         tier = 'unknown'
 
@@ -107,7 +117,8 @@ if __name__ == "__main__":
 
 **Test it:**
 ```bash
-python3 ~/code/assistant/contacts.py "+15551234567"
+mkdir -p ~/.claude/skills/contacts/scripts
+uv run ~/.claude/skills/contacts/scripts/lookup.py "+15551234567"
 ```
 
 ## Step 3: Integrate with Poller
@@ -184,8 +195,8 @@ This creates a simple approval workflow without complex UIs.
 
 ## Verification Checklist
 
-- [ ] Contacts.app has Admin, Family, Favorite groups
-- [ ] contacts.py correctly identifies tiers
+- [ ] Contacts.app has Admin, Wife, Family, Favorite, Bots groups
+- [ ] lookup.py correctly identifies tiers
 - [ ] Unknown senders are ignored (no response)
 - [ ] Admin gets full access
 - [ ] Family gets appropriate restrictions
@@ -193,7 +204,7 @@ This creates a simple approval workflow without complex UIs.
 
 ## What's Next
 
-With tiers working, `04-send-receive.md` covers the full conversation flow and making responses feel natural.
+With tiers working, `04-skills-system.md` covers the skills folder structure so Claude can discover and use capabilities.
 
 ---
 

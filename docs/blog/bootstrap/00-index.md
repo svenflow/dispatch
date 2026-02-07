@@ -26,14 +26,14 @@ This folder contains ordered prompts to guide Claude in recreating the entire pe
 
 ## How to Use
 
-1. Start with `00-setup.md` and complete it fully
+1. Start with `01-setup.md` and complete it fully
 2. Move to the next file only when the previous is working
 3. Each file has verification steps - don't skip them
 4. The system is designed to be useful at each stage (you can stop at 03 and have a working assistant)
 
 ## Minimum Viable System
 
-After completing files 00-03, you'll have:
+After completing files 01-03, you'll have:
 - A daemon polling iMessage every 100ms
 - Messages from approved contacts routed to Claude
 - Claude responding via the send-sms CLI
