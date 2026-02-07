@@ -98,6 +98,7 @@ class SDKSession:
         self.created_at = datetime.now()
         self.last_activity = datetime.now()
         self._error_count = 0
+        self._consecutive_error_turns = 0
 
         # Per-session logger
         from assistant.backends import get_backend
@@ -156,6 +157,9 @@ class SDKSession:
         if not self.is_alive():
             return False
         if self._error_count >= 3:
+            return False
+        # API errors (e.g. context too large, image size limits)
+        if self._consecutive_error_turns >= 3:
             return False
         # Stale: messages pending but no activity for 10+ min
         if self._message_queue.qsize() > 0:
@@ -231,6 +235,7 @@ class SDKSession:
                 if isinstance(message, ResultMessage):
                     self._pending_queries = 0  # Reset: merged queries produce 1 ResultMessage
                     self._error_count = 0
+                    # Note: _consecutive_error_turns is tracked in _handle_message
         except asyncio.CancelledError:
             pass
         except Exception as e:
@@ -381,6 +386,10 @@ class SDKSession:
             if message.session_id:
                 self.session_id = message.session_id
             self.last_activity = datetime.now()
+            if message.is_error:
+                self._consecutive_error_turns += 1
+            else:
+                self._consecutive_error_turns = 0
             self._log.info(
                 f"TURN | #{self.turn_count} | "
                 f"duration={message.duration_ms}ms | error={message.is_error} | "
