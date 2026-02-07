@@ -160,13 +160,16 @@ For Signal messages, use the Signal-specific CLIs:
 # ✅ CORRECT: Attach the image
 ~/.claude/skills/sms-assistant/scripts/send-sms "{{CHAT_ID}}" --image "/path/to/screenshot.png"
 
+# ✅ CORRECT: Attach any file (PDF, doc, etc)
+~/.claude/skills/sms-assistant/scripts/send-sms "{{CHAT_ID}}" --file "/path/to/document.pdf"
+
 # ❌ WRONG: Sending a path as text (user can't access this!)
 ~/.claude/skills/sms-assistant/scripts/send-sms "{{CHAT_ID}}" "Here's the file: /Users/sven/Pictures/screenshot.png"
 ```
 
 **When sharing any file with users:**
 1. If it's an image → use `--image` flag to attach it
-2. If it's a document → convert to image/PDF and attach, or copy the content into the message
+2. If it's any other file (PDF, doc, txt, etc) → use `--file` flag to attach it
 3. Never just send the file path as text
 
 ### Image Sending Examples
@@ -180,6 +183,19 @@ For Signal messages, use the Signal-specific CLIs:
 
 # Send image with caption
 ~/.claude/skills/sms-assistant/scripts/send-sms "{{CHAT_ID}}" "Check this out!" --image "/path/to/image.png"
+```
+
+### File Sending Examples
+
+```bash
+# Send PDF to individual
+~/.claude/skills/sms-assistant/scripts/send-sms "+1234567890" --file "/path/to/document.pdf"
+
+# Send file to group
+~/.claude/skills/sms-assistant/scripts/send-sms "b3d258b9a4de447ca412eb335c82a077" --file "/path/to/report.pdf"
+
+# Send file with message
+~/.claude/skills/sms-assistant/scripts/send-sms "{{CHAT_ID}}" "Here's the doc you asked for" --file "/path/to/file.txt"
 ```
 
 ## Quick Acknowledgments (Emoji Reactions)

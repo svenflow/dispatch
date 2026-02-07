@@ -5,6 +5,7 @@ send-sms - Unified CLI for sending iMessage/SMS
 Usage:
     send-sms <chat_id> "message"              # Send text
     send-sms <chat_id> --image /path/to.png   # Send image
+    send-sms <chat_id> --file /path/to.pdf    # Send any file (PDF, doc, etc)
     send-sms <chat_id> "caption" --image /path/to.png  # Send both
 
 Chat ID:
@@ -14,6 +15,7 @@ Chat ID:
 Examples:
     send-sms +16175551234 "Hello!"
     send-sms +16175551234 --image /tmp/photo.png
+    send-sms +16175551234 --file /tmp/document.pdf
     send-sms b3d258b9a4de447ca412eb335c82a077 "Hello group!"
 """
 
@@ -175,6 +177,96 @@ def send_image_group(chat_id: str, image_path: str) -> bool:
             temp_path.unlink()
 
 
+def send_file_individual(phone: str, file_path: str) -> bool:
+    """Send any file to an individual.
+
+    IMPORTANT: Due to a macOS bug (Monterey through Sequoia), files must be
+    sent from ~/Pictures folder. This copies the file there temporarily.
+    """
+    # Copy to Pictures folder (macOS bug workaround)
+    pictures_dir = Path.home() / "Pictures"
+    filename = Path(file_path).name
+    temp_path = pictures_dir / filename
+
+    try:
+        shutil.copy2(file_path, temp_path)
+
+        script = f'''
+        set theFile to POSIX file "{temp_path}"
+        tell application "Messages"
+            set targetService to 1st account whose service type = iMessage
+            set targetBuddy to buddy "{phone}" of targetService
+            send file theFile to targetBuddy
+        end tell
+        return "SENT_FILE|{phone}|{filename}"
+        '''
+        result = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True, text=True
+        )
+
+        # Wait for send to start before cleanup
+        time.sleep(2)
+
+        if result.returncode == 0:
+            print(result.stdout.strip())
+            return True
+        else:
+            print(f"ERROR: {result.stderr.strip()}", file=sys.stderr)
+            return False
+    finally:
+        # Clean up temp file
+        if temp_path.exists():
+            temp_path.unlink()
+
+
+def send_file_group(chat_id: str, file_path: str) -> bool:
+    """Send any file to a group chat.
+
+    IMPORTANT: Due to a macOS bug, files must be sent from ~/Pictures folder.
+    """
+    # Copy to Pictures folder (macOS bug workaround)
+    pictures_dir = Path.home() / "Pictures"
+    filename = Path(file_path).name
+    temp_path = pictures_dir / filename
+
+    try:
+        shutil.copy2(file_path, temp_path)
+
+        script = f'''
+        set theFile to POSIX file "{temp_path}"
+        tell application "Messages"
+            repeat with aChat in chats
+                if id of aChat contains "{chat_id}" then
+                    send file theFile to aChat
+                    return "SENT_FILE_GROUP|{chat_id}|{filename}"
+                end if
+            end repeat
+            return "ERROR|chat_not_found"
+        end tell
+        '''
+        result = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True, text=True
+        )
+
+        # Wait for send to start before cleanup
+        time.sleep(2)
+
+        output = result.stdout.strip()
+        if result.returncode == 0 and "SENT_FILE_GROUP" in output:
+            print(output)
+            return True
+        else:
+            error = result.stderr.strip() or output
+            print(f"ERROR: {error}", file=sys.stderr)
+            return False
+    finally:
+        # Clean up temp file
+        if temp_path.exists():
+            temp_path.unlink()
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Send iMessage/SMS",
@@ -183,23 +275,29 @@ def main():
 Examples:
   send-sms +16175551234 "Hello!"              # Text to individual
   send-sms +16175551234 --image photo.png     # Image to individual
+  send-sms +16175551234 --file document.pdf   # Any file to individual
   send-sms abc123def "Hello group!"           # Text to group (auto-detected)
   send-sms abc123def --image photo.png        # Image to group
 """
     )
     parser.add_argument("chat_id", help="Phone number or group chat UUID")
-    parser.add_argument("message", nargs="?", default="", help="Message text (optional if sending image)")
+    parser.add_argument("message", nargs="?", default="", help="Message text (optional if sending image/file)")
     parser.add_argument("--image", "-i", help="Path to image file to send")
+    parser.add_argument("--file", "-f", help="Path to any file to send (PDF, doc, etc)")
     parser.add_argument("--group", "-g", action="store_true", help="Force group chat mode")
 
     args = parser.parse_args()
 
     # Validate inputs
-    if not args.message and not args.image:
-        parser.error("Must provide either a message or --image")
+    if not args.message and not args.image and not args.file:
+        parser.error("Must provide either a message, --image, or --file")
 
     if args.image and not os.path.exists(args.image):
         print(f"ERROR: Image file not found: {args.image}", file=sys.stderr)
+        sys.exit(1)
+
+    if args.file and not os.path.exists(args.file):
+        print(f"ERROR: File not found: {args.file}", file=sys.stderr)
         sys.exit(1)
 
     # Determine if group chat
@@ -231,6 +329,13 @@ Examples:
             success = send_image_group(args.chat_id, args.image)
         else:
             success = send_image_individual(args.chat_id, args.image)
+
+    # Send file if provided
+    if args.file and success:
+        if is_group:
+            success = send_file_group(args.chat_id, args.file)
+        else:
+            success = send_file_individual(args.chat_id, args.file)
 
     sys.exit(0 if success else 1)
 
