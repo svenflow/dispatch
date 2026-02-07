@@ -9,6 +9,8 @@ Build a daemon that:
 
 This is the heart of the system. Everything else builds on this.
 
+> **Note:** The repo already contains the production daemon code (`assistant/manager.py`, `assistant/sdk_session.py`, `assistant/sdk_backend.py`, etc.). The code samples below explain the concepts — you don't need to create these files from scratch. Instead, focus on wiring: installing dependencies (`uv sync`), ensuring Full Disk Access, and verifying the CLI works.
+
 ## Understanding chat.db
 
 iMessage stores everything in a SQLite database:
@@ -339,6 +341,33 @@ launchctl unload ~/Library/LaunchAgents/com.dispatch.assistant.plist
 ## What's Next
 
 This basic daemon works but has no access control. In `05-contacts-tiers.md`, we add contact lookup and permission tiers so only approved people can interact.
+
+---
+
+## Wiring Checklist (When Using Existing Repo Code)
+
+If you cloned the repo and the code already exists, the steps are:
+
+```bash
+# 1. Install Python dependencies
+cd ~/dispatch
+uv sync
+
+# 2. Create runtime directories
+mkdir -p ~/dispatch/state ~/dispatch/logs ~/dispatch/logs/sessions
+
+# 3. Verify the CLI works
+~/dispatch/bin/claude-assistant status
+# Should print "Daemon not running" (not an error)
+
+# 4. Test chat.db access (requires Full Disk Access)
+sqlite3 ~/Library/Messages/chat.db "SELECT MAX(ROWID) FROM message"
+
+# 5. Test send-sms
+~/.claude/skills/sms-assistant/scripts/send-sms "+1XXXXXXXXXX" "test"
+```
+
+If `bin/claude-assistant` fails with `uv: No such file or directory`, check the `UV=` path in the script. Homebrew installs uv to `/opt/homebrew/bin/uv`, while the curl installer puts it at `~/.local/bin/uv`.
 
 ---
 

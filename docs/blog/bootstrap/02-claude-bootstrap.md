@@ -30,8 +30,8 @@ First, make sure git and gh (GitHub CLI) are installed:
 brew install git gh
 gh auth login
 
-Then clone the bootstrap guides:
-git clone https://github.com/anthropics/dispatch.git ~/dispatch
+Then clone the repo:
+gh repo clone nicklaude/dispatch ~/dispatch
 cd ~/dispatch/docs/blog/bootstrap
 
 Work through each guide in order, starting with 03-identity-setup.md.

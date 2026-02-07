@@ -96,11 +96,16 @@ brew install --cask ghostty    # Or: brew install --cask iterm2
 # Git (install early, needed for Claude Code)
 brew install git
 
+# GitHub CLI (needed for repo access)
+brew install gh
+
 # Node.js (required for Claude Code)
 brew install node
 
 # Python via uv (better than brew python)
-curl -LsSf https://astral.sh/uv/install.sh | sh
+# Either method works:
+brew install uv
+# Or: curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Claude Code CLI
 npm install -g @anthropic-ai/claude-code
