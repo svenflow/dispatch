@@ -93,12 +93,31 @@ Make sure these are syncing via iCloud (System Settings > Apple ID > iCloud > Sh
 - **Messages** — Core functionality
 - **Notes** — Useful for persistent memory/scratchpad
 
-Verify sync is working:
+### 6a. Enable Messages in iCloud (Critical!)
+
+This is the most important sync setting. Without it, messages from new group chats won't sync to this Mac.
+
+1. Open **Messages.app**
+2. Go to **Messages > Settings** (Cmd+,)
+3. Click the **iMessage** tab
+4. Check **"Enable Messages in iCloud"**
+5. Click **"Sync Now"** to force an initial sync
+
+**Why this matters:** New group chats created on other devices won't appear in `chat.db` unless Messages in iCloud is enabled. The `ck_sync_state` field in the database will be 0 for unsynced chats, causing messages to be silently dropped.
+
+### 6b. Verify Sync is Working
+
 1. Open Contacts.app — should see your contacts (not just 1 local contact)
 2. Open Notes.app — should see your notes
-3. Open Messages.app — should see message history
+3. Open Messages.app — should see message history from all devices
 
 > **Troubleshooting:** If contacts aren't syncing, go to System Settings → Apple ID → iCloud → "Show More Apps" (or "See All") and make sure Contacts is toggled ON. You may need to sign out and back into iCloud if it's stuck.
+>
+> **Troubleshooting Messages:** If group chats aren't syncing, check Messages > Settings > iMessage and ensure "Enable Messages in iCloud" is checked. You can verify by running:
+> ```bash
+> sqlite3 ~/Library/Messages/chat.db "SELECT chat_identifier, ck_sync_state FROM chat WHERE LENGTH(chat_identifier) = 32 LIMIT 5"
+> ```
+> All chats should have `ck_sync_state = 1`. If any show `0`, click "Sync Now" in Messages settings.
 
 ## Step 7: Set Up Terminal
 
@@ -191,13 +210,16 @@ Needed to read the iMessage database (`~/Library/Messages/chat.db`).
 
 1. Open **Privacy & Security > Full Disk Access**
 2. Click + and add your terminal
-3. Restart your terminal after granting
+3. **Also add `/bin/bash`** — press Cmd+Shift+G and type `/bin/bash`. This is required for the LaunchAgent (auto-start on boot) to have FDA, since the daemon wrapper is a bash script.
+4. Restart your terminal after granting
 
 **Test it works:**
 ```bash
 sqlite3 ~/Library/Messages/chat.db "SELECT COUNT(*) FROM message;"
 ```
 If you get a number (not an error), it's working.
+
+> **Why `/bin/bash`?** The LaunchAgent starts `~/dispatch/bin/claude-assistant` which is a bash script. LaunchAgent processes don't inherit your terminal's FDA. Granting FDA to `/bin/bash` ensures the daemon can read `chat.db` when started automatically on boot.
 
 ### 10b. Automation (Required)
 
@@ -304,7 +326,8 @@ claude "Hello, are you there?"
 - [ ] Directory structure exists (`~/code`, `~/transcripts`, `~/.claude/skills`)
 
 ### Permissions (test each with the command shown)
-- [ ] Full Disk Access: `sqlite3 ~/Library/Messages/chat.db "SELECT 1;"` returns 1
+- [ ] Full Disk Access (terminal): `sqlite3 ~/Library/Messages/chat.db "SELECT 1;"` returns 1
+- [ ] Full Disk Access (`/bin/bash`): Added to FDA for LaunchAgent
 - [ ] Automation/Messages: `osascript -e 'tell application "Messages" to count of chats'` returns a number
 - [ ] Automation/Contacts: `osascript -e 'tell application "Contacts" to count of people'` returns a number
 - [ ] Automation/Reminders: `osascript -e 'tell application "Reminders" to count of lists'` returns a number
