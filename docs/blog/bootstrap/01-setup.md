@@ -60,10 +60,30 @@ This Mac needs to run 24/7. Install **Amphetamine** from the Mac App Store:
 open "macappstore://apps.apple.com/app/id937984704"
 ```
 
-This opens the App Store to Amphetamine (free). Install it, then:
-1. Open Amphetamine — pill icon appears in the menu bar
-2. **Preferences → General**: Enable **"Launch Amphetamine at login"**
-3. **Start a new session** → Select **"Indefinitely"**
+This opens the App Store to Amphetamine (free). Install it, then configure via CLI:
+
+```bash
+# Kill Amphetamine first so settings stick
+killall Amphetamine 2>/dev/null; sleep 1
+
+# Configure: start session at launch, indefinite duration, start on wake
+# NOTE: Must use the sandboxed container path, not plain `defaults write com.if.Amphetamine`
+defaults write ~/Library/Containers/com.if.Amphetamine/Data/Library/Preferences/com.if.Amphetamine "Start Session At Launch" -int 1
+defaults write ~/Library/Containers/com.if.Amphetamine/Data/Library/Preferences/com.if.Amphetamine "Default Duration" -int 0
+defaults write ~/Library/Containers/com.if.Amphetamine/Data/Library/Preferences/com.if.Amphetamine "Start Session On Wake" -int 1
+
+# Add to Login Items (launches at boot)
+osascript -e 'tell application "System Events" to make login item at end with properties {path:"/Applications/Amphetamine.app", hidden:false}'
+
+# Launch it
+open -a Amphetamine
+```
+
+Verify it's working:
+```bash
+pmset -g assertions | grep Amphetamine
+# Should show: PreventUserIdleSystemSleep named: "Amphetamine ..."
+```
 
 ## Step 6: Enable iCloud Sync
 
