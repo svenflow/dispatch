@@ -1,0 +1,71 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["pyyaml"]
+# ///
+"""
+Identity CLI - Read identity values from config.local.yaml.
+
+Usage:
+    identity owner.name          # Get owner's name
+    identity owner.phone         # Get owner's phone
+    identity assistant.name      # Get assistant's name
+    identity wife.name           # Get wife's name (empty if not set)
+    identity signal.account      # Get Signal account number
+
+Used by skills with dynamic prompts:
+    !`identity owner.name`       # Injects "John Smith" into skill
+
+This keeps PII out of checked-in skill files.
+"""
+
+import sys
+from pathlib import Path
+
+import yaml
+
+
+def load_config() -> dict:
+    """Load config.local.yaml from dispatch root."""
+    config_path = Path.home() / "dispatch" / "config.local.yaml"
+    if not config_path.exists():
+        # Fall back to example if local doesn't exist
+        config_path = Path.home() / "dispatch" / "config.example.yaml"
+
+    if not config_path.exists():
+        return {}
+
+    with open(config_path) as f:
+        return yaml.safe_load(f) or {}
+
+
+def get_value(config: dict, dotpath: str) -> str:
+    """Get a value from config using dot notation."""
+    keys = dotpath.split(".")
+    value = config
+
+    for key in keys:
+        if isinstance(value, dict) and key in value:
+            value = value[key]
+        else:
+            return ""  # Return empty string for missing values
+
+    return str(value) if value is not None else ""
+
+
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: identity <dotpath>", file=sys.stderr)
+        print("Example: identity owner.name", file=sys.stderr)
+        sys.exit(1)
+
+    dotpath = sys.argv[1]
+    config = load_config()
+    value = get_value(config, dotpath)
+
+    # Print without trailing newline for clean injection
+    print(value, end="")
+
+
+if __name__ == "__main__":
+    main()
