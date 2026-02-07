@@ -392,6 +392,15 @@ sqlite3 ~/Library/Messages/chat.db "SELECT MAX(ROWID) FROM message"
 
 # 5. Test send-sms
 ~/.claude/skills/sms-assistant/scripts/send-sms "+1XXXXXXXXXX" "test"
+
+# 6. Install LaunchAgent (auto-start daemon on boot)
+~/dispatch/bin/claude-assistant install
+# Or manually: launchctl load ~/Library/LaunchAgents/com.dispatch.claude-assistant.plist
+
+# 7. Verify daemon survives reboot
+# Reboot the Mac, then check:
+~/dispatch/bin/claude-assistant status
+# Should show "Daemon running"
 ```
 
 If `bin/claude-assistant` fails with `uv: No such file or directory`, check the `UV=` path in the script **and** in `assistant/cli.py` and `assistant/common.py`. Homebrew installs uv to `/opt/homebrew/bin/uv`, while the curl installer puts it at `~/.local/bin/uv`. The code uses `shutil.which("uv")` with a fallback to `~/.local/bin/uv`.
