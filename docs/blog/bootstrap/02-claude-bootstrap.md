@@ -26,10 +26,14 @@ I want to build a personal assistant system that:
 - Has contact tiers (admin, family, favorite, etc.)
 - Supports browser automation, smart home, and more
 
-The bootstrap guides are at:
-https://github.com/anthropics/dispatch/tree/main/docs/blog/bootstrap
+First, make sure git is installed:
+brew install git
 
-Start with 03-messaging-core.md and work through each guide in order.
+Then clone the bootstrap guides:
+git clone https://github.com/anthropics/dispatch.git ~/dispatch
+cd ~/dispatch/docs/blog/bootstrap
+
+Work through each guide in order, starting with 03-messaging-core.md.
 For each guide:
 1. Read it fully
 2. Implement what it describes
