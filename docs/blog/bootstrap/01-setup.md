@@ -210,8 +210,13 @@ Needed to read the iMessage database (`~/Library/Messages/chat.db`).
 
 1. Open **Privacy & Security > Full Disk Access**
 2. Click + and add your terminal
-3. **Also add `/bin/bash`** — press Cmd+Shift+G and type `/bin/bash`. This is required for the LaunchAgent (auto-start on boot) to have FDA, since the daemon wrapper is a bash script.
-4. Restart your terminal after granting
+3. **Also add `/bin/bash`** — press Cmd+Shift+G and type `/bin/bash`
+4. **Also add the uv-managed Python binary** — press Cmd+Shift+G and paste the path from:
+   ```bash
+   readlink -f ~/dispatch/.venv/bin/python
+   ```
+   (e.g., `~/.local/share/uv/python/cpython-3.14.3-macos-aarch64-none/bin/python3.14`)
+5. Restart your terminal after granting
 
 **Test it works:**
 ```bash
@@ -219,7 +224,9 @@ sqlite3 ~/Library/Messages/chat.db "SELECT COUNT(*) FROM message;"
 ```
 If you get a number (not an error), it's working.
 
-> **Why `/bin/bash`?** The LaunchAgent starts `~/dispatch/bin/claude-assistant` which is a bash script. LaunchAgent processes don't inherit your terminal's FDA. Granting FDA to `/bin/bash` ensures the daemon can read `chat.db` when started automatically on boot.
+> **Why `/bin/bash` AND Python?** The LaunchAgent starts `~/dispatch/bin/claude-assistant` (a bash script) which runs `uv run` which spawns Python. macOS FDA is per-executable, not inherited by child processes. Both `/bin/bash` and the actual Python binary need FDA for the daemon to read `chat.db` when auto-started on boot.
+>
+> **Note:** The Python path is version-specific. If you upgrade Python via `uv python install`, you'll need to re-add the new binary to FDA.
 
 ### 10b. Automation (Required)
 
