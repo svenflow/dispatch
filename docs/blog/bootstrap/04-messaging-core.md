@@ -373,10 +373,12 @@ If `bin/claude-assistant` fails with `uv: No such file or directory`, check the 
 
 ## Gotchas
 
-1. **chat.db race condition**: Sometimes `text` is NULL briefly after message arrives. Add a small retry.
+1. **Only text the admin during setup.** While testing send-sms and the daemon, only send messages to the owner's phone number (the admin). Don't accidentally text other contacts while verifying things work.
 
-2. **AppleScript escaping**: Messages with quotes need escaping. Handle this in send-sms.
+2. **chat.db race condition**: Sometimes `text` is NULL briefly after message arrives. Add a small retry.
 
-3. **Rate limiting**: Don't spam Claude. Add debouncing if someone sends 10 messages rapidly.
+3. **AppleScript escaping**: Messages with quotes need escaping. Handle this in send-sms.
 
-4. **Permissions**: If sqlite3 fails, check Full Disk Access again.
+4. **Rate limiting**: Don't spam Claude. Add debouncing if someone sends 10 messages rapidly.
+
+5. **Permissions**: If sqlite3 fails, check Full Disk Access again.
