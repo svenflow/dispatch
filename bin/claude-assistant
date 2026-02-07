@@ -3,6 +3,6 @@
 # Runs the Python CLI using uv
 
 ASSISTANT_DIR="$HOME/dispatch"
-UV="$HOME/.local/bin/uv"
+UV="$(command -v uv || echo "$HOME/.local/bin/uv")"
 
 cd "$ASSISTANT_DIR" && exec "$UV" run python -m assistant.cli "$@"

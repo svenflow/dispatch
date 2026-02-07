@@ -187,7 +187,21 @@ When Claude Code loads the skill, it:
 
 This keeps PII out of checked-in files while still personalizing skills.
 
-## Step 7: Set Up Global CLAUDE.md
+## Step 7: Symlink Skills
+
+The daemon and Claude sessions discover skills via `~/.claude/skills/`. Symlink the repo's skills directory:
+
+```bash
+mkdir -p ~/.claude/skills
+# At minimum, symlink the messaging skills:
+ln -s ~/dispatch/skills/sms-assistant ~/.claude/skills/sms-assistant
+ln -s ~/dispatch/skills/contacts ~/.claude/skills/contacts
+ln -s ~/dispatch/skills/signal ~/.claude/skills/signal
+```
+
+You can symlink additional skills later as you enable them (hue, lutron, sonos, etc.).
+
+## Step 8: Set Up Global CLAUDE.md
 
 Copy the global CLAUDE.md template - this provides system-wide instructions for all Claude sessions:
 
@@ -197,7 +211,7 @@ cp ~/dispatch/templates/CLAUDE.global.md ~/.claude/CLAUDE.md
 
 This template uses dynamic prompts like `!`identity owner.name`` so your identity is injected at runtime without hardcoding PII.
 
-## Step 8: Set Up SOUL.md
+## Step 9: Set Up SOUL.md
 
 Copy the SOUL template - this defines the assistant's personality:
 
@@ -216,6 +230,7 @@ The template uses dynamic prompts throughout, so your identity is injected at ru
 - [ ] Config loads without errors
 - [ ] `identity owner.name` returns your name
 - [ ] `identity self` returns assistant name
+- [ ] Skills symlinked to `~/.claude/skills/` (at least sms-assistant, contacts, signal)
 - [ ] CLAUDE.md copied to `~/.claude/`
 - [ ] SOUL.md copied to `~/.claude/`
 
