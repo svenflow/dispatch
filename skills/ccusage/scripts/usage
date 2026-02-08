@@ -1,0 +1,21 @@
+#!/bin/bash
+# Quick Claude Code usage summary
+# Usage: usage [blocks|daily|monthly|weekly]
+
+set -euo pipefail
+
+CMD="${1:-blocks}"
+
+case "$CMD" in
+  blocks|daily|monthly|weekly)
+    ~/.bun/bin/bun x ccusage "$CMD"
+    ;;
+  *)
+    echo "Usage: usage [blocks|daily|monthly|weekly]"
+    echo "  blocks  - Current 5-hour block status (default)"
+    echo "  daily   - Usage by day"
+    echo "  monthly - Usage by month"
+    echo "  weekly  - Usage by week"
+    exit 1
+    ;;
+esac
