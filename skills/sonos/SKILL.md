@@ -1,106 +1,103 @@
 ---
 name: sonos
-description: Control Sonos speakers on the local network - play/pause, volume, grouping, text-to-speech. Use when asked about music, speakers, or audio playback.
-allowed-tools: Bash(uv:*)
+description: Control Sonos speakers on the local network - play/pause, volume, grouping, text-to-speech, announcements. Use when asked about music, speakers, audio playback, or announcements.
 ---
 
 # Sonos Control
 
-Control Sonos speakers using the local UPnP API via SoCo library. No hardcoded IPs - uses SSDP discovery.
+Control Sonos speakers using the unified `sonos` CLI. Plays on **all speakers by default** with **60% volume**.
 
 ## Quick Reference
 
 ```bash
-SONOS="uv run ~/.claude/skills/sonos/scripts/control.py"
+SONOS="~/.claude/skills/sonos/scripts/sonos"
 ```
 
-## Commands
+## Main Commands
 
-### Discovery & Status
+### Play Text (TTS)
 
 ```bash
-# List all speakers (with IP, model, volume, state)
+# Announce on all speakers (default: 60% volume)
+$SONOS play "Dinner is ready"
+
+# Specify volume
+$SONOS play "Wake up!" --volume 80
+
+# Specific speakers only
+$SONOS play "Hello" --speakers "Kitchen,Family Room"
+
+# Different TTS voice
+$SONOS play "Good morning" --voice af_nova
+```
+
+### Play Audio File
+
+```bash
+# Play an audio file on all speakers
+$SONOS play --file ~/music/song.wav
+
+# Play on specific speaker at specific volume
+$SONOS play --file ~/music/alert.wav --speakers Kitchen --volume 70
+```
+
+**Note:** Sonos only supports common formats (WAV, MP3, etc). For Apple formats like CAF (voice memos, iMessage audio), convert first:
+
+```bash
+# Convert CAF to WAV using macOS afconvert
+afconvert input.caf output.wav -d LEI16 -f WAVE
+
+# Then play
+$SONOS play --file output.wav
+```
+
+### List Speakers
+
+```bash
 $SONOS list
+```
 
-# Get detailed status of all speakers
+Output:
+```
+Available speakers:
+  Basement Sonos: 10.10.10.53
+  Bathroom: 10.10.10.47
+  Family Room 2: 10.10.10.38
+  Family Room: 10.10.10.152
+  Kitchen: 10.10.10.162
+```
+
+### Check Status
+
+```bash
 $SONOS status
-
-# Get status of specific speaker
-$SONOS status "Kitchen"
 ```
 
-### Playback Control
-
-```bash
-# Play/pause/stop (speaker name is case-insensitive partial match)
-$SONOS play "Kitchen"
-$SONOS pause "Kitchen"
-$SONOS stop "Kitchen"
-
-# Skip tracks
-$SONOS next "Kitchen"
-$SONOS prev "Kitchen"
+Output:
+```
+Basement Sonos: STOPPED (volume: 30)
+Bathroom: STOPPED (volume: 25)
+Family Room 2: STOPPED (volume: 40)
+Family Room: PLAYING (volume: 35)
+Kitchen: STOPPED (volume: 50)
 ```
 
-### Volume
+## Options
 
-```bash
-# Get current volume
-$SONOS volume "Kitchen"
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--volume` | 60 | Announcement volume (0-100) |
+| `--speakers` | all | Comma-separated speaker names |
+| `--voice` | bm_lewis | Kokoro TTS voice |
+| `--file` | - | Audio file instead of TTS |
 
-# Set volume (0-100)
-$SONOS volume "Kitchen" 50
+## TTS Voices
 
-# Mute/unmute
-$SONOS mute "Kitchen"
-$SONOS unmute "Kitchen"
-```
-
-### Grouping
-
-```bash
-# Add speaker to another speaker's group (synced playback)
-$SONOS group "Kitchen" "Family Room"   # Family Room joins Kitchen's group
-
-# Remove speaker from group
-$SONOS ungroup "Family Room"
-```
-
-### Play Content
-
-```bash
-# Play a URI (web streams, radio, etc.)
-$SONOS playuri "Kitchen" "http://stream.example.com/radio.mp3"
-
-# Text-to-speech announcement
-$SONOS say "Kitchen" "Dinner is ready"
-```
-
-### EQ Control
-
-```bash
-# Show all EQ settings
-$SONOS eq "Family Room"
-
-# Bass (-10 to +10)
-$SONOS bass "Family Room"       # Get current
-$SONOS bass "Family Room" 5     # Set to +5
-
-# Treble (-10 to +10)
-$SONOS treble "Family Room" -2
-
-# Loudness compensation (on/off)
-$SONOS loudness "Family Room" on
-
-# Night mode - reduces bass & dynamics (soundbars only)
-$SONOS nightmode "Family Room" on
-
-# Dialog/speech enhancement (soundbars only)
-$SONOS dialog "Family Room" on
-
-# Subwoofer gain (-15 to +15)
-$SONOS subgain "Family Room" 10
-```
+Available Kokoro voices:
+- `bm_lewis` (default) - British male
+- `af_nova` - American female
+- `am_adam` - American male
+- `bf_emma` - British female
 
 ## Speaker Names
 
@@ -109,54 +106,63 @@ Speaker names support partial, case-insensitive matching:
 - `"Kitchen"` matches "Kitchen"
 - `"family"` matches "Family Room" or "Family Room 2"
 - `"base"` matches "Basement Sonos"
+- `"Kitchen,Family Room"` matches multiple speakers
 
-## Current Speakers
+## How It Works
 
-Discovered via SSDP (run `$SONOS list` for current state):
-
-| Name | Model | Location |
-|------|-------|----------|
-| Family Room | Arc Ultra | Main living area |
-| Family Room 2 | Era 100 | Near Family Room |
-| Kitchen | Era 300 | Kitchen |
-| Basement Sonos | Arc | Basement |
-| Bathroom | One SL | Bathroom |
-
-(Subs are paired with their soundbars, not standalone)
+1. **Snapshots** current state of all speakers (volume, playback, position)
+2. **Groups** all selected speakers together (for synchronized playback)
+3. **Generates audio** via Kokoro TTS (if text) or uses provided file
+4. **Serves audio** via local HTTP server
+5. **Plays** announcement on grouped speakers
+6. **Restores** all speakers to their previous state
 
 ## Examples
 
-### Play music on Kitchen
-
+### Make a house-wide announcement
 ```bash
-$SONOS play "Kitchen"
+$SONOS play "Dinner is ready!"
 ```
 
-### Set up whole-home audio
-
+### Kitchen-only alert
 ```bash
-# Group all speakers with Kitchen as coordinator
-$SONOS group "Kitchen" "Family Room"
-$SONOS group "Kitchen" "Bathroom"
-$SONOS group "Kitchen" "Basement"
+$SONOS play "Timer done" --speakers Kitchen --volume 70
 ```
 
-### Make an announcement
-
+### Play a sound file everywhere
 ```bash
-$SONOS say "Kitchen" "The timer is done"
+$SONOS play --file ~/sounds/doorbell.wav
 ```
 
-### Check what's playing everywhere
+### Quiet morning announcement
+```bash
+$SONOS play "Good morning" --volume 40 --voice bf_emma
+```
+
+## Important: Audio Messages
+
+**When a user sends an audio attachment (voice memo, iMessage audio), play the ACTUAL AUDIO FILE, not TTS of the transcription.** Only use TTS if the user explicitly asks for text-to-speech.
 
 ```bash
-$SONOS status
+# User sends audio message → play the audio file
+afconvert "/path/to/Audio Message.caf" /tmp/message.wav -d LEI16 -f WAVE
+$SONOS play --file /tmp/message.wav --volume 75
 ```
 
 ## Technical Notes
 
-- Uses SoCo library for UPnP/SOAP communication
-- Discovery uses SSDP multicast (239.255.255.250:1900)
-- Control port is 1400 on each speaker
-- Grouped speakers share playback state via coordinator
-- Volume is per-speaker even when grouped
+- Uses curl for SOAP/UPnP calls (bypasses macOS Local Network permission issues)
+- Groups speakers dynamically for synchronized playback
+- Restores previous playback state after announcement
+- HTTP server serves audio to Sonos speakers
+- Hardcoded speaker IPs (from Sonos System Info)
+
+## Legacy Scripts
+
+The old `announce` script still works for backwards compatibility:
+
+```bash
+~/.claude/skills/sonos/scripts/announce "Hello world"
+```
+
+But prefer the new unified `sonos` CLI.
