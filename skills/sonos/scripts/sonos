@@ -450,14 +450,7 @@ def play_audio(audio_file: str, volume: int = 60, speaker_names: list[str] | Non
             print(f"  Error: Could not get RINCON ID for coordinator {coordinator_name}")
             return
 
-        # Set volume on all speakers
-        for name, snap in snapshots.items():
-            try:
-                set_volume(snap["ip"], volume)
-            except Exception as e:
-                print(f"  Warning: Could not set volume on {name}: {e}")
-
-        # Group other speakers with coordinator
+        # Group other speakers with coordinator first
         if len(speaker_list) > 1:
             print(f"  Grouping speakers with {coordinator_name}...")
             expected_rincons = {coordinator_rincon}
@@ -475,6 +468,14 @@ def play_audio(audio_file: str, volume: int = 60, speaker_names: list[str] | Non
                 print(f"  All {len(expected_rincons)} speakers confirmed in group")
             else:
                 print(f"  Warning: Grouping verification timed out, proceeding anyway")
+
+        # Set volume on all speakers AFTER grouping
+        print(f"  Setting volume to {volume}...")
+        for name, snap in snapshots.items():
+            try:
+                set_volume(snap["ip"], volume)
+            except Exception as e:
+                print(f"  Warning: Could not set volume on {name}: {e}")
 
         # Play on coordinator
         set_av_transport_uri(coordinator_ip, audio_url)
