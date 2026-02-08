@@ -693,6 +693,29 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
         lifecycle_log.info(f"KILL_ALL | count={len(sessions)}")
         return len(sessions)
 
+    def _clear_sdk_session_index(self, session_name: str) -> None:
+        """Clear the SDK's sessions-index.json to prevent auto-resume of poisoned sessions.
+
+        The SDK auto-resumes from ~/.claude/projects/<sanitized-cwd>/sessions-index.json.
+        When restarting a crashed/poisoned session, we need to clear this index so the SDK
+        creates a fresh session instead of resuming the old one.
+        """
+        transcript_dir = ensure_transcript_dir(session_name)
+        # SDK sanitizes cwd path: /Users/sven/transcripts/foo -> -Users-sven-transcripts-foo
+        sanitized = str(transcript_dir).replace("/", "-")
+        if sanitized.startswith("-"):
+            sanitized = sanitized  # Already starts with dash from leading /
+
+        sdk_project_dir = HOME / ".claude" / "projects" / sanitized
+        index_file = sdk_project_dir / "sessions-index.json"
+
+        if index_file.exists():
+            try:
+                index_file.unlink()
+                lifecycle_log.info(f"CLEAR_INDEX | {session_name} | Deleted {index_file}")
+            except Exception as e:
+                log.warning(f"Failed to delete session index {index_file}: {e}")
+
     async def restart_session(self, chat_id: str) -> Optional[SDKSession]:
         """Kill and recreate a session."""
         # Save session info before killing
@@ -700,12 +723,20 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
 
         await self.kill_session(chat_id)
 
+        # Clear the SDK session index to prevent auto-resume of poisoned session
+        if reg and reg.get("session_name"):
+            self._clear_sdk_session_index(reg["session_name"])
+
         if reg:
             lifecycle_log.info(f"RESTART | {reg.get('session_name', chat_id)} | START")
+            # Group chats use display_name; individuals use contact_name
+            contact_name = reg.get("contact_name") or reg.get("display_name", "Unknown")
+            # Group chats don't have tier; default to admin for restart
+            tier = reg.get("tier", "admin")
             session = await self.create_session(
-                reg["contact_name"],
+                contact_name,
                 chat_id,
-                reg["tier"],
+                tier,
                 reg.get("source", "imessage"),
                 reg.get("type", "individual"),
             )
