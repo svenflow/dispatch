@@ -1,6 +1,6 @@
 ---
 name: sonos
-description: Control Sonos speakers on the local network - play/pause, volume, grouping, text-to-speech, announcements. Use when asked about music, speakers, audio playback, or announcements.
+description: Control Sonos speakers - make announcements, play audio, TTS, volume, grouping. Trigger words - sonos, announcement, speakers, play on speakers, house-wide.
 ---
 
 # Sonos Control
