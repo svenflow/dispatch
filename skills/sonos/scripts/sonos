@@ -1,0 +1,546 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["kokoro-onnx", "soundfile"]
+# ///
+"""
+Sonos CLI - Control Sonos speakers from the command line.
+
+Usage:
+    sonos play "text to speak"              # TTS and play on all speakers
+    sonos play --file audio.wav             # Play audio file on all speakers
+    sonos play "hello" --speakers Kitchen   # Play on specific speaker(s)
+    sonos play "hello" --volume 70          # Set volume (default: 50)
+    sonos play "hello" --voice af_nova      # Use specific TTS voice
+
+    sonos list                              # List available speakers
+    sonos status                            # Show current playback status
+
+This script uses curl for Sonos communication (bypasses macOS Local Network
+permission issues with Python sockets) and Kokoro for local TTS.
+"""
+
+import argparse
+import os
+import re
+import subprocess
+import shutil
+import tempfile
+import time
+import warnings
+from pathlib import Path
+from http.server import HTTPServer, SimpleHTTPRequestHandler
+import threading
+
+warnings.filterwarnings("ignore")
+
+
+# Known speaker IPs (main speakers only, not subs)
+MAIN_SPEAKERS = {
+    "Basement Sonos": "10.10.10.53",
+    "Bathroom": "10.10.10.47",
+    "Family Room 2": "10.10.10.38",
+    "Family Room": "10.10.10.152",
+    "Kitchen": "10.10.10.162",
+}
+
+
+def get_local_ip() -> str:
+    """Get local IP via route command (no Python sockets needed)."""
+    try:
+        result = subprocess.run(
+            ["route", "-n", "get", "default"],
+            capture_output=True, text=True, timeout=5
+        )
+        for line in result.stdout.split('\n'):
+            if 'interface:' in line:
+                iface = line.split(':')[1].strip()
+                ifconfig = subprocess.run(
+                    ["ipconfig", "getifaddr", iface],
+                    capture_output=True, text=True, timeout=5
+                )
+                return ifconfig.stdout.strip()
+    except Exception:
+        pass
+    return "10.10.10.1"
+
+
+def curl_soap(ip: str, endpoint: str, service: str, action: str, body: str) -> str:
+    """Make a SOAP request to Sonos via curl."""
+    soap_envelope = f'''<?xml version="1.0" encoding="utf-8"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
+  <s:Body>
+    <u:{action} xmlns:u="{service}">
+      {body}
+    </u:{action}>
+  </s:Body>
+</s:Envelope>'''
+
+    url = f"http://{ip}:1400{endpoint}"
+
+    try:
+        result = subprocess.run(
+            [
+                "curl", "-s", "-m", "5",
+                "-X", "POST",
+                "-H", "Content-Type: text/xml; charset=utf-8",
+                "-H", f"SOAPACTION: {service}#{action}",
+                "-d", soap_envelope,
+                url
+            ],
+            capture_output=True, text=True, timeout=10
+        )
+        return result.stdout
+    except Exception as e:
+        return f"<error>{e}</error>"
+
+
+def get_transport_info(ip: str) -> dict:
+    """Get current transport state."""
+    response = curl_soap(
+        ip,
+        "/MediaRenderer/AVTransport/Control",
+        "urn:schemas-upnp-org:service:AVTransport:1",
+        "GetTransportInfo",
+        "<InstanceID>0</InstanceID>"
+    )
+    state = re.search(r'<CurrentTransportState>([^<]+)</CurrentTransportState>', response)
+    return {"state": state.group(1) if state else "UNKNOWN"}
+
+
+def get_position_info(ip: str) -> dict:
+    """Get current track and position."""
+    response = curl_soap(
+        ip,
+        "/MediaRenderer/AVTransport/Control",
+        "urn:schemas-upnp-org:service:AVTransport:1",
+        "GetPositionInfo",
+        "<InstanceID>0</InstanceID>"
+    )
+    track_uri = re.search(r'<TrackURI>([^<]*)</TrackURI>', response)
+    track_meta = re.search(r'<TrackMetaData>([^<]*)</TrackMetaData>', response)
+    rel_time = re.search(r'<RelTime>([^<]+)</RelTime>', response)
+    return {
+        "track_uri": track_uri.group(1) if track_uri else "",
+        "track_meta": track_meta.group(1) if track_meta else "",
+        "position": rel_time.group(1) if rel_time else "0:00:00"
+    }
+
+
+def get_media_info(ip: str) -> dict:
+    """Get current media info."""
+    response = curl_soap(
+        ip,
+        "/MediaRenderer/AVTransport/Control",
+        "urn:schemas-upnp-org:service:AVTransport:1",
+        "GetMediaInfo",
+        "<InstanceID>0</InstanceID>"
+    )
+    current_uri = re.search(r'<CurrentURI>([^<]*)</CurrentURI>', response)
+    current_meta = re.search(r'<CurrentURIMetaData>([^<]*)</CurrentURIMetaData>', response)
+    return {
+        "current_uri": current_uri.group(1) if current_uri else "",
+        "current_uri_meta": current_meta.group(1) if current_meta else ""
+    }
+
+
+def get_volume(ip: str) -> int:
+    """Get current volume."""
+    response = curl_soap(
+        ip,
+        "/MediaRenderer/RenderingControl/Control",
+        "urn:schemas-upnp-org:service:RenderingControl:1",
+        "GetVolume",
+        "<InstanceID>0</InstanceID><Channel>Master</Channel>"
+    )
+    volume = re.search(r'<CurrentVolume>(\d+)</CurrentVolume>', response)
+    return int(volume.group(1)) if volume else 50
+
+
+def set_volume(ip: str, volume: int):
+    """Set volume."""
+    curl_soap(
+        ip,
+        "/MediaRenderer/RenderingControl/Control",
+        "urn:schemas-upnp-org:service:RenderingControl:1",
+        "SetVolume",
+        f"<InstanceID>0</InstanceID><Channel>Master</Channel><DesiredVolume>{volume}</DesiredVolume>"
+    )
+
+
+def play(ip: str):
+    """Start playback."""
+    curl_soap(
+        ip,
+        "/MediaRenderer/AVTransport/Control",
+        "urn:schemas-upnp-org:service:AVTransport:1",
+        "Play",
+        "<InstanceID>0</InstanceID><Speed>1</Speed>"
+    )
+
+
+def pause(ip: str):
+    """Pause playback."""
+    curl_soap(
+        ip,
+        "/MediaRenderer/AVTransport/Control",
+        "urn:schemas-upnp-org:service:AVTransport:1",
+        "Pause",
+        "<InstanceID>0</InstanceID>"
+    )
+
+
+def stop(ip: str):
+    """Stop playback."""
+    curl_soap(
+        ip,
+        "/MediaRenderer/AVTransport/Control",
+        "urn:schemas-upnp-org:service:AVTransport:1",
+        "Stop",
+        "<InstanceID>0</InstanceID>"
+    )
+
+
+def set_av_transport_uri(ip: str, uri: str, meta: str = ""):
+    """Set the URI to play."""
+    uri_escaped = uri.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    meta_escaped = meta.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    curl_soap(
+        ip,
+        "/MediaRenderer/AVTransport/Control",
+        "urn:schemas-upnp-org:service:AVTransport:1",
+        "SetAVTransportURI",
+        f"<InstanceID>0</InstanceID><CurrentURI>{uri_escaped}</CurrentURI><CurrentURIMetaData>{meta_escaped}</CurrentURIMetaData>"
+    )
+
+
+def seek(ip: str, position: str):
+    """Seek to position (format: H:MM:SS)."""
+    curl_soap(
+        ip,
+        "/MediaRenderer/AVTransport/Control",
+        "urn:schemas-upnp-org:service:AVTransport:1",
+        "Seek",
+        f"<InstanceID>0</InstanceID><Unit>REL_TIME</Unit><Target>{position}</Target>"
+    )
+
+
+def get_rincon_id(ip: str) -> str:
+    """Get the RINCON ID for a speaker."""
+    try:
+        result = subprocess.run(
+            ["curl", "-s", "-m", "3", f"http://{ip}:1400/xml/device_description.xml"],
+            capture_output=True, text=True, timeout=5
+        )
+        match = re.search(r'<UDN>uuid:(RINCON_[^<]+)</UDN>', result.stdout)
+        return match.group(1) if match else ""
+    except Exception:
+        return ""
+
+
+def join_group(ip: str, coordinator_rincon: str):
+    """Join a speaker to a group."""
+    set_av_transport_uri(ip, f"x-rincon:{coordinator_rincon}")
+
+
+def leave_group(ip: str):
+    """Leave current group and become standalone."""
+    curl_soap(
+        ip,
+        "/MediaRenderer/AVTransport/Control",
+        "urn:schemas-upnp-org:service:AVTransport:1",
+        "BecomeCoordinatorOfStandaloneGroup",
+        "<InstanceID>0</InstanceID>"
+    )
+
+
+def snapshot_speaker(ip: str, name: str) -> dict:
+    """Take a snapshot of speaker state."""
+    print(f"  Snapshotting {name}...")
+    return {
+        "name": name,
+        "ip": ip,
+        "rincon": get_rincon_id(ip),
+        "volume": get_volume(ip),
+        "transport": get_transport_info(ip),
+        "position": get_position_info(ip),
+        "media": get_media_info(ip),
+    }
+
+
+def restore_speaker(snapshot: dict, was_grouped_for_announcement: bool = False):
+    """Restore speaker to previous state."""
+    ip = snapshot["ip"]
+    name = snapshot["name"]
+    print(f"  Restoring {name}...")
+
+    if was_grouped_for_announcement:
+        leave_group(ip)
+        time.sleep(0.3)
+
+    set_volume(ip, snapshot["volume"])
+
+    if snapshot["media"]["current_uri"]:
+        set_av_transport_uri(
+            ip,
+            snapshot["media"]["current_uri"],
+            snapshot["media"]["current_uri_meta"]
+        )
+        if snapshot["position"]["position"] and snapshot["position"]["position"] != "NOT_IMPLEMENTED":
+            try:
+                seek(ip, snapshot["position"]["position"])
+            except Exception:
+                pass
+        if snapshot["transport"]["state"] == "PLAYING":
+            play(ip)
+
+
+def generate_tts(text: str, voice: str = "bm_lewis") -> str:
+    """Generate TTS audio file using Kokoro."""
+    from kokoro_onnx import Kokoro
+    import soundfile as sf
+
+    model_dir = Path.home() / ".claude/skills/tts/models"
+    kokoro = Kokoro(
+        str(model_dir / "kokoro-v1.0.onnx"),
+        str(model_dir / "voices-v1.0.bin")
+    )
+    samples, sr = kokoro.create(text, voice=voice, speed=1.0)
+    temp_file = tempfile.mktemp(suffix=".wav")
+    sf.write(temp_file, samples, sr)
+    return temp_file
+
+
+def get_audio_duration(file_path: str) -> float:
+    """Get duration of audio file in seconds."""
+    import soundfile as sf
+    with sf.SoundFile(file_path) as f:
+        return len(f) / f.samplerate
+
+
+def serve_file(file_path: str, port: int = 8765) -> tuple[HTTPServer, str]:
+    """Start a simple HTTP server to serve the audio file."""
+    directory = os.path.dirname(file_path)
+    filename = os.path.basename(file_path)
+
+    class Handler(SimpleHTTPRequestHandler):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, directory=directory, **kwargs)
+
+        def log_message(self, format, *args):
+            pass
+
+    for p in range(port, port + 100):
+        try:
+            server = HTTPServer(("0.0.0.0", p), Handler)
+            local_ip = get_local_ip()
+            url = f"http://{local_ip}:{p}/{filename}"
+            return server, url
+        except OSError:
+            continue
+
+    raise RuntimeError("Could not find available port for HTTP server")
+
+
+def get_speakers(speaker_names: list[str] | None = None) -> dict[str, str]:
+    """Get speakers dict, optionally filtered by name."""
+    speakers = dict(MAIN_SPEAKERS)
+
+    if speaker_names:
+        name_set = {n.lower() for n in speaker_names}
+        speakers = {
+            name: ip for name, ip in speakers.items()
+            if any(n in name.lower() for n in name_set)
+        }
+        if not speakers:
+            print(f"No matching speakers found for: {speaker_names}")
+            print(f"Available: {', '.join(MAIN_SPEAKERS.keys())}")
+            return {}
+
+    return speakers
+
+
+def play_audio(audio_file: str, volume: int = 60, speaker_names: list[str] | None = None, cleanup_file: bool = False):
+    """Play an audio file on Sonos speakers with grouping."""
+    speakers = get_speakers(speaker_names)
+    if not speakers:
+        return
+
+    print(f"Using {len(speakers)} speaker(s): {', '.join(speakers.keys())}")
+
+    # Get duration
+    duration = get_audio_duration(audio_file)
+    print(f"Audio duration: {duration:.1f}s")
+
+    # Snapshot all speakers
+    print("Saving current state...")
+    snapshots = {}
+    for name, ip in speakers.items():
+        try:
+            snapshots[name] = snapshot_speaker(ip, name)
+        except Exception as e:
+            print(f"  Warning: Could not snapshot {name}: {e}")
+
+    # Start HTTP server
+    print("Starting audio server...")
+    server, audio_url = serve_file(audio_file)
+    server_thread = threading.Thread(target=server.serve_forever)
+    server_thread.daemon = True
+    server_thread.start()
+    print(f"  Serving at: {audio_url}")
+
+    grouped_speakers = []
+
+    try:
+        print(f"Playing at volume {volume}...")
+
+        # Pick coordinator
+        speaker_list = list(snapshots.items())
+        coordinator_name, coordinator_snap = speaker_list[0]
+        coordinator_ip = coordinator_snap["ip"]
+        coordinator_rincon = coordinator_snap["rincon"]
+
+        if not coordinator_rincon:
+            print(f"  Error: Could not get RINCON ID for coordinator {coordinator_name}")
+            return
+
+        # Set volume on all speakers
+        for name, snap in snapshots.items():
+            try:
+                set_volume(snap["ip"], volume)
+            except Exception as e:
+                print(f"  Warning: Could not set volume on {name}: {e}")
+
+        # Group other speakers with coordinator
+        if len(speaker_list) > 1:
+            print(f"  Grouping speakers with {coordinator_name}...")
+            for name, snap in speaker_list[1:]:
+                try:
+                    join_group(snap["ip"], coordinator_rincon)
+                    grouped_speakers.append(name)
+                except Exception as e:
+                    print(f"  Warning: Could not group {name}: {e}")
+            time.sleep(0.5)
+
+        # Play on coordinator
+        set_av_transport_uri(coordinator_ip, audio_url)
+        play(coordinator_ip)
+
+        # Wait for playback
+        time.sleep(duration + 1.5)
+
+        # Stop
+        stop(coordinator_ip)
+
+    finally:
+        print("Restoring previous state...")
+        time.sleep(0.5)
+
+        for name, snap in snapshots.items():
+            try:
+                was_grouped = name in grouped_speakers
+                restore_speaker(snap, was_grouped_for_announcement=was_grouped)
+            except Exception as e:
+                print(f"  Warning: Could not restore {name}: {e}")
+
+        server.shutdown()
+
+        if cleanup_file:
+            try:
+                Path(audio_file).unlink()
+            except:
+                pass
+
+    print("Done!")
+
+
+def cmd_play(args):
+    """Handle play command - text or audio file."""
+    speaker_names = None
+    if args.speakers:
+        speaker_names = [s.strip() for s in args.speakers.split(",")]
+
+    if args.file:
+        # Play audio file directly
+        audio_file = os.path.abspath(args.file)
+        if not os.path.exists(audio_file):
+            print(f"Error: File not found: {audio_file}")
+            return
+        print(f"Playing audio file: {audio_file}")
+        play_audio(audio_file, volume=args.volume, speaker_names=speaker_names, cleanup_file=False)
+    else:
+        # Generate TTS from text
+        if not args.text:
+            print("Error: Provide text to speak or --file for audio file")
+            return
+        print(f"Generating TTS with voice '{args.voice}'...")
+        audio_file = generate_tts(args.text, voice=args.voice)
+        print(f"  Generated: {audio_file}")
+        play_audio(audio_file, volume=args.volume, speaker_names=speaker_names, cleanup_file=True)
+
+
+def cmd_list(args):
+    """List available speakers."""
+    print("Available speakers:")
+    for name, ip in MAIN_SPEAKERS.items():
+        print(f"  {name}: {ip}")
+
+
+def cmd_status(args):
+    """Show status of all speakers."""
+    for name, ip in MAIN_SPEAKERS.items():
+        try:
+            transport = get_transport_info(ip)
+            volume = get_volume(ip)
+            state = transport["state"]
+            print(f"{name}: {state} (volume: {volume})")
+        except Exception as e:
+            print(f"{name}: Error - {e}")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Sonos CLI - Control Sonos speakers",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  sonos play "Hello world"                    # TTS to all speakers
+  sonos play --file music.wav                 # Play audio file
+  sonos play "Hello" --speakers Kitchen       # Specific speaker
+  sonos play "Hello" --volume 70              # Set volume
+  sonos play "Hello" --voice af_nova          # Different TTS voice
+  sonos list                                  # List speakers
+  sonos status                                # Show status
+"""
+    )
+
+    subparsers = parser.add_subparsers(dest="command", help="Commands")
+
+    # play command
+    play_parser = subparsers.add_parser("play", help="Play text (TTS) or audio file")
+    play_parser.add_argument("text", nargs="?", help="Text to speak (TTS)")
+    play_parser.add_argument("-f", "--file", help="Audio file to play (instead of TTS)")
+    play_parser.add_argument("-v", "--voice", default="bm_lewis", help="TTS voice (default: bm_lewis)")
+    play_parser.add_argument("--volume", type=int, default=60, help="Volume (default: 60)")
+    play_parser.add_argument("--speakers", help="Comma-separated speaker names (default: all)")
+    play_parser.set_defaults(func=cmd_play)
+
+    # list command
+    list_parser = subparsers.add_parser("list", help="List available speakers")
+    list_parser.set_defaults(func=cmd_list)
+
+    # status command
+    status_parser = subparsers.add_parser("status", help="Show speaker status")
+    status_parser.set_defaults(func=cmd_status)
+
+    args = parser.parse_args()
+
+    if args.command is None:
+        parser.print_help()
+        return
+
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()
