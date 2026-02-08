@@ -2,11 +2,19 @@
 """Claude Assistant menu bar app."""
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from pathlib import Path
 
 import rumps
+
+REGISTRY_PATH = Path.home() / "dispatch/state/sessions.json"
+
+def _load_registry() -> dict:
+    if REGISTRY_PATH.exists():
+        return json.loads(REGISTRY_PATH.read_text())
+    return {}
 
 # Paths
 ASSISTANT_DIR = Path(__file__).parent.parent
@@ -42,34 +50,29 @@ class ClaudeAssistantApp(rumps.App):
         except (ValueError, ProcessLookupError, PermissionError):
             return False
 
-    def _get_active_tmux_sessions(self) -> set:
-        """Get set of active tmux session names."""
-        result = subprocess.run([TMUX, "ls"], capture_output=True, text=True)
-        if result.returncode != 0:
-            return set()
-        sessions = set()
-        for line in result.stdout.strip().split("\n"):
-            if line:
-                name = line.split(":")[0]
-                if name != "monitor":
-                    sessions.add(name)
-        return sessions
+    def _get_active_sessions(self) -> set:
+        registry = _load_registry()
+        return {entry.get("session_name") for entry in registry.values() if entry.get("session_name")}
 
     def _get_contacts(self) -> list[tuple]:
-        """Get list of contacts from transcript folders with active status.
-
-        Returns list of (folder_name, is_active) tuples, sorted by name.
-        """
-        active_sessions = self._get_active_tmux_sessions()
         contacts = []
+        active_sessions = self._get_active_sessions()
 
         if TRANSCRIPTS_DIR.exists():
-            for folder in sorted(TRANSCRIPTS_DIR.iterdir()):
-                if folder.is_dir() and not folder.name.startswith('.'):
-                    # Check if there's an active tmux session for this contact
-                    is_active = folder.name in active_sessions
-                    contacts.append((folder.name, is_active))
-
+            for backend_dir in sorted(TRANSCRIPTS_DIR.iterdir()):
+                if not backend_dir.is_dir() or backend_dir.name.startswith('.'):
+                    continue
+                if backend_dir.name == "master":
+                    contacts.append(("master", "master" in active_sessions))
+                    continue
+                if backend_dir.name not in ("imessage", "signal", "test"):
+                    continue
+                for session_dir in sorted(backend_dir.iterdir()):
+                    if not session_dir.is_dir() or session_dir.name.startswith('.'):
+                        continue
+                    session_name = f"{backend_dir.name}/{session_dir.name}"
+                    is_active = session_name in active_sessions
+                    contacts.append((session_name, is_active))
         return contacts
 
     def _build_menu(self) -> list:
@@ -163,17 +166,13 @@ class ClaudeAssistantApp(rumps.App):
         rumps.notification("Claude Assistant", "Daemon restarted", "")
 
     def _attach_session(self, sender):
-        """Open Terminal and attach to session."""
-        # Remove the indicator prefix (🟢 or ⚫) from the title
+        """Open transcript directory in Finder (SDK sessions cannot be attached)."""
         session_name = sender.title.split(" ", 1)[1] if " " in sender.title else sender.title
-        # Open Terminal and attach to the tmux session
-        script = f'''
-        tell application "Terminal"
-            activate
-            do script "{TMUX} attach -t {session_name}"
-        end tell
-        '''
-        subprocess.run(["osascript", "-e", script])
+        transcript_path = TRANSCRIPTS_DIR / session_name
+        if transcript_path.exists():
+            subprocess.run(["open", str(transcript_path)])
+        else:
+            rumps.notification("Claude Assistant", "Error", f"Transcript directory not found: {session_name}")
 
     def _view_logs(self, _):
         """Open logs in Console.app."""

@@ -1,4 +1,4 @@
-# nicklaude-search
+# memory-search
 
 Hybrid semantic search daemon for the nicklaude assistant system. Combines BM25 full-text search with vector embeddings and LLM reranking.
 
@@ -12,7 +12,7 @@ Hybrid semantic search daemon for the nicklaude assistant system. Combines BM25 
 │                   spawns as child process                        │
 │                            ▼                                     │
 │  ┌─────────────────────────────────────────────────────────┐    │
-│  │              nicklaude-search daemon                     │    │
+│  │              memory-search daemon                     │    │
 │  │                    (Bun/TypeScript)                      │    │
 │  │                                                          │    │
 │  │  ┌──────────┐  ┌──────────┐  ┌──────────────────────┐   │    │
@@ -32,7 +32,7 @@ Hybrid semantic search daemon for the nicklaude assistant system. Combines BM25 
 │  │                        ▼                                │    │
 │  │  ┌────────────────────────────────────────────────┐     │    │
 │  │  │           SQLite + sqlite-vec                   │     │    │
-│  │  │      ~/.cache/nicklaude-search/index.sqlite    │     │    │
+│  │  │      ~/.cache/memory-search/index.sqlite    │     │    │
 │  │  └────────────────────────────────────────────────┘     │    │
 │  └─────────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────────┘
@@ -70,7 +70,7 @@ Always uses full quality path:
 
 ## Configuration
 
-Config file: `~/.config/nicklaude-search/config.yml`
+Config file: `~/.config/memory-search/config.yml`
 
 ```yaml
 # Polling interval in seconds
@@ -114,7 +114,7 @@ server:
 
 ## Database Schema
 
-SQLite with sqlite-vec extension at `~/.cache/nicklaude-search/index.sqlite`
+SQLite with sqlite-vec extension at `~/.cache/memory-search/index.sqlite`
 
 ```sql
 -- Content-addressable storage (deduplication)
@@ -214,12 +214,12 @@ Using same GGUF models as qmd:
 - **embeddinggemma-300M** (~328MB) - Embedding generation
 - **qwen3-reranker-0.6B** (~639MB) - Cross-encoder reranking
 
-Models cached in `~/.cache/nicklaude-search/models/`
+Models cached in `~/.cache/memory-search/models/`
 
 ## File Structure
 
 ```
-~/code/nicklaude-search/
+~/dispatch/services/memory-search/
 ├── CLAUDE.md              # This file
 ├── package.json           # Bun project config
 ├── tsconfig.json          # TypeScript config
@@ -311,7 +311,7 @@ class Manager:
         bun_path = str(HOME / ".bun/bin/bun")
         return subprocess.Popen(
             [bun_path, "run",
-             str(HOME / "code/nicklaude-search/src/daemon.ts")],
+             str(HOME / "code/memory-search/src/daemon.ts")],
             stdout=search_log,
             stderr=search_log,
             env=get_clean_env()
@@ -356,13 +356,13 @@ class Manager:
 ### Remaining
 - [ ] Integration with claude-assistant manager.py
 - [ ] LaunchAgent configuration
-- [ ] Config file at ~/.config/nicklaude-search/config.yml
+- [ ] Config file at ~/.config/memory-search/config.yml
 
 ### How to Test Now
 
 ```bash
 # Manual daemon test
-cd ~/code/nicklaude-search
+cd ~/dispatch/services/memory-search
 ~/.bun/bin/bun run src/daemon.ts
 
 # In another terminal:
@@ -370,6 +370,6 @@ curl http://localhost:7890/health
 curl "http://localhost:7890/search?q=lights"
 
 # Or use CLI:
-~/code/nicklaude-search/bin/search-daemon status
-~/code/nicklaude-search/bin/search-daemon search "control lights"
+~/dispatch/services/memory-search/bin/search-daemon status
+~/dispatch/services/memory-search/bin/search-daemon search "control lights"
 ```

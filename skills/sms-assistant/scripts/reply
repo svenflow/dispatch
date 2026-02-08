@@ -1,0 +1,80 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# dependencies = []
+# ///
+import sys
+import json
+import subprocess
+from pathlib import Path
+
+TRANSCRIPTS_DIR = Path.home() / "transcripts"
+REGISTRY_PATH = Path.home() / "dispatch/state/sessions.json"
+SEND_SMS = Path.home() / ".claude/skills/sms-assistant/scripts/send-sms"
+SEND_SIGNAL = Path.home() / ".claude/skills/signal/scripts/send-signal"
+SEND_SIGNAL_GROUP = Path.home() / ".claude/skills/signal/scripts/send-signal-group"
+
+def is_group_chat_id(chat_id: str) -> bool:
+    bare = chat_id
+    for prefix in ["signal:", "test:"]:
+        if chat_id.startswith(prefix):
+            bare = chat_id[len(prefix):]
+            break
+    return not bare.startswith("+")
+
+def strip_registry_prefix(chat_id: str) -> str:
+    for prefix in ["signal:", "test:"]:
+        if chat_id.startswith(prefix):
+            return chat_id[len(prefix):]
+    return chat_id
+
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: reply 'message'", file=sys.stderr)
+        sys.exit(1)
+
+    cwd = Path.cwd()
+    try:
+        parts = cwd.relative_to(TRANSCRIPTS_DIR).parts
+    except ValueError:
+        print(f"Error: Not in transcript directory", file=sys.stderr)
+        sys.exit(1)
+
+    if len(parts) < 2:
+        print("Error: Not in session directory", file=sys.stderr)
+        sys.exit(1)
+
+    backend, folder = parts[0], parts[1]
+    expected_transcript_dir = str(TRANSCRIPTS_DIR / backend / folder)
+
+    try:
+        registry = json.loads(REGISTRY_PATH.read_text())
+    except Exception as e:
+        print(f"Error: Could not load registry: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    chat_id = None
+    for entry in registry.values():
+        if entry.get("transcript_dir") == expected_transcript_dir:
+            chat_id = entry["chat_id"]
+            break
+
+    if not chat_id:
+        print(f"Error: Session not found in registry", file=sys.stderr)
+        sys.exit(1)
+
+    bare_chat_id = strip_registry_prefix(chat_id)
+    msg = sys.argv[1]
+
+    if backend == "signal":
+        if is_group_chat_id(chat_id):
+            cmd = [str(SEND_SIGNAL_GROUP), bare_chat_id, msg]
+        else:
+            cmd = [str(SEND_SIGNAL), bare_chat_id, msg]
+    else:
+        cmd = [str(SEND_SMS), bare_chat_id, msg]
+
+    result = subprocess.run(cmd)
+    sys.exit(result.returncode)
+
+if __name__ == "__main__":
+    main()

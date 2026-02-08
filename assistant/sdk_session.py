@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -101,10 +102,10 @@ class SDKSession:
         self._consecutive_error_turns = 0
 
         # Per-session logger
-        from assistant.backends import get_backend
-        backend = get_backend(source)
-        session_name = contact_name.lower().replace(" ", "-") + backend.session_suffix
-        self._log = _get_session_logger(session_name)
+        from assistant.common import get_session_name
+        session_name = get_session_name(chat_id, source)
+        log_name = session_name.replace("/", "-")
+        self._log = _get_session_logger(log_name)
 
     async def start(self, resume_session_id: Optional[str] = None):
         """Connect ClaudeSDKClient and start the message processing loop."""
@@ -294,7 +295,8 @@ class SDKSession:
             fallback_model="sonnet",  # Only triggers on 529 (server overloaded), not normal usage
             max_turns=turn_limit,
             hooks={
-                "Stop": [HookMatcher(hooks=[self._stop_hook])]
+                "PreToolUse": [HookMatcher(matcher="Read", hooks=[self._resize_image_hook])],
+                "Stop": [HookMatcher(hooks=[self._stop_hook])],
             }
         )
 
@@ -338,6 +340,57 @@ class SDKSession:
                     return PermissionResultDeny(reason="Sensitive file blocked for favorites tier")
 
         return PermissionResultAllow()
+
+    async def _resize_image_hook(self, input_data: dict[str, Any], tool_use_id: str | None, context: Any) -> dict[str, Any]:
+        """PreToolUse hook for Read: block oversized images to prevent API errors.
+
+        The API rejects images >2000px in multi-image conversations.
+        If an image is too large, deny the read and tell Claude to resize first.
+        """
+        IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff"}
+        MAX_DIM = 2000  # API limit for multi-image (>20 images) requests
+
+        tool_input = input_data.get("tool_input", {})
+        file_path = tool_input.get("file_path", "")
+        if not file_path:
+            return {}
+
+        ext = Path(file_path).suffix.lower()
+        if ext not in IMAGE_EXTS:
+            return {}
+
+        if not Path(file_path).exists():
+            return {}
+
+        try:
+            result = subprocess.run(
+                ["sips", "-g", "pixelWidth", "-g", "pixelHeight", file_path],
+                capture_output=True, text=True, timeout=5,
+            )
+            width = height = 0
+            for line in result.stdout.splitlines():
+                if "pixelWidth" in line:
+                    width = int(line.split(":")[-1].strip())
+                elif "pixelHeight" in line:
+                    height = int(line.split(":")[-1].strip())
+
+            if width <= MAX_DIM and height <= MAX_DIM:
+                return {}
+
+            self._log.info(f"IMAGE_TOO_LARGE | {file_path} | {width}x{height}")
+            return {
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": (
+                        f"Image is {width}x{height}px. The API rejects images >2000px when there are many images in the conversation. "
+                        f"Resize first: sips --resampleHeightWidthMax {MAX_DIM} \"{file_path}\" then read again."
+                    ),
+                },
+            }
+        except Exception as e:
+            self._log.warning(f"IMAGE_CHECK_ERROR | {file_path} | {e}")
+            return {}
 
     async def _stop_hook(self, input_data: dict[str, Any], tool_use_id: str | None, context: Any) -> dict[str, Any]:
         """Stop hook: remind Claude to send updates via send-sms if needed.

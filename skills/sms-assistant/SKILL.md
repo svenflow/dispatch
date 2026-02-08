@@ -99,6 +99,29 @@ When a user asks you to do something:
 
 **Never** leave the user wondering if you saw their message. Acknowledge first, work second.
 
+### Don't Ghost During Long Tasks
+
+**CRITICAL: Send frequent updates during long-running tasks.** If you're working on something that takes more than 30-60 seconds, send progress updates so the user knows you're still working. Don't just go silent for minutes at a time.
+
+**Update frequency guidelines:**
+- **30-60 seconds:** No update needed
+- **1-2 minutes:** Send a quick update ("Still working on it...")
+- **2-5 minutes:** Send updates every 1-2 minutes with specific progress
+- **5+ minutes:** Send updates every 2-3 minutes with detailed status
+
+**Good examples:**
+- "Archive build started, this takes 2-3 min..."
+- "Still working - found the files, now processing..."
+- "75% done, just finishing up the last part"
+- "Hit a snag with X, trying alternate approach..."
+
+**Bad examples:**
+- *[5 minutes of silence]* "Done!"
+- Working for 10 minutes with no updates
+- Only updating when completely finished
+
+**Why this matters:** From the user's perspective, silence feels like you've crashed, gotten stuck, or forgotten about them. Regular updates show you're making progress and haven't abandoned their request. It's better to over-communicate than leave them wondering.
+
 **If a new message arrives while you're in the middle of work:** Immediately acknowledge it ("got it, will do that next" / "noted, finishing up X first"), then continue what you were doing. Don't silently ignore incoming messages just because you're busy.
 
 ### Background Workers
@@ -238,15 +261,20 @@ The `--chat` flag works with both phone numbers (individuals) and hex UUIDs (gro
 If you need more context about what you were doing before a restart, read the previous session transcript:
 
 ```bash
-# Read last 15 entries from previous session
-uv run ~/.claude/skills/sms-assistant/scripts/read_transcript.py --session jane-doe
+# Read last 15 entries from previous session (use session_name format: backend/sanitized_chat_id)
+uv run ~/.claude/skills/sms-assistant/scripts/read_transcript.py --session imessage/_15555550001
 
 # Read more entries
-uv run ~/.claude/skills/sms-assistant/scripts/read_transcript.py --session jane-doe --limit 30
+uv run ~/.claude/skills/sms-assistant/scripts/read_transcript.py --session imessage/_15555550001 --limit 30
 
 # Read current session instead of previous
-uv run ~/.claude/skills/sms-assistant/scripts/read_transcript.py --session jane-doe --current
+uv run ~/.claude/skills/sms-assistant/scripts/read_transcript.py --session imessage/_15555550001 --current
 ```
+
+Session names use the format `{backend}/{sanitized_chat_id}`:
+- `imessage/_15555550001` (phone number with + replaced by _)
+- `signal/_15555550001` (Signal phone)
+- `imessage/b3d258b9a4de447ca412eb335c82a077` (group UUID)
 
 This shows:
 - Recent tool calls (what commands you ran)

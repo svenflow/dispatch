@@ -109,15 +109,22 @@ The manager daemon:
 
 ## Transcript Directories
 
-Each contact has their own directory:
+Each contact has their own directory, organized by backend:
 
 ```
 ~/transcripts/
-├── jane-doe/
-│   └── .claude -> ~/.claude    # Symlink so skills work
-└── john-smith/
-    └── .claude -> ~/.claude
+├── imessage/
+│   ├── _15555550001/           # Phone number (+ replaced with _)
+│   │   └── .claude -> ~/.claude
+│   └── b3d258b9a4de447ca412eb335c82a077/  # Group UUID
+│       └── .claude -> ~/.claude
+├── signal/
+│   └── _15555550001/
+│       └── .claude -> ~/.claude
+└── master/                     # Master session (unchanged)
 ```
+
+Session names use the format `{backend}/{sanitized_chat_id}` (e.g., `imessage/_15555550001`).
 
 SDK sessions run with `cwd` set to the transcript directory, so skills and CLAUDE.md are picked up automatically via the `.claude` symlink.
 

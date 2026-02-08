@@ -45,6 +45,26 @@ export interface StatusResponse {
   uptime: number;
 }
 
+export interface MemorySaveRequest {
+  contact: string;
+  memory_text: string;
+  type?: string;
+  importance?: number;
+  tags?: string[];
+}
+
+export interface MemoryLoadRequest {
+  contact: string;
+  type?: string;
+  limit?: number;
+}
+
+export interface MemorySearchRequest {
+  query: string;
+  contact?: string;
+  limit?: number;
+}
+
 // =============================================================================
 // Server
 // =============================================================================
@@ -160,6 +180,27 @@ export class Server {
 
       if (path === "/reindex" && req.method === "POST") {
         return await this.handleReindex(req, headers);
+      }
+
+      // Memory endpoints
+      if (path === "/memory/save" && req.method === "POST") {
+        return await this.handleMemorySave(req, headers);
+      }
+
+      if (path === "/memory/load" && req.method === "GET") {
+        return this.handleMemoryLoad(url, headers);
+      }
+
+      if (path === "/memory/search" && req.method === "GET") {
+        return this.handleMemorySearch(url, headers);
+      }
+
+      if (path === "/memory/delete" && req.method === "POST") {
+        return await this.handleMemoryDelete(req, headers);
+      }
+
+      if (path === "/memory/stats" && req.method === "GET") {
+        return this.handleMemoryStats(headers);
       }
 
       // 404
@@ -312,5 +353,95 @@ export class Server {
         headers,
       });
     }
+  }
+
+  // ===========================================================================
+  // Memory Handlers
+  // ===========================================================================
+
+  private async handleMemorySave(req: Request, headers: Record<string, string>): Promise<Response> {
+    try {
+      const body = await req.json() as MemorySaveRequest;
+
+      if (!body.contact || !body.memory_text) {
+        return new Response(
+          JSON.stringify({ error: "Missing required fields: contact, memory_text" }),
+          { status: 400, headers }
+        );
+      }
+
+      const id = this.store.saveMemory(
+        body.contact,
+        body.memory_text,
+        body.type || "fact",
+        body.importance || 3,
+        body.tags || []
+      );
+
+      return new Response(JSON.stringify({ success: true, id }), { headers });
+    } catch (error) {
+      return new Response(JSON.stringify({ error: String(error) }), {
+        status: 500,
+        headers,
+      });
+    }
+  }
+
+  private handleMemoryLoad(url: URL, headers: Record<string, string>): Response {
+    const contact = url.searchParams.get("contact");
+    if (!contact) {
+      return new Response(
+        JSON.stringify({ error: "Missing required parameter: contact" }),
+        { status: 400, headers }
+      );
+    }
+
+    const type = url.searchParams.get("type") || undefined;
+    const limit = parseInt(url.searchParams.get("limit") || "100", 10);
+
+    const memories = this.store.loadMemories(contact, type, limit);
+    return new Response(JSON.stringify({ memories }), { headers });
+  }
+
+  private handleMemorySearch(url: URL, headers: Record<string, string>): Response {
+    const query = url.searchParams.get("q");
+    if (!query) {
+      return new Response(
+        JSON.stringify({ error: "Missing required parameter: q" }),
+        { status: 400, headers }
+      );
+    }
+
+    const contact = url.searchParams.get("contact") || undefined;
+    const limit = parseInt(url.searchParams.get("limit") || "20", 10);
+
+    const memories = this.store.searchMemories(query, contact, limit);
+    return new Response(JSON.stringify({ memories }), { headers });
+  }
+
+  private async handleMemoryDelete(req: Request, headers: Record<string, string>): Promise<Response> {
+    try {
+      const body = await req.json() as { id: number };
+
+      if (!body.id) {
+        return new Response(
+          JSON.stringify({ error: "Missing required field: id" }),
+          { status: 400, headers }
+        );
+      }
+
+      this.store.deleteMemory(body.id);
+      return new Response(JSON.stringify({ success: true }), { headers });
+    } catch (error) {
+      return new Response(JSON.stringify({ error: String(error) }), {
+        status: 500,
+        headers,
+      });
+    }
+  }
+
+  private handleMemoryStats(headers: Record<string, string>): Response {
+    const stats = this.store.getMemoryStats();
+    return new Response(JSON.stringify(stats), { headers });
   }
 }

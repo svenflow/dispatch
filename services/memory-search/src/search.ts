@@ -13,7 +13,13 @@ export interface RankedResult extends SearchResult {
   ftsRank?: number;
   vecRank?: number;
   rerankScore?: number;
+  bestChunkIdx?: number;
 }
+
+// Reranking chunk size - smaller for faster reranking (500 chars = ~125 tokens)
+// We use smaller chunks than embedding because reranker just needs relevance signal
+const RERANK_CHUNK_SIZE = 500;
+const RERANK_CHUNK_OVERLAP = 50;
 
 // =============================================================================
 // Vector Math
@@ -206,11 +212,135 @@ export class SearchEngine {
   }
 
   /**
+   * Get cache key for reranking (includes chunk index for cache differentiation)
+   */
+  private getRerankCacheKey(query: string, file: string, chunkIdx?: number): string {
+    const chunkSuffix = chunkIdx !== undefined ? `:${chunkIdx}` : "";
+    return `rerank:${hashContent(query)}:${hashContent(file)}${chunkSuffix}`;
+  }
+
+  /**
+   * Simple chunking for reranking (smaller than embedding chunks).
+   */
+  private chunkForRerank(content: string): string[] {
+    if (content.length <= RERANK_CHUNK_SIZE) {
+      return [content];
+    }
+
+    const chunks: string[] = [];
+    let start = 0;
+    const maxChunks = 100; // Safety limit
+
+    while (start < content.length && chunks.length < maxChunks) {
+      let end = Math.min(start + RERANK_CHUNK_SIZE, content.length);
+
+      // Try to break at sentence/paragraph (but don't go backwards)
+      if (end < content.length) {
+        const sentenceBreak = content.lastIndexOf(". ", end);
+        if (sentenceBreak > start + RERANK_CHUNK_SIZE / 2) {
+          end = sentenceBreak + 2;
+        }
+      }
+
+      chunks.push(content.slice(start, end).trim());
+
+      // Advance start, ensuring we always make progress
+      const nextStart = end - RERANK_CHUNK_OVERLAP;
+      start = Math.max(nextStart, start + 1);
+      if (start >= content.length - 1) break;
+    }
+
+    return chunks.filter(c => c.length > 0);
+  }
+
+  /**
+   * Select the best chunk from a document based on query keyword overlap.
+   * This is smarter than just truncating - we pick the chunk most likely to be relevant.
+   */
+  private selectBestChunk(body: string, query: string): { text: string; idx: number } {
+    const chunks = this.chunkForRerank(body);
+
+    if (chunks.length === 0) {
+      return { text: body.slice(0, RERANK_CHUNK_SIZE), idx: 0 };
+    }
+
+    if (chunks.length === 1) {
+      return { text: chunks[0], idx: 0 };
+    }
+
+    // Score each chunk by query term overlap
+    const queryTerms = query.toLowerCase().split(/\s+/).filter(t => t.length > 2);
+    let bestIdx = 0;
+    let bestScore = -1;
+
+    for (let i = 0; i < chunks.length; i++) {
+      const chunkLower = chunks[i].toLowerCase();
+      const score = queryTerms.reduce((acc, term) => acc + (chunkLower.includes(term) ? 1 : 0), 0);
+      if (score > bestScore) {
+        bestScore = score;
+        bestIdx = i;
+      }
+    }
+
+    return { text: chunks[bestIdx], idx: bestIdx };
+  }
+
+  /**
+   * Cached reranking - checks cache first, only calls LLM for uncached docs
+   */
+  private async cachedRerank(
+    query: string,
+    docs: { file: string; text: string }[]
+  ): Promise<{ file: string; score: number }[]> {
+    if (!this.rerankFn) return [];
+
+    const cachedScores = new Map<string, number>();
+    const uncachedDocs: { file: string; text: string }[] = [];
+
+    // Check cache for each doc
+    for (const doc of docs) {
+      const cacheKey = this.getRerankCacheKey(query, doc.file);
+      const cached = this.store.getCached(cacheKey);
+      if (cached !== null) {
+        cachedScores.set(doc.file, parseFloat(cached));
+      } else {
+        uncachedDocs.push(doc);
+      }
+    }
+
+    // Rerank uncached docs
+    if (uncachedDocs.length > 0) {
+      const reranked = await this.rerankFn(query, uncachedDocs);
+
+      // Cache the results
+      for (const result of reranked) {
+        const cacheKey = this.getRerankCacheKey(query, result.file);
+        this.store.setCached(cacheKey, result.score.toString());
+        cachedScores.set(result.file, result.score);
+      }
+    }
+
+    // Return all results sorted by score
+    return docs
+      .map(doc => ({ file: doc.file, score: cachedScores.get(doc.file) || 0 }))
+      .sort((a, b) => b.score - a.score);
+  }
+
+  /**
    * Full quality search with reranking
    */
   async search(query: string, limit: number = 20, category?: string, after?: number, before?: number): Promise<RankedResult[]> {
-    // Get hybrid results first
-    const hybridResults = await this.searchHybrid(query, limit * 2, category, after, before);
+    // Get FTS results first (skip vector search to save RAM - no embeddings anyway)
+    // Limit to 2x requested to give reranker some flexibility
+    const ftsResults = this.searchFTS(query, Math.min(limit * 2, 30), category, after, before);
+
+    // Convert to hybrid result format
+    const hybridResults: RankedResult[] = ftsResults.map((r, idx) => ({
+      ...r,
+      rrfScore: 1 / (60 + idx + 1), // RRF-style score based on position
+      ftsRank: idx,
+      source: "hybrid" as const,
+    }));
 
     if (hybridResults.length === 0) {
       return [];
@@ -218,17 +348,23 @@ export class SearchEngine {
 
     // Rerank if function is available
     if (this.rerankFn && hybridResults.length > 0) {
-      const docsToRerank = hybridResults.map(r => ({
-        file: r.filepath,
-        text: r.body.slice(0, 4000), // Truncate for reranker context
-      }));
+      // Select best chunk per document (smarter than dumb truncation)
+      const chunkMap = new Map<string, { text: string; idx: number }>();
+      const docsToRerank = hybridResults.map(r => {
+        const { text, idx } = this.selectBestChunk(r.body, query);
+        chunkMap.set(r.filepath, { text, idx });
+        return {
+          file: r.filepath,
+          text,
+        };
+      });
 
       try {
-        const reranked = await this.rerankFn(query, docsToRerank);
+        const reranked = await this.cachedRerank(query, docsToRerank);
 
         // Create a map of rerank scores
         const rerankScores = new Map<string, number>();
-        reranked.forEach((r, idx) => {
+        reranked.forEach((r) => {
           rerankScores.set(r.file, r.score);
         });
 
@@ -237,6 +373,7 @@ export class SearchEngine {
           const result = hybridResults[i];
           const rerankScore = rerankScores.get(result.filepath) ?? 0;
           result.rerankScore = rerankScore;
+          result.bestChunkIdx = chunkMap.get(result.filepath)?.idx ?? 0;
 
           // Position-aware blending
           let rrfWeight: number;

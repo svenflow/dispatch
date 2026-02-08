@@ -82,8 +82,11 @@ Tiers are managed via macOS Contacts.app groups. See tier-specific rule files in
 
 - `~/dispatch/` - Main daemon code
 - `~/.claude/skills/` - Reusable skill modules
-- `~/transcripts/` - Conversation history per contact
-- `~/dispatch/state/sessions.json` - Session metadata
+- `~/transcripts/{backend}/{sanitized_chat_id}/` - Conversation history per contact
+  - Examples: `~/transcripts/imessage/_15555550001/`, `~/transcripts/signal/_15555550001/`
+  - Backend: `imessage`, `signal`, or `test`
+  - Sanitized chat_id: `+` replaced with `_`, registry prefix stripped
+- `~/dispatch/state/sessions.json` - Session metadata (maps chat_id → session info)
 
 ## Daemon Management
 
@@ -187,8 +190,17 @@ description: What this skill does. Include trigger words.
 
 ### How Skills Get Embedded into Sessions
 
-1. Transcript directory created at `~/transcripts/<session-name>/`
-2. Symlink: `~/transcripts/<session-name>/.claude -> ~/.claude` (gives access to all skills)
+1. Transcript directory created at `~/transcripts/{backend}/{sanitized_chat_id}/`
+   - Example: `~/transcripts/imessage/_15555550001/`
+2. Symlink: `~/transcripts/{backend}/{sanitized_chat_id}/.claude -> ~/.claude` (gives access to all skills)
 3. sms-assistant SKILL.md injected with placeholders replaced (`{{CONTACT_NAME}}`, `{{TIER}}`, `{{CHAT_ID}}`)
 4. Contact memory loaded from Contacts.app notes
 5. Tier-specific rules applied from rule files
+
+### Reply CLI
+
+Sessions can use the universal `reply` CLI which auto-detects backend and chat_id from cwd:
+```bash
+~/.claude/skills/sms-assistant/scripts/reply "message"
+```
+This works from any transcript directory and routes to the correct send command (send-sms, send-signal, or send-signal-group).
