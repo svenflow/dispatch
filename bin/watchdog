@@ -1,0 +1,203 @@
+#!/bin/bash
+# Watchdog for dispatch daemon - runs every 60s via launchd
+# Detects daemon crashes and spawns healing Claude session to recover
+
+set -euo pipefail
+
+# Ensure PATH includes our binaries
+export PATH="$HOME/dispatch/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+
+LOCK="/tmp/dispatch-watchdog.lock"
+LOG=~/dispatch/logs/watchdog.log
+CRASH_STATE="/tmp/dispatch-watchdog-crashes.txt"
+PROMPT_FILE="/tmp/watchdog-healing-prompt.txt"
+MAX_CRASHES=5
+STABLE_PERIOD=600  # 10 min - reset crash counter after this
+LOCK_TIMEOUT=1800  # 30 min - max time for healing session
+
+# Get admin phone from config
+ADMIN_PHONE=$(grep -A2 "^owner:" ~/dispatch/config.local.yaml | grep "phone:" | sed 's/.*phone: *"\([^"]*\)".*/\1/')
+
+log() {
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG"
+}
+
+send_sms() {
+  ~/.claude/skills/sms-assistant/scripts/send-sms "$ADMIN_PHONE" "$1" 2>/dev/null || true
+}
+
+# Check if daemon is running (simple check, no timeout needed)
+if claude-assistant status >/dev/null 2>&1; then
+  # Daemon is healthy - reset crash counter if exists
+  [ -f "$CRASH_STATE" ] && rm -f "$CRASH_STATE"
+  exit 0
+fi
+
+# Daemon is down!
+log "Daemon down detected"
+
+# Atomic lock using mkdir
+if ! mkdir "$LOCK" 2>/dev/null; then
+  # Lock exists - check age
+  lock_age=$(( $(date +%s) - $(/usr/bin/stat -f %m "$LOCK") ))
+  if [ $lock_age -lt $LOCK_TIMEOUT ]; then
+    log "Healer already in progress (age ${lock_age}s), exiting"
+    exit 0
+  fi
+  log "Stale lock (age ${lock_age}s), removing"
+  rm -rf "$LOCK"
+  mkdir "$LOCK" || exit 0
+fi
+
+# Clean up lock on exit
+trap 'rm -rf "$LOCK"' EXIT
+
+# Backoff logic - prevent rapid crash loops
+crash_count=0
+last_crash=0
+if [ -f "$CRASH_STATE" ]; then
+  read crash_count last_crash < "$CRASH_STATE" 2>/dev/null || { crash_count=0; last_crash=0; }
+fi
+now=$(date +%s)
+time_since=$((now - last_crash))
+
+# Reset counter if stable for 10 min
+[ $time_since -gt $STABLE_PERIOD ] && crash_count=0
+
+# Check for too many consecutive failures
+if [ $crash_count -ge $MAX_CRASHES ]; then
+  log "CRITICAL: $crash_count consecutive failures, alerting admin"
+  send_sms "[WATCHDOG] CRITICAL: Daemon keeps crashing ($crash_count times). Manual intervention required."
+  exit 1
+fi
+
+# Exponential backoff: 0, 60, 120, 240, 480, 900 (max 15 min)
+if [ $crash_count -gt 0 ]; then
+  backoff=$((60 * (1 << (crash_count - 1))))
+  [ $backoff -gt 900 ] && backoff=900
+  if [ $time_since -lt $backoff ]; then
+    log "Backing off (${backoff}s required, ${time_since}s elapsed, crash #$crash_count)"
+    exit 0
+  fi
+fi
+
+# Increment crash counter
+crash_count=$((crash_count + 1))
+echo "$crash_count $now" > "$CRASH_STATE"
+
+log "Spawning healer (attempt #$crash_count)"
+
+# Always notify admin of crash
+send_sms "[WATCHDOG] Daemon crashed (attempt #$crash_count). Starting auto-recovery..."
+
+# Build healing prompt
+cat > "$PROMPT_FILE" << 'PROMPT_END'
+WATCHDOG RECOVERY MODE - You are the healer Claude
+
+The dispatch daemon has crashed. Your job: restart it FAST, then debug.
+
+## SMS Helper
+```bash
+~/.claude/skills/sms-assistant/scripts/send-sms "ADMIN_PHONE" "your message"
+```
+
+## STEP 1: RESTART IMMEDIATELY (do this first!)
+
+```bash
+# Clean up and restart via launchctl (has FDA)
+pkill -f "dispatch.*manager" 2>/dev/null || true
+rm -f ~/dispatch/state/daemon.pid
+launchctl kickstart -k gui/$(id -u)/com.dispatch.claude-assistant
+sleep 5
+```
+
+## STEP 2: CHECK IF IT WORKED
+
+```bash
+claude-assistant status
+tail -5 ~/dispatch/logs/manager.log | grep -iE "error|fail|unable"
+```
+
+**If healthy** (status OK, no errors): proceed to Step 3 for debugging
+**If broken**: send SMS with the error, try to fix, loop back
+
+## STEP 3: DEBUG THE CRASH (while daemon is running)
+
+Now investigate what caused the original crash:
+```bash
+tail -100 ~/dispatch/logs/manager.log | grep -iE "(error|fail|exception|traceback|sigterm|sigkill)" | tail -20
+```
+
+Send SMS with your findings and any recommended fixes. Include:
+- What caused the crash
+- What you did to fix it (if anything beyond restart)
+- Any preventive measures needed
+
+## STEP 4: RESTART RECENT SESSIONS
+
+After daemon is healthy, restart sessions for contacts who texted in the last hour:
+```bash
+# Find chats with messages in last hour and restart their sessions
+~/.claude/skills/sms-assistant/scripts/read-sms --limit 50 | \
+  awk -F' \\| ' '$2 ~ /^\+/ && $3 == "IN" {print $2}' | \
+  sort -u | \
+  while read chat_id; do
+    claude-assistant restart-session "$chat_id" 2>/dev/null && echo "Restarted: $chat_id" || true
+  done
+```
+
+Send SMS listing which sessions were restarted.
+
+## STEP 5: FINAL VERIFICATION
+
+```bash
+claude-assistant status
+```
+
+Send final SMS:
+- If healthy: "[HEALER] ✓ Daemon recovered. Cause: <summary>. Restarted N sessions."
+- If broken: "[HEALER] ✗ Failed. Error: <specific>. Manual fix needed."
+
+## CRITICAL RULES
+- TEXT EVERY STEP to admin
+- Restart FIRST, debug SECOND
+- launchctl has FDA, direct claude-assistant start may not
+- Don't exit until truly healthy or you've exhausted options
+- You have 15 minutes max
+PROMPT_END
+
+# Replace ADMIN_PHONE placeholder
+sed -i '' "s/ADMIN_PHONE/$ADMIN_PHONE/g" "$PROMPT_FILE"
+
+# Spawn healing Claude (run in background with PID tracking for manual timeout)
+HEALING_PROMPT=$(cat "$PROMPT_FILE")
+claude --dangerously-skip-permissions -p "$HEALING_PROMPT" >> "$LOG" 2>&1 &
+HEALER_PID=$!
+
+# Wait up to 15 minutes for healer
+WAITED=0
+while kill -0 $HEALER_PID 2>/dev/null && [ $WAITED -lt 900 ]; do
+  sleep 10
+  WAITED=$((WAITED + 10))
+done
+
+# Kill if still running after timeout
+if kill -0 $HEALER_PID 2>/dev/null; then
+  log "Healer timed out after 15 min, killing"
+  kill $HEALER_PID 2>/dev/null || true
+  send_sms "[WATCHDOG] Healing session timed out. Manual intervention may be needed."
+fi
+
+# Verify recovery worked
+sleep 5
+if claude-assistant status >/dev/null 2>&1; then
+  log "Recovery successful after attempt #$crash_count"
+  send_sms "[WATCHDOG] Recovery complete! Daemon back online."
+  rm -f "$CRASH_STATE"
+else
+  log "Recovery failed, will retry on next run"
+  send_sms "[WATCHDOG] Recovery attempt #$crash_count failed. Will retry in 60s."
+fi
+
+# Cleanup
+rm -f "$PROMPT_FILE"

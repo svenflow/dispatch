@@ -1,0 +1,30 @@
+#!/bin/bash
+# Show watchdog status
+# Standalone script - doesn't depend on claude-assistant
+
+PLIST_DST=~/Library/LaunchAgents/com.dispatch.watchdog.plist
+CRASH_STATE=/tmp/dispatch-watchdog-crashes.txt
+LOG_FILE=~/dispatch/logs/watchdog.log
+
+if [ -f "$PLIST_DST" ]; then
+  if launchctl list com.dispatch.watchdog >/dev/null 2>&1; then
+    echo "Watchdog: installed and running"
+
+    # Check crash state
+    if [ -f "$CRASH_STATE" ]; then
+      crash_count=$(cut -d' ' -f1 < "$CRASH_STATE")
+      echo "  Recent crashes: $crash_count"
+    fi
+
+    # Show recent log
+    if [ -f "$LOG_FILE" ]; then
+      echo "  Recent log:"
+      tail -3 "$LOG_FILE" | sed 's/^/    /'
+    fi
+  else
+    echo "Watchdog: installed but not running"
+  fi
+else
+  echo "Watchdog: not installed"
+  echo "  Install with: ~/dispatch/bin/watchdog-install"
+fi

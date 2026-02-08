@@ -1,0 +1,17 @@
+#!/bin/bash
+# Uninstall watchdog LaunchAgent
+# Standalone script - doesn't depend on claude-assistant
+
+PLIST_DST=~/Library/LaunchAgents/com.dispatch.watchdog.plist
+
+if [ ! -f "$PLIST_DST" ]; then
+  echo "Watchdog not installed"
+  exit 1
+fi
+
+# Unload the agent
+launchctl unload "$PLIST_DST" 2>/dev/null
+
+# Remove plist
+rm -f "$PLIST_DST"
+echo "Watchdog uninstalled"

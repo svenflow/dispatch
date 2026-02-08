@@ -64,7 +64,7 @@ The system uses the **Claude Agent SDK** (`claude_agent_sdk`) to manage sessions
 ├── logs/
 │   ├── manager.log      # Main daemon log
 │   ├── session_lifecycle.log  # Session create/kill/restart events
-│   └── sessions/        # Per-session logs (jane-doe.log, etc.)
+│   └── sessions/        # Per-session logs (john-smith.log, etc.)
 ├── .venv/               # Python virtual environment
 └── CLAUDE.md            # This file
 ```
@@ -107,6 +107,65 @@ The manager daemon:
 4. Health checks sessions every 5 minutes, auto-restarts if unhealthy
 5. Kills idle sessions after 2 hours
 
+## Watchdog (Auto-Recovery)
+
+The watchdog monitors the daemon and automatically recovers from crashes. It runs as a separate LaunchAgent, checking daemon health every 60 seconds.
+
+### What it does
+
+1. **Detects daemon crashes** - Runs `claude-assistant status` every 60s
+2. **Spawns healing Claude** - On crash, spawns a Claude instance with `--dangerously-skip-permissions` to diagnose and fix
+3. **Notifies admin** - Sends SMS to admin at each recovery attempt
+4. **Exponential backoff** - Waits progressively longer between attempts (60s, 120s, 240s, ...)
+5. **Gives up gracefully** - After 5 consecutive failures, alerts admin for manual intervention
+
+### Installation
+
+```bash
+~/dispatch/bin/watchdog-install    # Install and start watchdog
+~/dispatch/bin/watchdog-uninstall  # Stop and remove watchdog
+~/dispatch/bin/watchdog-status     # Check watchdog status
+```
+
+The install script copies `launchd/com.dispatch.watchdog.plist` to `~/Library/LaunchAgents/` and loads it.
+
+### How the healer works
+
+When the daemon is down:
+1. Watchdog acquires a lock to prevent duplicate healers
+2. Spawns Claude with a recovery prompt that:
+   - Restarts daemon via `launchctl kickstart` (has Full Disk Access)
+   - Checks logs for crash cause
+   - Restarts recently-active sessions
+   - Sends status SMS to admin
+3. Healer has 15-minute timeout
+4. If recovery succeeds, crash counter resets
+5. If recovery fails, backs off and retries next cycle
+
+### Files
+
+- `bin/watchdog` - Main watchdog script
+- `bin/watchdog-install` - Installation script
+- `bin/watchdog-uninstall` - Uninstall script
+- `bin/watchdog-status` - Status check
+- `launchd/com.dispatch.watchdog.plist` - LaunchAgent plist
+- `logs/watchdog.log` - Watchdog activity log
+- `logs/watchdog-launchd.log` - launchd stdout/stderr
+
+### Troubleshooting
+
+```bash
+# Check if watchdog is running
+launchctl list com.dispatch.watchdog
+
+# View recent watchdog activity
+tail -20 ~/dispatch/logs/watchdog.log
+
+# Force daemon restart (bypasses backoff)
+rm -f /tmp/dispatch-watchdog-crashes.txt
+~/dispatch/bin/watchdog
+```
+
 ## Transcript Directories
 
 Each contact has their own directory, organized by backend:
@@ -114,17 +173,17 @@ Each contact has their own directory, organized by backend:
 ```
 ~/transcripts/
 ├── imessage/
-│   ├── _15555550001/           # Phone number (+ replaced with _)
+│   ├── _15555550100/           # Phone number (+ replaced with _)
 │   │   └── .claude -> ~/.claude
 │   └── b3d258b9a4de447ca412eb335c82a077/  # Group UUID
 │       └── .claude -> ~/.claude
 ├── signal/
-│   └── _15555550001/
+│   └── _15555550100/
 │       └── .claude -> ~/.claude
 └── master/                     # Master session (unchanged)
 ```
 
-Session names use the format `{backend}/{sanitized_chat_id}` (e.g., `imessage/_15555550001`).
+Session names use the format `{backend}/{sanitized_chat_id}` (e.g., `imessage/_15555550100`).
 
 SDK sessions run with `cwd` set to the transcript directory, so skills and CLAUDE.md are picked up automatically via the `.claude` symlink.
 
@@ -200,3 +259,53 @@ Tests use a `FakeClaudeSDKClient` (in `conftest.py`) that replaces the real Agen
 
 A PostToolUse hook automatically runs `ruff` and `ty` on Python files after edits.
 Configure in `~/.claude/settings.json`.
+
+## Type Checking with ty
+
+This project uses **ty** (Astral's Python type checker) to catch type errors. The `assistant/` directory must pass ty with zero errors.
+
+### Running ty manually
+
+```bash
+cd ~/dispatch
+uvx ty check --python .venv/bin/python assistant/
+```
+
+### Pre-commit hook
+
+A git pre-commit hook automatically runs ty before each commit. If type checking fails, the commit is blocked.
+
+To skip temporarily (not recommended):
+```bash
+git commit --no-verify
+```
+
+### Common type patterns
+
+```python
+# Optional parameters - ALWAYS use union syntax
+def foo(name: str | None = None):  # ✓ Correct
+def foo(name: str = None):          # ✗ Wrong - invalid-parameter-default
+
+# Await async functions
+result = await async_func()  # ✓ Correct
+result = async_func()        # ✗ Wrong - returns coroutine, not result
+
+# None checks before subscripting
+value = d.get("key")
+if value is not None:
+    use(value["subkey"])  # ✓ ty knows value is not None
+```
+
+### Configuration
+
+ty is configured in `pyproject.toml`:
+
+```toml
+[tool.ty.environment]
+extra-paths = [
+    "skills/contacts/scripts",
+    "skills/reminders/scripts",
+    # ... paths for dynamically imported modules
+]
+```

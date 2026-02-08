@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.dispatch.watchdog</string>
+
+    <!-- Path to watchdog script - adjust to your dispatch location -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>$HOME/dispatch/bin/watchdog</string>
+    </array>
+
+    <!-- Run every 60 seconds -->
+    <key>StartInterval</key>
+    <integer>60</integer>
+
+    <!-- Start immediately when loaded -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Log output - adjust to your dispatch location -->
+    <key>StandardOutPath</key>
+    <string>$HOME/dispatch/logs/watchdog-launchd.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>$HOME/dispatch/logs/watchdog-launchd.log</string>
+
+    <!-- Environment - adjust paths as needed -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin:$HOME/.local/bin:$HOME/dispatch/bin</string>
+        <key>HOME</key>
+        <!-- launchd requires absolute path - replace with your home directory -->
+        <string>/Users/YOUR_USERNAME</string>
+    </dict>
+
+    <!-- Minimum time between invocations -->
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+</dict>
+</plist>

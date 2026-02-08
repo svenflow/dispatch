@@ -1,0 +1,22 @@
+#!/bin/bash
+# Install watchdog LaunchAgent for auto-recovery
+# Standalone script - doesn't depend on claude-assistant
+
+PLIST_SRC=~/dispatch/launchd/com.dispatch.watchdog.plist
+PLIST_DST=~/Library/LaunchAgents/com.dispatch.watchdog.plist
+
+if [ ! -f "$PLIST_SRC" ]; then
+  echo "Error: Watchdog plist not found: $PLIST_SRC"
+  exit 1
+fi
+
+# Create LaunchAgents directory if needed
+mkdir -p ~/Library/LaunchAgents
+
+# Copy plist
+cp "$PLIST_SRC" "$PLIST_DST"
+echo "Installed: $PLIST_DST"
+
+# Load the agent
+launchctl load "$PLIST_DST"
+echo "Watchdog loaded - will check daemon health every 60s"
