@@ -1,5 +1,5 @@
 /**
- * Configuration management for nicklaude-search daemon.
+ * Configuration management for memory-search daemon.
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
@@ -44,7 +44,7 @@ export interface Config {
 const HOME = homedir();
 
 export function getConfigDir(): string {
-  return join(HOME, ".config", "nicklaude-search");
+  return join(HOME, ".config", "memory-search");
 }
 
 export function getConfigPath(): string {
@@ -52,7 +52,7 @@ export function getConfigPath(): string {
 }
 
 export function getCacheDir(): string {
-  return join(HOME, ".cache", "nicklaude-search");
+  return join(HOME, ".cache", "memory-search");
 }
 
 export function getDbPath(): string {
@@ -71,27 +71,26 @@ export function getDefaultConfig(): Config {
   return {
     poll_interval: 5,
     categories: {
+      // SDK session transcripts (JSONL format)
       transcripts: {
         path: join(HOME, "transcripts"),
         pattern: "**/*.jsonl",
         type: "append_only",
       },
+      // iMessage/SMS from chat.db
       sms: {
         source: "chat.db",
         type: "append_only",
       },
+      // Claude skills documentation
       skills: {
         path: join(HOME, ".claude", "skills"),
         pattern: "**/*.md",
         type: "mutable",
       },
+      // Contact notes from Contacts.app
       contacts: {
         source: "contacts_notes",
-        type: "mutable",
-      },
-      documents: {
-        path: join(HOME, "Documents"),
-        pattern: "**/*.{md,txt}",
         type: "mutable",
       },
     },

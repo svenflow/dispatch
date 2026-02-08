@@ -13,8 +13,9 @@ def get_transcript_path(session_name: str) -> Optional[Path]:
     # Claude stores transcripts in ~/.claude/projects/-Users-{Path.home().name}-transcripts-<session>/
     projects_dir = Path.home() / ".claude/projects"
 
-    # Try the exact session name
-    session_dir = projects_dir / f"-Users-{Path.home().name}-transcripts-{session_name}"
+    # Try the exact session name (sanitize "/" to "-" to match SDK path format)
+    sanitized = session_name.replace("/", "-")
+    session_dir = projects_dir / f"-Users-{Path.home().name}-transcripts-{sanitized}"
 
     if not session_dir.exists():
         return None

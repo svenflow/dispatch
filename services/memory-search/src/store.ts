@@ -41,6 +41,17 @@ export interface IndexStatus {
   last_modified: string | null;
 }
 
+export interface Memory {
+  id: number;
+  contact: string;
+  type: string;
+  memory_text: string;
+  importance: number;
+  tags: string[];
+  created_at: string;
+  modified_at: string;
+}
+
 // =============================================================================
 // Database Initialization
 // =============================================================================
@@ -106,6 +117,72 @@ function initDatabase(db: Database): void {
       tokenize='porter unicode61'
     )
   `);
+
+  // LLM cache for reranking and query expansion
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS llm_cache (
+      cache_key TEXT PRIMARY KEY,
+      result TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_llm_cache_created ON llm_cache(created_at)`);
+
+  // Memories table - unified memory storage
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS memories (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      contact TEXT NOT NULL,
+      type TEXT NOT NULL DEFAULT 'fact',
+      memory_text TEXT NOT NULL,
+      importance INTEGER NOT NULL DEFAULT 3,
+      tags TEXT,
+      created_at TEXT NOT NULL,
+      modified_at TEXT NOT NULL
+    )
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_memories_contact ON memories(contact)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(type)`);
+
+  // FTS for memories
+  db.exec(`
+    CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+      contact, type, memory_text,
+      tokenize='porter unicode61'
+    )
+  `);
+
+  // Check if memory triggers exist before creating
+  const memTriggerExists = db.query(`
+    SELECT name FROM sqlite_master
+    WHERE type='trigger' AND name='memories_ai'
+  `).get();
+
+  if (!memTriggerExists) {
+    db.exec(`
+      CREATE TRIGGER memories_ai AFTER INSERT ON memories
+      BEGIN
+        INSERT INTO memories_fts(rowid, contact, type, memory_text)
+        VALUES (new.id, new.contact, new.type, new.memory_text);
+      END
+    `);
+
+    db.exec(`
+      CREATE TRIGGER memories_ad AFTER DELETE ON memories
+      BEGIN
+        DELETE FROM memories_fts WHERE rowid = old.id;
+      END
+    `);
+
+    db.exec(`
+      CREATE TRIGGER memories_au AFTER UPDATE ON memories
+      BEGIN
+        DELETE FROM memories_fts WHERE rowid = old.id;
+        INSERT INTO memories_fts(rowid, contact, type, memory_text)
+        VALUES (new.id, new.contact, new.type, new.memory_text);
+      END
+    `);
+  }
 
   // Check if trigger exists before creating
   const triggerExists = db.query(`
@@ -442,6 +519,142 @@ export class Store {
 
   vacuum(): void {
     this.db.exec("VACUUM");
+  }
+
+  // ===========================================================================
+  // LLM Cache Operations
+  // ===========================================================================
+
+  getCached(cacheKey: string): string | null {
+    const row = this.db.query(`
+      SELECT result FROM llm_cache WHERE cache_key = ?
+    `).get(cacheKey) as { result: string } | null;
+    return row?.result || null;
+  }
+
+  setCached(cacheKey: string, result: string): void {
+    const stmt = this.db.prepare(`
+      INSERT OR REPLACE INTO llm_cache (cache_key, result, created_at)
+      VALUES (?, ?, ?)
+    `);
+    stmt.run(cacheKey, result, new Date().toISOString());
+  }
+
+  clearCache(): void {
+    this.db.exec(`DELETE FROM llm_cache`);
+  }
+
+  getCacheStats(): { count: number; oldestEntry: string | null } {
+    const countRow = this.db.query(`SELECT COUNT(*) as count FROM llm_cache`).get() as { count: number };
+    const oldestRow = this.db.query(`SELECT MIN(created_at) as oldest FROM llm_cache`).get() as { oldest: string | null };
+    return { count: countRow.count, oldestEntry: oldestRow.oldest };
+  }
+
+  // ===========================================================================
+  // Memory Operations
+  // ===========================================================================
+
+  saveMemory(
+    contact: string,
+    memoryText: string,
+    type: string = "fact",
+    importance: number = 3,
+    tags: string[] = []
+  ): number {
+    const now = new Date().toISOString();
+    const stmt = this.db.prepare(`
+      INSERT INTO memories (contact, type, memory_text, importance, tags, created_at, modified_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+    const result = stmt.run(contact, type, memoryText, importance, JSON.stringify(tags), now, now);
+    return Number(result.lastInsertRowid);
+  }
+
+  loadMemories(contact: string, type?: string, limit: number = 100): Memory[] {
+    let sql = `SELECT * FROM memories WHERE contact = ?`;
+    const params: (string | number)[] = [contact];
+
+    if (type) {
+      sql += ` AND type = ?`;
+      params.push(type);
+    }
+
+    sql += ` ORDER BY importance DESC, created_at DESC LIMIT ?`;
+    params.push(limit);
+
+    const rows = this.db.query(sql).all(...params) as Array<{
+      id: number;
+      contact: string;
+      type: string;
+      memory_text: string;
+      importance: number;
+      tags: string;
+      created_at: string;
+      modified_at: string;
+    }>;
+
+    return rows.map(r => ({
+      ...r,
+      tags: r.tags ? JSON.parse(r.tags) : [],
+    }));
+  }
+
+  searchMemories(query: string, contact?: string, limit: number = 20): Memory[] {
+    let sql = `
+      SELECT m.*
+      FROM memories_fts f
+      JOIN memories m ON f.rowid = m.id
+      WHERE memories_fts MATCH ?
+    `;
+    const params: (string | number)[] = [query];
+
+    if (contact) {
+      sql += ` AND m.contact = ?`;
+      params.push(contact);
+    }
+
+    sql += ` ORDER BY rank LIMIT ?`;
+    params.push(limit);
+
+    const rows = this.db.query(sql).all(...params) as Array<{
+      id: number;
+      contact: string;
+      type: string;
+      memory_text: string;
+      importance: number;
+      tags: string;
+      created_at: string;
+      modified_at: string;
+    }>;
+
+    return rows.map(r => ({
+      ...r,
+      tags: r.tags ? JSON.parse(r.tags) : [],
+    }));
+  }
+
+  deleteMemory(id: number): void {
+    this.db.prepare(`DELETE FROM memories WHERE id = ?`).run(id);
+  }
+
+  getMemoryStats(): { total: number; byContact: Record<string, number>; byType: Record<string, number> } {
+    const totalRow = this.db.query(`SELECT COUNT(*) as count FROM memories`).get() as { count: number };
+
+    const contactRows = this.db.query(`
+      SELECT contact, COUNT(*) as count FROM memories GROUP BY contact
+    `).all() as { contact: string; count: number }[];
+
+    const typeRows = this.db.query(`
+      SELECT type, COUNT(*) as count FROM memories GROUP BY type
+    `).all() as { type: string; count: number }[];
+
+    const byContact: Record<string, number> = {};
+    const byType: Record<string, number> = {};
+
+    for (const row of contactRows) byContact[row.contact] = row.count;
+    for (const row of typeRows) byType[row.type] = row.count;
+
+    return { total: totalRow.count, byContact, byType };
   }
 }
 

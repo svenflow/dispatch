@@ -163,19 +163,22 @@ class TestIsGroupChatId:
 
 
 class TestSessionName:
-    """Test session name generation per backend."""
+    """Test session name generation per backend (chat_id-based)."""
 
-    def test_imessage_no_suffix(self):
-        assert get_session_name("Test Admin", "imessage") == "test-admin"
+    def test_imessage_phone(self):
+        assert get_session_name("+15555551234", "imessage") == "imessage/_15555551234"
 
-    def test_signal_suffix(self):
-        assert get_session_name("Test Admin", "signal") == "test-admin-signal"
+    def test_signal_phone(self):
+        assert get_session_name("signal:+15555551234", "signal") == "signal/_15555551234"
 
-    def test_test_suffix(self):
-        assert get_session_name("Test User", "test") == "test-user-test"
+    def test_test_phone(self):
+        assert get_session_name("test:+15555551234", "test") == "test/_15555551234"
 
     def test_default_is_imessage(self):
-        assert get_session_name("Test User") == "test-user"
+        assert get_session_name("+15555551234") == "imessage/_15555551234"
+
+    def test_group_chat_id(self):
+        assert get_session_name("abc123def456", "imessage") == "imessage/abc123def456"
 
 
 class TestWrapSms:
@@ -184,18 +187,18 @@ class TestWrapSms:
     def test_imessage_wrap(self):
         result = wrap_sms("hello", "Test User", "admin", "+15555551234", source="imessage")
         assert "SMS FROM" in result
-        assert "send-sms" in result
+        assert "reply" in result
         assert "+15555551234" in result
 
     def test_signal_wrap(self):
         result = wrap_sms("hello", "Test User", "admin", "+15555551234", source="signal")
         assert "SIGNAL FROM" in result
-        assert "send-signal" in result
+        assert "reply" in result
 
     def test_test_wrap(self):
         result = wrap_sms("hello", "Test User", "admin", "+15555551234", source="test")
         assert "TEST FROM" in result
-        assert "test-send" in result
+        assert "reply" in result
 
     def test_wrap_includes_message_placeholder(self):
         """After fix #4, 'message' placeholder is appended at display time."""
@@ -217,7 +220,7 @@ class TestWrapGroupMessage:
             source="imessage",
         )
         assert "GROUP SMS" in result
-        assert "send-sms" in result
+        assert "reply" in result
 
     def test_signal_group(self):
         result = wrap_group_message(
@@ -225,7 +228,7 @@ class TestWrapGroupMessage:
             source="signal",
         )
         assert "GROUP SIGNAL" in result
-        assert "send-signal-group" in result
+        assert "reply" in result
 
     def test_group_wrap_includes_message_placeholder(self):
         result = wrap_group_message(

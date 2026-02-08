@@ -170,7 +170,7 @@ class SDKBackend:
             if chat_id in self.sessions and self.sessions[chat_id].is_alive():
                 return self.sessions[chat_id]
 
-            session_name = get_session_name(contact_name, source=source)
+            session_name = get_session_name(chat_id, source=source)
             transcript_dir = ensure_transcript_dir(session_name)
 
             # For non-default backends, create session-specific CLAUDE.md override
@@ -231,7 +231,7 @@ class SDKBackend:
         if chat_id in self.sessions and self.sessions[chat_id].is_alive():
             return self.sessions[chat_id]
 
-        session_name = get_session_name(contact_name, source=source)
+        session_name = get_session_name(chat_id, source=source)
         transcript_dir = ensure_transcript_dir(session_name)
 
         self._create_backend_claude_md(transcript_dir, source)
@@ -348,21 +348,10 @@ class SDKBackend:
 
     def get_group_session_name(self, chat_id: str, display_name: str = None,
                                 source: str = "imessage") -> str:
-        """Generate session name for a group chat."""
         existing = self.registry.get(chat_id)
         if existing:
             return existing["session_name"]
-
-        if display_name:
-            safe_name = "".join(c if c.isalnum() else "_" for c in display_name.lower())
-            base_name = f"group-{safe_name[:20]}"
-        else:
-            safe_id = "".join(c if c.isalnum() else "" for c in chat_id)[:12]
-            base_name = f"group-{safe_id}"
-
-        from assistant.backends import get_backend
-        backend = get_backend(source)
-        return f"{base_name}{backend.session_suffix}"
+        return get_session_name(chat_id, source)
 
     async def create_group_session(
         self,
@@ -523,7 +512,7 @@ class SDKBackend:
             if bg_id in self.sessions and self.sessions[bg_id].is_alive():
                 return self.sessions[bg_id]
 
-            fg_session_name = get_session_name(contact_name, source=source)
+            fg_session_name = get_session_name(chat_id, source=source)
             transcript_dir = ensure_transcript_dir(fg_session_name)
 
             session = SDKSession(
@@ -560,7 +549,9 @@ Waiting for nightly trigger...
     async def inject_consolidation(self, contact_name: str, chat_id: str):
         """Trigger nightly consolidation for a contact."""
         bg_id = f"{chat_id}-bg"
-        fg_session_name = get_session_name(contact_name)
+        reg = self.registry.get(chat_id)
+        source = reg.get("source", "imessage") if reg else "imessage"
+        fg_session_name = get_session_name(chat_id, source=source)
 
         # Ensure BG session exists
         if bg_id not in self.sessions or not self.sessions[bg_id].is_alive():
@@ -840,11 +831,10 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
         session = self.sessions.get(chat_id)
         if not session:
             return ""
-        from assistant.backends import get_backend
-        backend = get_backend(session.source)
-        session_name = session.contact_name.lower().replace(" ", "-") + backend.session_suffix
+        session_name = get_session_name(session.chat_id, session.source)
+        log_name = session_name.replace("/", "-")
         from assistant.sdk_session import SESSION_LOG_DIR
-        log_path = SESSION_LOG_DIR / f"{session_name}.log"
+        log_path = SESSION_LOG_DIR / f"{log_name}.log"
         if log_path.exists():
             # Read only the tail of the file efficiently
             import os

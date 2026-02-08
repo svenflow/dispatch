@@ -33,17 +33,14 @@ async function main(): Promise<void> {
   // Initialize search engine
   const searchEngine = new SearchEngine(store);
 
-  // Initialize LLM functions (embeddings and reranking)
-  const llmAvailable = await checkModelsAvailable();
-  if (llmAvailable) {
-    console.log("LLM models available, enabling vector search and reranking");
-    searchEngine.setEmbedFunction(createEmbedFunction());
+  // Check for rerank server and set up reranking if available
+  const { isRerankServerAvailable, createRerankFunction } = await import("./llm");
+  const rerankAvailable = await isRerankServerAvailable();
+  if (rerankAvailable) {
     searchEngine.setRerankFunction(createRerankFunction());
-
-    // Warm up models in background (don't block startup)
-    warmupModels().catch((err) => console.error("Model warmup failed:", err));
+    console.log("Reranking enabled (using embed-rerank server on port 9000)");
   } else {
-    console.log("LLM models not available, using FTS-only search");
+    console.log("Using FTS-only search (start embed-rerank server for reranking)");
   }
 
   // Initialize poller

@@ -9,6 +9,7 @@ import { SearchEngine } from "./search";
 import { Poller } from "./poller";
 import { Server } from "./server";
 import { loadConfig, ensureCacheDir } from "./config";
+import { createEmbedFunction, createRerankFunction, warmupModels, disposeLLM } from "./llm";
 
 // =============================================================================
 // CLI Commands
@@ -86,11 +87,18 @@ function parseTimeArg(value: string): number {
   return date.getTime();
 }
 
-async function cmdSearch(query: string, options: { category?: string; limit?: number; after?: string; before?: string }): Promise<void> {
-  ensureCacheDir();
-  const store = getStore();
-  const searchEngine = new SearchEngine(store);
+const DAEMON_URL = "http://localhost:7890";
 
+async function isDaemonRunning(): Promise<boolean> {
+  try {
+    const resp = await fetch(`${DAEMON_URL}/health`, { signal: AbortSignal.timeout(1000) });
+    return resp.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function cmdSearch(query: string, options: { category?: string; limit?: number; after?: string; before?: string }): Promise<void> {
   const limit = options.limit || 20;
   const category = options.category;
   const after = options.after ? parseTimeArg(options.after) : undefined;
@@ -101,20 +109,55 @@ async function cmdSearch(query: string, options: { category?: string; limit?: nu
   if (after) filterDesc += ` after ${new Date(after).toISOString().split("T")[0]}`;
   if (before) filterDesc += ` before ${new Date(before).toISOString().split("T")[0]}`;
 
+  // Check if daemon is running
+  const daemonRunning = await isDaemonRunning();
+  if (!daemonRunning) {
+    console.error("Error: Search daemon is not running.");
+    console.error("Start it with: bun run src/daemon.ts");
+    console.error("Or start the main dispatch daemon which spawns it automatically.");
+    process.exit(1);
+  }
+
   console.log(`Searching for: "${query}"${filterDesc}...\n`);
 
   const startTime = Date.now();
-  const results = await searchEngine.searchFTS(query, limit, category, after, before);
+
+  // Build query params
+  const params = new URLSearchParams({ q: query, limit: limit.toString() });
+  if (category) params.set("category", category);
+  if (after) params.set("after", after.toString());
+  if (before) params.set("before", before.toString());
+
+  // Call daemon
+  const resp = await fetch(`${DAEMON_URL}/search?${params}`);
+  if (!resp.ok) {
+    const error = await resp.text();
+    console.error(`Search failed: ${error}`);
+    process.exit(1);
+  }
+
+  const data = await resp.json() as {
+    results: Array<{
+      filepath: string;
+      title: string;
+      body: string;
+      score: number;
+      category: string;
+      rerankScore?: number;
+    }>;
+    took_ms: number;
+  };
+
   const duration = Date.now() - startTime;
 
-  if (results.length === 0) {
+  if (data.results.length === 0) {
     console.log("No results found.");
   } else {
-    for (let i = 0; i < results.length; i++) {
-      const r = results[i];
+    for (let i = 0; i < data.results.length; i++) {
+      const r = data.results[i];
       console.log(`${i + 1}. [${r.category}] ${r.title}`);
       console.log(`   ${r.filepath}`);
-      console.log(`   Score: ${r.score.toFixed(3)}`);
+      console.log(`   Score: ${r.score.toFixed(3)}${r.rerankScore !== undefined ? ` (rerank: ${r.rerankScore.toFixed(3)})` : ""}`);
 
       // Show snippet
       const snippet = r.body.slice(0, 200).replace(/\n/g, " ").trim();
@@ -123,8 +166,7 @@ async function cmdSearch(query: string, options: { category?: string; limit?: nu
     }
   }
 
-  console.log(`Found ${results.length} results in ${duration}ms`);
-  closeStore();
+  console.log(`Found ${data.results.length} results in ${duration}ms (daemon: ${data.took_ms}ms)`);
 }
 
 async function cmdIndex(options: { category: string; path: string }): Promise<void> {

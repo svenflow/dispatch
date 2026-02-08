@@ -52,6 +52,23 @@ SIGNAL_ACCOUNT = None  # Placeholder; callers must use signal_account()
 SIGNAL_DIR = HOME / ".claude/skills/signal"
 
 
+def sanitize_chat_id(chat_id: str) -> str:
+    """Strip registry prefix and escape + for filesystem-safe folder names.
+
+    Examples:
+        +16175969496 -> _16175969496
+        signal:+16175969496 -> _16175969496
+        b3d258b9a4de447ca412eb335c82a077 -> b3d258b9a4de447ca412eb335c82a077
+    """
+    from assistant.backends import BACKENDS
+    bare_id = chat_id
+    for cfg in BACKENDS.values():
+        if cfg.registry_prefix and chat_id.startswith(cfg.registry_prefix):
+            bare_id = chat_id[len(cfg.registry_prefix):]
+            break
+    return bare_id.replace("+", "_")
+
+
 def normalize_chat_id(chat_id: str) -> str:
     """Normalize chat_id to canonical format.
 
@@ -115,20 +132,21 @@ def is_group_chat_id(chat_id: str) -> bool:
     return bool(re.match(r'^[a-f0-9]{20,}$', chat_id.lower()))
 
 
-def get_session_name(contact_name: str, source: str = "imessage") -> str:
-    """Generate session name from contact name.
+def get_session_name(chat_id: str, source: str = "imessage") -> str:
+    """Generate session name from chat_id.
+
+    Returns {backend}/{sanitized_chat_id} format for filesystem.
 
     Args:
-        contact_name: Full name (e.g., "Jane Doe")
+        chat_id: Phone number or group ID (e.g., "+16175969496")
         source: "imessage" or "signal"
 
     Returns:
-        Session name like "jane-doe" or "jane-doe-signal"
+        Session name like "imessage/_16175969496" or "signal/_16175969496"
     """
     from assistant.backends import get_backend
     backend = get_backend(source)
-    base_name = contact_name.lower().replace(" ", "-")
-    return f"{base_name}{backend.session_suffix}"
+    return f"{backend.name}/{sanitize_chat_id(chat_id)}"
 
 
 def get_group_session_name_from_participants(participant_names: list) -> str:
@@ -168,7 +186,7 @@ def wrap_sms(prompt: str, contact_name: str, tier: str, chat_id: str,
 Chat ID: {chat_id}{reply_context}
 {prompt}
 ---END {backend.label}---
-**Important:** You are in a text message session. Communicate back to the user with {send_cmd} "message"
+**Important:** You are in a text message session. Communicate back with: ~/.claude/skills/sms-assistant/scripts/reply "message"
 """
 
 
@@ -223,8 +241,7 @@ Chat ID: {chat_id}{reply_context}
 {msg_body}
 ---END {backend.label}---{acl_note}
 
-To reply to this group, use:
-{send_cmd} "message"
+To reply: ~/.claude/skills/sms-assistant/scripts/reply "message"
 """
 
 
@@ -308,12 +325,51 @@ def get_reply_chain(thread_originator_guid: str, contact_name: str, max_messages
 
 
 def ensure_transcript_dir(session_name: str) -> Path:
-    """Create transcript directory and .claude symlink for a session."""
+    """Create transcript directory with .claude folder containing symlinks and settings.
+
+    Creates:
+    - .claude/ as a real directory (not a symlink)
+    - .claude/CLAUDE.md -> ~/.claude/CLAUDE.md
+    - .claude/SOUL.md -> ~/.claude/SOUL.md
+    - .claude/skills -> ~/.claude/skills
+    - .claude/settings.json with PreCompact hook for session restart
+    """
+    import json
+
     transcript_dir = TRANSCRIPTS_DIR / session_name
     transcript_dir.mkdir(parents=True, exist_ok=True)
 
-    claude_symlink = transcript_dir / ".claude"
-    if not claude_symlink.exists():
-        claude_symlink.symlink_to(HOME / ".claude")
+    claude_dir = transcript_dir / ".claude"
+
+    # Handle migration: if .claude is a symlink, remove it and create directory
+    if claude_dir.is_symlink():
+        claude_dir.unlink()
+
+    if not claude_dir.exists():
+        claude_dir.mkdir()
+
+    # Create symlinks for shared files
+    shared_files = ["CLAUDE.md", "SOUL.md", "skills"]
+    for fname in shared_files:
+        link_path = claude_dir / fname
+        target_path = HOME / ".claude" / fname
+        if not link_path.exists() and target_path.exists():
+            link_path.symlink_to(target_path)
+
+    # Create settings.json with PreCompact hook
+    settings_file = claude_dir / "settings.json"
+    if not settings_file.exists():
+        settings = {
+            "hooks": {
+                "PreCompact": [{
+                    "hooks": [{
+                        "type": "command",
+                        "command": f"{HOME}/dispatch/bin/claude-assistant restart-session {session_name}",
+                        "async": True
+                    }]
+                }]
+            }
+        }
+        settings_file.write_text(json.dumps(settings, indent=2))
 
     return transcript_dir

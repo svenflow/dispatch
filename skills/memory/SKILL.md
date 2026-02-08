@@ -1,15 +1,26 @@
 ---
 name: memory
-description: Store and retrieve persistent memories about contacts. Use when asked what you know/remember about someone, viewing memories, or saving new memories. Trigger phrases - 'what do you know about', 'what's in memories', 'show memories', 'what do you remember', 'remember this'. Manages both DuckDB database and per-contact CLAUDE.md summaries.
+description: Store and retrieve persistent memories about contacts. Use when asked what you know/remember about someone, viewing memories, or saving new memories. Trigger phrases - 'what do you know about', 'what's in memories', 'show memories', 'what do you remember', 'remember this'. Backed by memory-search daemon with SQLite FTS.
 allowed-tools: Bash(uv:*)
 ---
 
 # Memory System
 
-Persistent memory for contacts with three tiers:
-1. **CLAUDE.md** (per transcript folder) - Hot cache summary, auto-loaded
-2. **Contacts.app notes** - Contact facts (who they are)
-3. **DuckDB** - Full queryable memory store
+Persistent memory for contacts backed by **memory-search** (SQLite with FTS5).
+
+Storage tiers:
+1. **memory-search SQLite** - Primary storage with full-text search at `http://localhost:7890`
+2. **CLAUDE.md** (per transcript folder) - Hot cache summary, auto-loaded by Claude Code
+3. **Contacts.app notes** - Contact facts (who they are)
+
+## Prerequisites
+
+The memory-search daemon must be running:
+```bash
+cd ~/dispatch/services/memory-search && ~/.bun/bin/bun run src/daemon.ts
+```
+
+Check health: `curl http://localhost:7890/health`
 
 ## Contact Identifier
 
@@ -29,7 +40,7 @@ uv run ~/.claude/skills/memory/scripts/memory.py save "jane-doe" "memory text"
 # Load memories for contact
 uv run ~/.claude/skills/memory/scripts/memory.py load "+16175551234"
 
-# Search across all memories
+# Search across all memories (uses FTS5)
 uv run ~/.claude/skills/memory/scripts/memory.py search "keyword"
 
 # Ask with natural language (smart query)
@@ -38,11 +49,39 @@ uv run ~/.claude/skills/memory/scripts/memory.py ask "contact-name" "what are th
 # Get compact summary for session injection
 uv run ~/.claude/skills/memory/scripts/memory.py summary "contact-name"
 
-# Run SQL query
-uv run ~/.claude/skills/memory/scripts/memory.py query "SELECT * FROM memories WHERE type='lesson'"
+# Show memory statistics
+uv run ~/.claude/skills/memory/scripts/memory.py stats
 
 # Sync CLAUDE.md from database
 uv run ~/.claude/skills/memory/scripts/memory.py sync "contact-name"
+
+# Delete a memory by ID
+uv run ~/.claude/skills/memory/scripts/memory.py delete 123
+```
+
+## HTTP API (Direct Access)
+
+The memory system is exposed via HTTP endpoints:
+
+```bash
+# Save memory
+curl -X POST http://localhost:7890/memory/save \
+  -H "Content-Type: application/json" \
+  -d '{"contact":"jane-doe","memory_text":"Loves hiking","type":"preference","importance":4}'
+
+# Load memories for contact
+curl "http://localhost:7890/memory/load?contact=jane-doe&limit=20"
+
+# Search memories (FTS)
+curl "http://localhost:7890/memory/search?q=hiking&contact=jane-doe"
+
+# Get stats
+curl "http://localhost:7890/memory/stats"
+
+# Delete memory
+curl -X POST http://localhost:7890/memory/delete \
+  -H "Content-Type: application/json" \
+  -d '{"id":123}'
 ```
 
 ## Memory Consolidation (Nightly)
@@ -57,23 +96,6 @@ This outputs today's messages for review. Then:
 1. Review the conversation highlights
 2. Save important memories: `memory save "contact" "insight" --type TYPE`
 3. Sync CLAUDE.md: `memory sync "contact"`
-
-The daemon triggers this at 2am for each contact with activity.
-
-## Session Injection
-
-The `summary` command outputs a compact format ideal for injecting into new sessions:
-
-```
-## Memory Context for Contact Name
-**Preferences**: item1; item2; item3
-**Facts**: item1
-**Relationships**: item1
-**Projects**: item1; item2
-**Lessons**: item1; item2
-```
-
-This gets injected during session creation so Claude has immediate context.
 
 ## Memory Types
 
@@ -111,47 +133,36 @@ New types can be created organically as needed.
 
 ## Database Location
 
-`~/.claude/memory.duckdb`
+Stored in memory-search SQLite: `~/.cache/memory-search/index.sqlite`
 
 ## Schema
 
 ```sql
 CREATE TABLE memories (
-  id INTEGER PRIMARY KEY,
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
   contact TEXT NOT NULL,
-  timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  type TEXT,
+  type TEXT NOT NULL DEFAULT 'fact',
   memory_text TEXT NOT NULL,
-  transcript_file TEXT,
-  transcript_ref TEXT,
-  importance INTEGER DEFAULT 3,
-  tags TEXT[]
+  importance INTEGER NOT NULL DEFAULT 3,
+  tags TEXT,  -- JSON array
+  created_at TEXT NOT NULL,
+  modified_at TEXT NOT NULL
 );
-```
 
-## Querying Transcripts
-
-DuckDB can read transcript JSONLs directly:
-
-```sql
--- Read all user messages from a contact's transcripts
-SELECT * FROM read_json_auto(
-  '~/.claude/projects/-Users-USERNAME-transcripts-<session-name>/*.jsonl'
-) WHERE type = 'user';
+-- Full-text search
+CREATE VIRTUAL TABLE memories_fts USING fts5(
+  contact, type, memory_text,
+  tokenize='porter unicode61'
+);
 ```
 
 ## CLAUDE.md Location
 
 Per-contact summaries live in transcript folders:
-`~/transcripts/<contact-name>/CLAUDE.md`
+`~/transcripts/{backend}/{sanitized_chat_id}/CLAUDE.md`
+
+Examples:
+- `~/transcripts/imessage/_16175969496/CLAUDE.md`
+- `~/transcripts/signal/_16175969496/CLAUDE.md`
 
 These are auto-loaded by Claude Code when working in that directory.
-
-## Discovering Memory Types
-
-```sql
-SELECT DISTINCT type, COUNT(*) as count
-FROM memories
-GROUP BY type
-ORDER BY count DESC;
-```

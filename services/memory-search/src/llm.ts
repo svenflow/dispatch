@@ -135,7 +135,12 @@ async function ensureRerankModel(): Promise<LlamaModel> {
   rerankModelLoading = (async () => {
     const l = await ensureLlama();
     const modelPath = await resolveModel(RERANK_MODEL_URI);
-    const model = await l.loadModel({ modelPath });
+    // Force CPU-only mode with minimal GPU layers to avoid massive RAM allocation
+    // Also limit context size during model loading
+    const model = await l.loadModel({
+      modelPath,
+      gpuLayers: 0, // CPU only - avoids GPU memory estimation issues
+    });
     rerankModel = model;
     return model;
   })();
@@ -149,11 +154,18 @@ async function ensureRerankModel(): Promise<LlamaModel> {
 
 /**
  * Load rerank context (lazy)
+ * Note: We use a very small contextSize to limit RAM usage.
+ * Default "auto" allocates ~4.5GB. We use 512 tokens (~100MB) for short chunks.
  */
 async function ensureRerankContext(): Promise<Awaited<ReturnType<LlamaModel["createRankingContext"]>>> {
   if (!rerankContext) {
     const model = await ensureRerankModel();
-    rerankContext = await model.createRankingContext();
+    // Use minimal contextSize and batchSize to limit RAM usage
+    // Default "auto" allocates all available RAM
+    rerankContext = await model.createRankingContext({
+      contextSize: 256,  // Minimal context for short chunks
+      batchSize: 64,     // Minimal batch size
+    });
   }
   return rerankContext;
 }
@@ -206,17 +218,35 @@ export async function embedBatch(
 }
 
 // =============================================================================
-// Reranking Functions
+// Reranking Functions (via embed-rerank Python server)
 // =============================================================================
+
+// embed-rerank server URL (Python MLX-based reranker)
+const EMBED_RERANK_URL = "http://localhost:9000/api/v1/rerank/";
+
+/**
+ * Check if embed-rerank server is available
+ */
+export async function isRerankServerAvailable(): Promise<boolean> {
+  try {
+    const resp = await fetch("http://localhost:9000/health/", {
+      signal: AbortSignal.timeout(1000),
+    });
+    return resp.ok;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Rerank documents by relevance to query.
+ * Uses embed-rerank Python server (MLX-accelerated on Apple Silicon).
  */
 export async function rerank(
   query: string,
   documents: { file: string; text: string }[]
 ): Promise<RerankResult[]> {
-  const context = await ensureRerankContext();
+  if (documents.length === 0) return [];
 
   // Build map from text to original info
   const textToDoc = new Map<string, { file: string; index: number }>();
@@ -224,21 +254,39 @@ export async function rerank(
     textToDoc.set(doc.text, { file: doc.file, index });
   });
 
-  // Extract texts for ranking
-  const texts = documents.map((doc) => doc.text);
+  // Call embed-rerank API
+  const passages = documents.map((doc) => doc.text);
 
-  // Rank and sort
-  const ranked = await context.rankAndSort(query, texts);
+  const response = await fetch(EMBED_RERANK_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query, passages }),
+    signal: AbortSignal.timeout(30000), // 30s timeout for large batches
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Rerank API failed: ${response.status} - ${error}`);
+  }
+
+  const data = await response.json() as { results: Array<{ text: string; index: number; score: number }> };
 
   // Map back to our result format
-  return ranked.map((item) => {
-    const docInfo = textToDoc.get(item.document)!;
-    return {
-      file: docInfo.file,
-      score: item.score,
-      index: docInfo.index,
-    };
-  });
+  const allResults: RerankResult[] = [];
+  for (const item of data.results) {
+    const docInfo = textToDoc.get(item.text);
+    if (docInfo) {
+      allResults.push({
+        file: docInfo.file,
+        score: item.score,
+        index: docInfo.index,
+      });
+    }
+  }
+
+  // Sort all results by score (API should return sorted, but ensure it)
+  allResults.sort((a, b) => b.score - a.score);
+  return allResults;
 }
 
 // =============================================================================
@@ -273,30 +321,31 @@ export function createRerankFunction(): (
 
 /**
  * Warm up models by running a dummy operation.
- * This loads models into memory for faster subsequent queries.
+ * Checks if embed-rerank server is available.
  */
 export async function warmupModels(): Promise<void> {
   if (modelsWarmed) return;
 
-  console.log("Warming up LLM models...");
+  console.log("Checking rerank server...");
   const start = Date.now();
 
   try {
-    // Warm embedding model
-    const embedStart = Date.now();
-    await embedText("warmup", false);
-    console.log(`  Embedding model loaded (${Date.now() - embedStart}ms)`);
-
-    // Warm rerank model
-    const rerankStart = Date.now();
-    await rerank("warmup", [{ file: "test", text: "test document" }]);
-    console.log(`  Rerank model loaded (${Date.now() - rerankStart}ms)`);
-
-    modelsWarmed = true;
-    console.log(`Models warmed up in ${Date.now() - start}ms`);
+    // Check if embed-rerank server is running
+    const available = await isRerankServerAvailable();
+    if (available) {
+      // Warm up with a test query
+      const rerankStart = Date.now();
+      await rerank("warmup", [{ file: "test", text: "test document" }]);
+      console.log(`  Rerank server ready (${Date.now() - rerankStart}ms)`);
+      modelsWarmed = true;
+    } else {
+      console.log("  Rerank server not available - running FTS-only mode");
+      console.log("  Start with: uv run embed-rerank --port 9000");
+    }
+    console.log(`Warmup completed in ${Date.now() - start}ms`);
   } catch (error) {
-    console.error("Failed to warm up models:", error);
-    // Don't throw - allow daemon to continue without LLM
+    console.error("Failed to warm up rerank:", error);
+    // Don't throw - allow daemon to continue without reranking
   }
 }
 

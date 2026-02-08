@@ -60,7 +60,8 @@ def find_transcripts(session_name=None):
     if session_name:
         # Look for transcript directories matching the session
         username = Path.home().name
-        pattern = f"-Users-{username}-transcripts-{session_name}"
+        sanitized = session_name.replace("/", "-")
+        pattern = f"-Users-{username}-transcripts-{sanitized}"
         dirs = [d for d in base.iterdir() if d.is_dir() and pattern in d.name]
     else:
         # Find all transcript directories
