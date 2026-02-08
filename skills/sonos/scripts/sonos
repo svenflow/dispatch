@@ -254,6 +254,52 @@ def leave_group(ip: str):
     )
 
 
+def get_zone_group_state(ip: str) -> str:
+    """Get zone group topology state."""
+    return curl_soap(
+        ip,
+        "/ZoneGroupTopology/Control",
+        "urn:schemas-upnp-org:service:ZoneGroupTopology:1",
+        "GetZoneGroupState",
+        ""
+    )
+
+
+def get_group_members(ip: str, coordinator_rincon: str) -> set[str]:
+    """Get all RINCON IDs in the same group as the coordinator."""
+    response = get_zone_group_state(ip)
+
+    # Unescape the XML (it's double-encoded in SOAP response)
+    import html
+    state_xml = html.unescape(response)
+
+    # Find the ZoneGroup with this coordinator
+    members = set()
+
+    # Look for ZoneGroup with matching Coordinator
+    pattern = rf'<ZoneGroup[^>]*Coordinator="{coordinator_rincon}"[^>]*>(.*?)</ZoneGroup>'
+    match = re.search(pattern, state_xml, re.DOTALL)
+
+    if match:
+        group_content = match.group(1)
+        # Extract all UUID attributes from ZoneGroupMember elements
+        for uuid_match in re.finditer(r'<ZoneGroupMember[^>]*UUID="(RINCON_[^"]+)"', group_content):
+            members.add(uuid_match.group(1))
+
+    return members
+
+
+def wait_for_grouping(coordinator_ip: str, coordinator_rincon: str, expected_rincons: set[str], timeout: float = 10.0) -> bool:
+    """Poll until all expected speakers are in the coordinator's group."""
+    start = time.time()
+    while time.time() - start < timeout:
+        members = get_group_members(coordinator_ip, coordinator_rincon)
+        if expected_rincons.issubset(members):
+            return True
+        time.sleep(0.3)
+    return False
+
+
 def snapshot_speaker(ip: str, name: str) -> dict:
     """Take a snapshot of speaker state."""
     print(f"  Snapshotting {name}...")
@@ -414,16 +460,25 @@ def play_audio(audio_file: str, volume: int = 60, speaker_names: list[str] | Non
         # Group other speakers with coordinator
         if len(speaker_list) > 1:
             print(f"  Grouping speakers with {coordinator_name}...")
+            expected_rincons = {coordinator_rincon}
             for name, snap in speaker_list[1:]:
                 try:
                     join_group(snap["ip"], coordinator_rincon)
                     grouped_speakers.append(name)
+                    expected_rincons.add(snap["rincon"])
                 except Exception as e:
                     print(f"  Warning: Could not group {name}: {e}")
-            time.sleep(0.5)
+
+            # Wait and verify all speakers are grouped
+            print(f"  Verifying group membership...")
+            if wait_for_grouping(coordinator_ip, coordinator_rincon, expected_rincons, timeout=10.0):
+                print(f"  All {len(expected_rincons)} speakers confirmed in group")
+            else:
+                print(f"  Warning: Grouping verification timed out, proceeding anyway")
 
         # Play on coordinator
         set_av_transport_uri(coordinator_ip, audio_url)
+        time.sleep(0.3)  # Brief pause for URI to register
         play(coordinator_ip)
 
         # Wait for playback
