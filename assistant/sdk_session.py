@@ -13,9 +13,12 @@ import asyncio
 import json
 import logging
 import subprocess
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
+
+from typing import TYPE_CHECKING
 
 from claude_agent_sdk import (
     ClaudeSDKClient,
@@ -29,6 +32,24 @@ from claude_agent_sdk import (
     PermissionResultDeny,
     HookMatcher,
 )
+
+if TYPE_CHECKING:
+    from claude_agent_sdk.types import (
+        SyncHookJSONOutput,
+        HookContext,
+        PreToolUseHookInput,
+        PostToolUseHookInput,
+        PostToolUseFailureHookInput,
+        UserPromptSubmitHookInput,
+        StopHookInput,
+        SubagentStopHookInput,
+        PreCompactHookInput,
+    )
+    # Union of all hook input types
+    HookInputType = (
+        PreToolUseHookInput | PostToolUseHookInput | PostToolUseFailureHookInput |
+        UserPromptSubmitHookInput | StopHookInput | SubagentStopHookInput | PreCompactHookInput
+    )
 
 from assistant.common import SKILLS_DIR, UV
 
@@ -101,11 +122,21 @@ class SDKSession:
         self._error_count = 0
         self._consecutive_error_turns = 0
 
+        # Deferred system prompt injection (set by sdk_backend, consumed by _inject_system_prompt_if_needed)
+        self._needs_system_prompt: bool = False
+        self._system_prompt_args: tuple | None = None
+        self._system_prompt_type: str | None = None  # "individual" or "group"
+
         # Per-session logger
         from assistant.common import get_session_name
         session_name = get_session_name(chat_id, source)
         log_name = session_name.replace("/", "-")
         self._log = _get_session_logger(log_name)
+
+    def get_transcript_file(self) -> Optional[Path]:
+        """Return path to this session's active transcript JSONL."""
+        from assistant.health import _find_transcript
+        return _find_transcript(self.cwd, self.session_id)
 
     async def start(self, resume_session_id: Optional[str] = None):
         """Connect ClaudeSDKClient and start the message processing loop."""
@@ -199,6 +230,7 @@ class SDKSession:
                 self._pending_queries += 1
 
                 try:
+                    assert self._client is not None
                     await self._client.query(msg)
                 except asyncio.CancelledError:
                     raise
@@ -231,6 +263,7 @@ class SDKSession:
         receiver to span multiple merged turns.
         """
         try:
+            assert self._client is not None
             async for message in self._client.receive_messages():
                 await self._handle_message(message)
                 if isinstance(message, ResultMessage):
@@ -286,6 +319,11 @@ class SDKSession:
         else:
             turn_limit = 30
 
+        # Generate fresh session ID to prevent auto-resume from sessions-index.json
+        # The SDK/CLI auto-resumes from ~/.claude/projects/<cwd>/sessions-index.json
+        # unless we explicitly provide a new session ID
+        fresh_session_id = str(uuid.uuid4())
+
         opts = ClaudeAgentOptions(
             cwd=self.cwd,
             allowed_tools=tools,
@@ -294,6 +332,7 @@ class SDKSession:
             model="opus",
             fallback_model="sonnet",  # Only triggers on 529 (server overloaded), not normal usage
             max_turns=turn_limit,
+            extra_args={"session-id": fresh_session_id},  # Force fresh session
             hooks={
                 "PreToolUse": [HookMatcher(matcher="Read", hooks=[self._resize_image_hook])],
                 "Stop": [HookMatcher(hooks=[self._stop_hook])],
@@ -309,39 +348,32 @@ class SDKSession:
 
         return opts
 
-    def _permission_check(self, context) -> PermissionResultAllow | PermissionResultDeny:
+    async def _permission_check(self, tool_name: str, tool_input: dict[str, Any], context: Any) -> PermissionResultAllow | PermissionResultDeny:
         """Security callback: enforce tier-based tool restrictions.
 
         Runs before every tool call. Better than system prompt alone -
         survives compaction.
         """
-        tool_name = context.tool_name
         self._log.info(f"PERM_CHECK | tool={tool_name} tier={self.tier}")
 
         if self.tier == "favorite":
             # Block file modifications
             if tool_name in ("Write", "Edit", "NotebookEdit"):
-                return PermissionResultDeny(reason=f"{tool_name} blocked for favorites tier")
-            # Safely extract tool_input (may be dict or object with .get)
-            tool_input = getattr(context, 'tool_input', None) or {}
-            if isinstance(tool_input, dict):
-                get_input = tool_input.get
-            else:
-                get_input = lambda k, d="": getattr(tool_input, k, d)
+                return PermissionResultDeny(message=f"{tool_name} blocked for favorites tier")
             # Block dangerous bash
             if tool_name == "Bash":
-                cmd = get_input("command", "")
+                cmd = tool_input.get("command", "")
                 if not cmd.startswith("osascript"):
-                    return PermissionResultDeny(reason="Only osascript allowed for favorites tier")
+                    return PermissionResultDeny(message="Only osascript allowed for favorites tier")
             # Block sensitive file reads
             if tool_name == "Read":
-                path = get_input("file_path", "")
+                path = tool_input.get("file_path", "")
                 if any(s in path for s in [".ssh", ".env", "credentials", "secrets"]):
-                    return PermissionResultDeny(reason="Sensitive file blocked for favorites tier")
+                    return PermissionResultDeny(message="Sensitive file blocked for favorites tier")
 
         return PermissionResultAllow()
 
-    async def _resize_image_hook(self, input_data: dict[str, Any], tool_use_id: str | None, context: Any) -> dict[str, Any]:
+    async def _resize_image_hook(self, input_data: "HookInputType", tool_use_id: str | None, context: "HookContext") -> "SyncHookJSONOutput":
         """PreToolUse hook for Read: block oversized images to prevent API errors.
 
         The API rejects images >2000px in multi-image conversations.
@@ -392,7 +424,7 @@ class SDKSession:
             self._log.warning(f"IMAGE_CHECK_ERROR | {file_path} | {e}")
             return {}
 
-    async def _stop_hook(self, input_data: dict[str, Any], tool_use_id: str | None, context: Any) -> dict[str, Any]:
+    async def _stop_hook(self, input_data: "HookInputType", tool_use_id: str | None, context: "HookContext") -> "SyncHookJSONOutput":
         """Stop hook: remind Claude to send updates via send-sms if needed.
 
         Only fires if the session is processing an incoming message (not idle turns).

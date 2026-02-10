@@ -1,5 +1,5 @@
 /**
- * Database operations for nicklaude-search.
+ * Database operations for jsmith-search.
  *
  * Uses SQLite with sqlite-vec extension for vector similarity search.
  */

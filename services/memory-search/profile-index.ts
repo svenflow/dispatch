@@ -10,7 +10,7 @@ import { homedir } from "os";
 import { join } from "path";
 
 async function main() {
-  console.log("=== nicklaude-search indexing profile ===\n");
+  console.log("=== jsmith-search indexing profile ===\n");
 
   ensureCacheDir();
   const config = loadConfig();

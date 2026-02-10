@@ -31,7 +31,7 @@ brew install git gh
 gh auth login
 
 Then clone the repo:
-gh repo clone nicklaude/dispatch ~/dispatch
+gh repo clone jsmith/dispatch ~/dispatch
 cd ~/dispatch/docs/blog/bootstrap
 
 Work through each guide in order, starting with 03-identity-setup.md.

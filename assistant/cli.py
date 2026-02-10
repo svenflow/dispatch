@@ -220,6 +220,25 @@ def cmd_status(args):
                 print(f"  {s.get('session_name', 'unknown'):20s} {s.get('contact_name', ''):20s} {s.get('tier', ''):10s}{busy}{turns}")
         else:
             print("\nNo active sessions")
+
+        # Show memory consolidation status
+        progress_file = Path.home() / "dispatch/state/consolidation-progress.json"
+        consolidation_log = Path.home() / "dispatch/logs/memory-consolidation.log"
+        if progress_file.exists():
+            try:
+                progress = json.loads(progress_file.read_text())
+                if progress:
+                    # Find most recent consolidation
+                    latest_ts = None
+                    for phone, data in progress.items():
+                        ts = data.get("last_processed_ts", "")
+                        if ts and (not latest_ts or ts > latest_ts):
+                            latest_ts = ts
+                    if latest_ts:
+                        print(f"\nMemory consolidation: {len(progress)} contacts, last run {latest_ts[:16]}")
+            except Exception:
+                pass
+
         return 0
     else:
         print("Daemon not running")
@@ -312,12 +331,35 @@ def _load_registry() -> Dict:
 
 
 def _session_name_to_chat_id(session: str) -> Optional[str]:
-    """Look up chat_id from registry by session name."""
+    """Look up chat_id from registry by session name, chat_id, or contact name."""
     registry = _load_registry()
+    # Try exact session_name match first
     for cid, data in registry.items():
         if data.get("session_name") == session:
             return cid
+    # Try direct chat_id match
+    if session in registry:
+        return session
+    # Try contact_name match (case-insensitive)
+    session_lower = session.lower()
+    for cid, data in registry.items():
+        contact = data.get("contact_name", "")
+        if contact.lower() == session_lower:
+            return cid
     return None
+
+
+def _session_not_found(session: str) -> int:
+    """Print helpful error when session not found."""
+    registry = _load_registry()
+    print(f"Session not found: {session}")
+    if registry:
+        print("\nAvailable sessions:")
+        for cid, data in registry.items():
+            name = data.get("session_name", cid)
+            contact = data.get("contact_name", "")
+            print(f"  {name}  ({contact})" if contact else f"  {name}")
+    return 1
 
 
 def cmd_kill_session(args):
@@ -326,8 +368,7 @@ def cmd_kill_session(args):
     chat_id = _session_name_to_chat_id(session)
 
     if not chat_id:
-        print(f"Session not found in registry: {session}")
-        return 1
+        return _session_not_found(session)
 
     resp = _ipc_command({"cmd": "kill_session", "chat_id": chat_id})
     if resp.get("ok"):
@@ -350,8 +391,7 @@ def cmd_restart_session(args):
     chat_id = _session_name_to_chat_id(session)
 
     if not chat_id:
-        print(f"Session not found in registry: {session}")
-        return 1
+        return _session_not_found(session)
 
     resp = _ipc_command({"cmd": "restart_session", "chat_id": chat_id})
     if resp.get("ok"):
@@ -478,7 +518,10 @@ def cmd_inject_prompt(args):
     """Inject a prompt into a contact's Claude session."""
     from assistant.common import normalize_chat_id, is_group_chat_id
 
-    chat_id = normalize_chat_id(args.chat_id)
+    # Accept session_name format (e.g. imessage/_15555550100) or raw chat_id
+    raw = args.chat_id
+    resolved = _session_name_to_chat_id(raw)
+    chat_id = normalize_chat_id(resolved if resolved else raw)
 
     # Get prompt
     if args.file:
@@ -518,8 +561,14 @@ def cmd_inject_prompt(args):
             contact_name = contact_info["name"]
             tier = contact_info["tier"]
         else:
-            print(f"Error: Contact not found for {chat_id}", file=sys.stderr)
-            return 1
+            # Auto-create session for unknown contacts
+            is_group = is_group_chat_id(chat_id)
+            if is_group:
+                contact_name = f"Group {chat_id[:8]}"
+            else:
+                contact_name = f"Unknown ({lookup_phone})"
+            tier = "favorite"  # Safe default tier
+            print(f"Auto-creating session for: {chat_id} (tier={tier})", file=sys.stderr)
 
     resp = _ipc_command({
         "cmd": "inject",
@@ -527,6 +576,7 @@ def cmd_inject_prompt(args):
         "prompt": prompt,
         "sms": args.sms,
         "admin": args.admin,
+        "sven_app": getattr(args, 'sven_app', False),
         "bg": args.bg,
         "contact_name": contact_name,
         "tier": tier,
@@ -583,6 +633,78 @@ def cmd_uninstall(args):
 # Menu bar app commands
 MENUBAR_PLIST_SRC = ASSISTANT_DIR / "launchd" / "com.dispatch.claude-menubar.plist"
 MENUBAR_PLIST_DST = Path.home() / "Library/LaunchAgents/com.dispatch.claude-menubar.plist"
+
+
+# Watchdog commands
+WATCHDOG_PLIST_SRC = ASSISTANT_DIR / "launchd" / "com.dispatch.watchdog.plist"
+WATCHDOG_PLIST_DST = Path.home() / "Library/LaunchAgents/com.dispatch.watchdog.plist"
+
+
+def cmd_watchdog_install(args):
+  """Install watchdog LaunchAgent for auto-recovery."""
+  if not WATCHDOG_PLIST_SRC.exists():
+    print(f"Watchdog plist not found: {WATCHDOG_PLIST_SRC}")
+    return 1
+
+  # Create LaunchAgents directory if needed
+  WATCHDOG_PLIST_DST.parent.mkdir(parents=True, exist_ok=True)
+
+  # Copy plist
+  WATCHDOG_PLIST_DST.write_text(WATCHDOG_PLIST_SRC.read_text())
+  print(f"Installed: {WATCHDOG_PLIST_DST}")
+
+  # Load the agent
+  subprocess.run(["launchctl", "load", str(WATCHDOG_PLIST_DST)])
+  print("Watchdog loaded - will check daemon health every 60s")
+  return 0
+
+
+def cmd_watchdog_uninstall(args):
+  """Uninstall watchdog LaunchAgent."""
+  if not WATCHDOG_PLIST_DST.exists():
+    print("Watchdog not installed")
+    return 1
+
+  # Unload the agent
+  subprocess.run(["launchctl", "unload", str(WATCHDOG_PLIST_DST)], capture_output=True)
+
+  # Remove plist
+  WATCHDOG_PLIST_DST.unlink()
+  print("Watchdog uninstalled")
+  return 0
+
+
+def cmd_watchdog_status(args):
+  """Show watchdog status."""
+  if WATCHDOG_PLIST_DST.exists():
+    result = subprocess.run(
+      ["launchctl", "list", "com.dispatch.watchdog"],
+      capture_output=True, text=True
+    )
+    if result.returncode == 0:
+      print("Watchdog: installed and running")
+      # Check crash state
+      crash_state = Path("/tmp/dispatch-watchdog-crashes.txt")
+      if crash_state.exists():
+        try:
+          crash_count, _ = crash_state.read_text().strip().split()
+          print(f"  Recent crashes: {crash_count}")
+        except Exception:
+          pass
+      # Show recent log
+      log_file = Path.home() / "dispatch/logs/watchdog.log"
+      if log_file.exists():
+        lines = log_file.read_text().strip().split("\n")[-3:]
+        if lines:
+          print("  Recent log:")
+          for line in lines:
+            print(f"    {line}")
+    else:
+      print("Watchdog: installed but not running")
+  else:
+    print("Watchdog: not installed")
+    print("  Install with: claude-assistant watchdog-install")
+  return 0
 
 
 def cmd_menubar(args):
@@ -661,14 +783,14 @@ def main():
 
     # kill-session
     kill_session_parser = subparsers.add_parser("kill-session", help="Kill a specific session")
-    kill_session_parser.add_argument("session", help="Session name")
+    kill_session_parser.add_argument("session", help="Session name (imessage/_15555550100), chat_id, or contact name")
 
     # kill-sessions
     subparsers.add_parser("kill-sessions", help="Kill all sessions")
 
     # restart-session
     restart_session_parser = subparsers.add_parser("restart-session", help="Restart a specific session")
-    restart_session_parser.add_argument("session", help="Session name")
+    restart_session_parser.add_argument("session", help="Session name (imessage/_15555550100), chat_id, or contact name")
 
     # restart-sessions
     subparsers.add_parser("restart-sessions", help="Restart all sessions")
@@ -688,13 +810,23 @@ def main():
     # menubar-uninstall
     subparsers.add_parser("menubar-uninstall", help="Uninstall menu bar LaunchAgent")
 
+    # watchdog-install
+    subparsers.add_parser("watchdog-install", help="Install watchdog for auto-recovery")
+
+    # watchdog-uninstall
+    subparsers.add_parser("watchdog-uninstall", help="Uninstall watchdog")
+
+    # watchdog-status
+    subparsers.add_parser("watchdog-status", help="Show watchdog status")
+
     # inject-prompt
     inject_parser = subparsers.add_parser("inject-prompt", help="Inject prompt into a session")
-    inject_parser.add_argument("chat_id", help="Chat ID (phone or group UUID)")
+    inject_parser.add_argument("chat_id", help="Session name (imessage/_15555550100), chat_id, or contact name")
     inject_parser.add_argument("prompt", nargs="?", default="", help="Prompt text")
     inject_parser.add_argument("--bg", action="store_true", help="Target background session")
     inject_parser.add_argument("--sms", action="store_true", help="Wrap in SMS format")
     inject_parser.add_argument("--admin", action="store_true", help="Wrap in ADMIN OVERRIDE tags")
+    inject_parser.add_argument("--sven-app", action="store_true", help="Message from Sven iOS app (adds 🎤 prefix and echo instruction)")
     inject_parser.add_argument("--file", "-f", help="Read prompt from file")
     inject_parser.add_argument("--reply-to", help="GUID of message being replied to (for reply chain context)")
 
@@ -721,6 +853,9 @@ def main():
         "menubar": cmd_menubar,
         "menubar-install": cmd_menubar_install,
         "menubar-uninstall": cmd_menubar_uninstall,
+        "watchdog-install": cmd_watchdog_install,
+        "watchdog-uninstall": cmd_watchdog_uninstall,
+        "watchdog-status": cmd_watchdog_status,
         "inject-prompt": cmd_inject_prompt,
     }
 

@@ -33,7 +33,7 @@ def log(msg: str) -> None:
         f.write(line)
 
 
-def read_message() -> dict | None:
+def read_message() -> dict | str | None:
     """Read message from Chrome using native messaging protocol."""
     global _read_buffer, _expected_length
 
@@ -147,7 +147,7 @@ class ChromeControlHost:
         os.chmod(self.socket_path, 0o777)
         log(f"Listening on {self.socket_path}")
 
-    def register_profile(self, extension_id: str, profile_name: str = None):
+    def register_profile(self, extension_id: str, profile_name: str | None = None):
         """Register this instance in the shared registry."""
         self.profile_id = extension_id
         self.profile_name = profile_name or extension_id[:8]

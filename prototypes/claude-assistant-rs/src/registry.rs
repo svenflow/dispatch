@@ -255,17 +255,17 @@ mod tests {
         registry
             .register(
                 "+16175551234",
-                "nikhil-thorat",
+                "jane-doe",
                 "/tmp/test",
                 "individual",
-                Some("Nikhil Thorat".to_string()),
+                Some("Jane Doe".to_string()),
                 None,
                 Some("admin".to_string()),
                 None,
             )
             .unwrap();
 
-        let session = registry.get_by_session_name("nikhil-thorat");
+        let session = registry.get_by_session_name("jane-doe");
         assert!(session.is_some());
         assert_eq!(session.unwrap().chat_id, "+16175551234");
 

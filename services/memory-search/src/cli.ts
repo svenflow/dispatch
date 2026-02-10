@@ -16,7 +16,7 @@ import { createEmbedFunction, createRerankFunction, warmupModels, disposeLLM } f
 // =============================================================================
 
 async function cmdServe(): Promise<void> {
-  console.log("Starting nicklaude-search daemon...");
+  console.log("Starting jsmith-search daemon...");
 
   ensureCacheDir();
   const config = loadConfig();
@@ -232,7 +232,7 @@ async function cmdStatus(): Promise<void> {
   const store = getStore();
   const status = store.getStatus();
 
-  console.log("nicklaude-search Status\n");
+  console.log("jsmith-search Status\n");
   console.log(`Total documents: ${status.total_docs}`);
   console.log(`Needs embedding: ${status.needs_embedding}`);
   console.log(`Last modified: ${status.last_modified || "never"}`);
@@ -254,7 +254,7 @@ async function main(): Promise<void> {
 
   if (args.length === 0 || args[0] === "help" || args[0] === "--help") {
     console.log(`
-nicklaude-search - Hybrid semantic search daemon
+jsmith-search - Hybrid semantic search daemon
 
 USAGE:
   search-daemon <command> [options]

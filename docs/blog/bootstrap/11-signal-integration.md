@@ -29,7 +29,7 @@ Add Signal as a second messaging channel. Some contacts prefer Signal over iMess
               └────────────────────────┘
 ```
 
-**GitHub:** [`skills/signal/`](https://github.com/nicklaude/dispatch/tree/main/skills/signal)
+**GitHub:** [`skills/signal/`](https://github.com/jsmith/dispatch/tree/main/skills/signal)
 
 ## Step 1: Install signal-cli
 
@@ -65,7 +65,7 @@ signal-cli -u +1YOURNUMBER daemon --socket /tmp/signal-cli.sock --receive-mode o
 
 ## Step 4: Create Send CLI
 
-**File:** [`skills/signal/scripts/send-signal`](https://github.com/nicklaude/dispatch/blob/main/skills/signal/scripts/send-signal)
+**File:** [`skills/signal/scripts/send-signal`](https://github.com/jsmith/dispatch/blob/main/skills/signal/scripts/send-signal)
 
 ```bash
 #!/bin/bash
@@ -91,7 +91,7 @@ chmod +x ~/dispatch/skills/signal/scripts/send-signal
 
 ## Step 5: Create Group Send CLI
 
-**File:** [`skills/signal/scripts/send-signal-group`](https://github.com/nicklaude/dispatch/blob/main/skills/signal/scripts/send-signal-group)
+**File:** [`skills/signal/scripts/send-signal-group`](https://github.com/jsmith/dispatch/blob/main/skills/signal/scripts/send-signal-group)
 
 ```bash
 #!/bin/bash
@@ -108,7 +108,7 @@ echo "{\"jsonrpc\":\"2.0\",\"method\":\"send\",\"params\":{\"groupId\":\"$GROUP_
 
 The listener monitors the socket and forwards messages to the daemon:
 
-**File:** [`skills/signal/scripts/signal-listener.py`](https://github.com/nicklaude/dispatch/blob/main/skills/signal/scripts/signal-listener.py)
+**File:** [`skills/signal/scripts/signal-listener.py`](https://github.com/jsmith/dispatch/blob/main/skills/signal/scripts/signal-listener.py)
 
 This script:
 1. Connects to the signal-cli socket
@@ -155,7 +155,7 @@ launchctl load ~/Library/LaunchAgents/com.dispatch.signal-cli.plist
 
 ## Step 8: Integrate with Manager
 
-The manager daemon already supports Signal as a backend. In [`assistant/manager.py`](https://github.com/nicklaude/dispatch/blob/main/assistant/manager.py), Signal messages are routed the same way as iMessage.
+The manager daemon already supports Signal as a backend. In [`assistant/manager.py`](https://github.com/jsmith/dispatch/blob/main/assistant/manager.py), Signal messages are routed the same way as iMessage.
 
 ## Verification Checklist
 

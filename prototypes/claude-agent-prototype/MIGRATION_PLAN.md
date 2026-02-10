@@ -729,8 +729,8 @@ Events: `CREATE`, `RESTART`, `HEALTH_CHECK`, `HEALED`, `IDLE_TIMEOUT`, `SHUTDOWN
 
 **CLI attach:**
 ```bash
-claude-assistant attach nikhil-thorat
-# → tail -f ~/.claude-assistant/logs/sessions/nikhil-thorat.log
+claude-assistant attach jane-doe
+# → tail -f ~/.claude-assistant/logs/sessions/jane-doe.log
 ```
 
 ---

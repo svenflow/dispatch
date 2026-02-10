@@ -8,7 +8,7 @@ import { execSync } from "child_process";
 import { homedir } from "os";
 import { join } from "path";
 
-const MODEL_CACHE_DIR = join(homedir(), ".cache", "nicklaude-search", "models");
+const MODEL_CACHE_DIR = join(homedir(), ".cache", "jsmith-search", "models");
 const EMBED_MODEL_URI = "hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf";
 const RERANK_MODEL_URI = "hf:ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF/qwen3-reranker-0.6b-q8_0.gguf";
 

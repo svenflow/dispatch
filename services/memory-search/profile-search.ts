@@ -8,7 +8,7 @@ import { SearchEngine } from "./src/search";
 import { ensureCacheDir } from "./src/config";
 
 async function main() {
-  console.log("=== nicklaude-search performance profile ===\n");
+  console.log("=== jsmith-search performance profile ===\n");
 
   ensureCacheDir();
   const store = getStore();

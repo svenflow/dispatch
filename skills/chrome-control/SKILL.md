@@ -249,6 +249,79 @@ chrome screenshot 123456
 chrome close 123456
 ```
 
+## Cross-Origin Iframe Automation (e.g., Apple Sign-In)
+
+Some sites embed login forms in cross-origin iframes (e.g., Apple's idmsa.apple.com iframe on account.apple.com). Normal JS execution is blocked by:
+- CSP (Content Security Policy) blocking `eval()`
+- Cross-origin iframe security
+
+**Solution:** Use `insert-text` and `iframe-click` commands which use Chrome Debugger API with `Page.createIsolatedWorld` to execute JS inside the iframe.
+
+### Commands for Iframe Automation
+
+```bash
+# Click element inside an Apple auth iframe (or similar cross-origin iframe)
+chrome iframe-click <tab_id> '<css-selector>'
+chrome iframe-click 123456 'input[type="password"]'
+chrome iframe-click 123456 'button#sign-in'
+
+# Insert text at current focus (works inside iframes)
+chrome insert-text <tab_id> '<text>'
+chrome insert-text 123456 'mypassword123'
+```
+
+### Apple Login Flow Example (App Store Connect)
+
+```bash
+# 1. Navigate to App Store Connect (or any Apple sign-in page)
+chrome navigate 123456 "https://appstoreconnect.apple.com"
+
+# 2. Click email field and insert email
+chrome iframe-click 123456 'input[type="text"]'
+chrome insert-text 123456 'user@example.com'
+
+# 3. Click Continue button
+chrome iframe-click 123456 'button#sign-in'
+
+# 4. Click "Continue with Password" (Apple shows password vs passkey options)
+chrome iframe-click 123456 'text:Continue with Password'
+
+# 5. Insert password (field is auto-focused after step 4)
+chrome insert-text 123456 'yourpassword'
+
+# 6. Click Sign In button
+chrome iframe-click 123456 'button#sign-in'
+
+# 7. Handle 2FA if needed (code sent to trusted devices)
+# Click first input box to focus it
+chrome iframe-click 123456 'input[type="text"]'
+# Insert the 6-digit code
+chrome insert-text 123456 '123456'
+```
+
+### Text-Based Selectors
+
+The `iframe-click` command supports `text:XXX` selectors to find buttons by their visible text:
+
+```bash
+# Click by exact or partial text match (case-insensitive)
+chrome iframe-click 123456 'text:Continue with Password'
+chrome iframe-click 123456 'text:Sign In'
+chrome iframe-click 123456 'text:Resend'
+```
+
+This is useful when buttons don't have stable IDs or CSS classes.
+
+**How it works:** The `iframe-click` command uses `Page.createIsolatedWorld` with `grantUniversalAccess:true` to execute JS inside cross-origin iframes, bypassing CSP restrictions. It dispatches a full mouse event sequence (mouseenter → mouseover → mousemove → mousedown → mouseup → click) which is required for modern web frameworks that listen for the complete event chain.
+
+## Extension Reload
+
+To reload the Chrome Control extension after making changes:
+
+```bash
+echo '{"command": "_reload_extension"}' | nc -U /tmp/chrome_control_*.sock
+```
+
 ## Notes
 
 - Tab IDs are integers shown by `chrome tabs`

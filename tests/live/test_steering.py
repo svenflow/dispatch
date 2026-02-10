@@ -23,6 +23,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import pytest
+
+pytestmark = [pytest.mark.asyncio, pytest.mark.live_api]
+
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,

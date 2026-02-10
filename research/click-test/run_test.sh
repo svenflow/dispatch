@@ -7,10 +7,10 @@ ROUNDS=${2:-10}
 BG=${3:-white}
 COLOR=${4:-black}
 
-CHROME="/Users/nicklaude/code/chrome-control/chrome"
+CHROME="/Users/jsmith/code/chrome-control/chrome"
 
 # Open the test page
-URL="file:///Users/nicklaude/code/click-test/index.html?diameter=${DIAMETER}&rounds=${ROUNDS}&bg=${BG}&color=${COLOR}"
+URL="file:///Users/jsmith/code/click-test/index.html?diameter=${DIAMETER}&rounds=${ROUNDS}&bg=${BG}&color=${COLOR}"
 $CHROME open "$URL"
 
 echo "Test page opened. Diameter: ${DIAMETER}px, Rounds: ${ROUNDS}"

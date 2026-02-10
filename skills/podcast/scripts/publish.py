@@ -12,8 +12,8 @@ from pathlib import Path
 PODCAST_DIR = Path.home() / "code" / "podcast-feed"
 EPISODES_DIR = PODCAST_DIR / "episodes"
 FEED_FILE = PODCAST_DIR / "feed.xml"
-BUCKET = "gs://nicklaude-podcast"
-BASE_URL = "https://storage.googleapis.com/nicklaude-podcast"
+BUCKET = "gs://jsmith-podcast"
+BASE_URL = "https://storage.googleapis.com/jsmith-podcast"
 
 def run(cmd, check=True):
     """Run a shell command."""
@@ -64,7 +64,7 @@ def publish():
 
     return feed_url
 
-def add_episode(mp3_path: str, title: str = None):
+def add_episode(mp3_path: str, title: str | None = None):
     """Add a single episode and publish."""
     mp3 = Path(mp3_path)
     if not mp3.exists():

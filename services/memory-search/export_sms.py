@@ -110,7 +110,7 @@ def export_to_markdown(conversations: dict, output_dir: Path):
 
 def main():
     parser = argparse.ArgumentParser(description="Export SMS to markdown")
-    parser.add_argument("--output", "-o", default="~/.cache/nicklaude-search/sms-export",
+    parser.add_argument("--output", "-o", default="~/.cache/jsmith-search/sms-export",
                         help="Output directory")
     parser.add_argument("--days", "-d", type=int, default=30,
                         help="Export messages from last N days (default: 30)")

@@ -698,7 +698,7 @@ fn cmd_inject_prompt(
 fn cmd_install(config: &Config) -> Result<()> {
     let plist_dst = dirs::home_dir()
         .unwrap()
-        .join("Library/LaunchAgents/com.nicklaude.claude-assistant-rs.plist");
+        .join("Library/LaunchAgents/com.jsmith.claude-assistant-rs.plist");
 
     let exe = std::env::current_exe()?;
     let plist_content = format!(
@@ -707,7 +707,7 @@ fn cmd_install(config: &Config) -> Result<()> {
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.nicklaude.claude-assistant-rs</string>
+    <string>com.jsmith.claude-assistant-rs</string>
     <key>ProgramArguments</key>
     <array>
         <string>{}</string>
@@ -744,7 +744,7 @@ fn cmd_install(config: &Config) -> Result<()> {
 fn cmd_uninstall(_config: &Config) -> Result<()> {
     let plist_dst = dirs::home_dir()
         .unwrap()
-        .join("Library/LaunchAgents/com.nicklaude.claude-assistant-rs.plist");
+        .join("Library/LaunchAgents/com.jsmith.claude-assistant-rs.plist");
 
     if !plist_dst.exists() {
         println!("LaunchAgent not installed");
@@ -1025,7 +1025,7 @@ fn wrap_admin(prompt: &str) -> String {
     format!(
         r#"
 ---ADMIN OVERRIDE---
-From: Nikhil Thorat (admin)
+From: Jane Doe (admin)
 {}
 ---END ADMIN OVERRIDE---
 "#,

@@ -186,6 +186,18 @@ async function handleCommand(message) {
     case 'key':
       return await sendKey(params.tabId, params.key, params.modifiers);
 
+    case 'insert_text':
+      return await insertText(params.tabId, params.text);
+
+    case 'iframe_click':
+      return await iframeClick(params.tabId, params.selector);
+
+    case 'iframe_type':
+      return await iframeType(params.tabId, params.text);
+
+    case 'iframe_debug':
+      return await iframeDebug(params.tabId);
+
     case 'form_input':
       return await setFormValue(params.tabId, params.ref, params.value);
 
@@ -436,6 +448,376 @@ async function sendKey(tabId, key, modifiers) {
   } catch (error) {
     try { await chrome.debugger.detach({ tabId }); } catch {}
     return { sent: false, error: error.message };
+  }
+}
+
+// Insert text via debugger using Page.getFrameTree to find iframes
+async function insertText(tabId, text) {
+  try {
+    await chrome.debugger.attach({ tabId }, '1.3');
+
+    // Enable Page domain to access frame tree
+    await chrome.debugger.sendCommand({ tabId }, 'Page.enable');
+
+    // Get frame tree
+    const frameTree = await chrome.debugger.sendCommand({ tabId }, 'Page.getFrameTree');
+    console.log('[ChromeControl] Frame tree:', JSON.stringify(frameTree, null, 2));
+
+    // Find iframe with Apple sign-in
+    let targetFrameId = null;
+    const findFrame = (frame) => {
+      const url = frame.frame?.url || '';
+      console.log('[ChromeControl] Checking frame:', url);
+      if (url.includes('idmsa.apple.com') || url.includes('signin.apple.com')) {
+        targetFrameId = frame.frame?.id;
+        console.log('[ChromeControl] Found Apple auth frame:', targetFrameId);
+        return true;
+      }
+      if (frame.childFrames) {
+        for (const child of frame.childFrames) {
+          if (findFrame(child)) return true;
+        }
+      }
+      return false;
+    };
+    findFrame(frameTree.frameTree);
+
+    // For typing, we need to use a different approach:
+    // Create an isolated world in the iframe and execute JS there
+    if (targetFrameId) {
+      // Create isolated world in the iframe
+      const isolatedWorld = await chrome.debugger.sendCommand({ tabId }, 'Page.createIsolatedWorld', {
+        frameId: targetFrameId,
+        worldName: 'chromeControlWorld',
+        grantUniveralAccess: true
+      });
+      const executionContextId = isolatedWorld.executionContextId;
+      console.log('[ChromeControl] Created isolated world:', executionContextId);
+
+      // Execute JS to type into the focused input
+      // Handle both single inputs and multi-input 2FA code fields
+      const script = `
+        // Check for multi-input 2FA code fields first
+        const allInputs = document.querySelectorAll('input');
+        const codeInputs = document.querySelectorAll('input.form-security-code-input, input[type="tel"], input.code-input');
+        const textToType = '${text.replace(/'/g, "\\'")}';
+
+        // Debug info
+        const debugInfo = {
+          totalInputs: allInputs.length,
+          codeInputs: codeInputs.length,
+          inputClasses: Array.from(allInputs).map(i => i.className).join(', ')
+        };
+
+        if (codeInputs.length >= 6) {
+          // Multi-input 2FA field - fill each input with one character
+          const digits = textToType.split('');
+          let filled = 0;
+          Array.from(codeInputs).slice(0, digits.length).forEach((input, i) => {
+            input.focus();
+            // Use proper event simulation for React components
+            const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+            nativeInputValueSetter.call(input, digits[i]);
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+            // Also try KeyboardEvent
+            input.dispatchEvent(new KeyboardEvent('keydown', { key: digits[i], bubbles: true }));
+            input.dispatchEvent(new KeyboardEvent('keypress', { key: digits[i], bubbles: true }));
+            input.dispatchEvent(new KeyboardEvent('keyup', { key: digits[i], bubbles: true }));
+            filled++;
+          });
+          JSON.stringify({ result: 'filled ' + filled + ' code inputs', ...debugInfo });
+        } else if (codeInputs.length === 1) {
+          // Single code input field (accepts all digits)
+          const input = codeInputs[0];
+          input.focus();
+          input.value = textToType;
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          input.dispatchEvent(new Event('change', { bubbles: true }));
+          JSON.stringify({ result: 'typed into single code input', ...debugInfo });
+        } else {
+          // Generic input field
+          const input = document.activeElement || document.querySelector('input[type="text"], input[type="email"], input:not([type])');
+          if (input && (input.tagName === 'INPUT' || input.tagName === 'TEXTAREA')) {
+            input.focus();
+            input.value = textToType;
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+            JSON.stringify({ result: 'typed into generic input', className: input.className, ...debugInfo });
+          } else {
+            JSON.stringify({ result: 'no input found', activeElement: document.activeElement?.tagName, ...debugInfo });
+          }
+        }
+      `;
+
+      const result = await chrome.debugger.sendCommand({ tabId }, 'Runtime.evaluate', {
+        expression: script,
+        contextId: executionContextId,
+        returnByValue: true
+      });
+      console.log('[ChromeControl] Eval result:', result);
+
+      await chrome.debugger.detach({ tabId });
+      return { inserted: true, text, frameId: targetFrameId, evalResult: result?.result?.value };
+    } else {
+      // No iframe found, type directly using Input.dispatchKeyEvent on main page
+      for (const char of text) {
+        await chrome.debugger.sendCommand({ tabId }, 'Input.dispatchKeyEvent', {
+          type: 'keyDown',
+          text: char,
+          key: char
+        });
+        await chrome.debugger.sendCommand({ tabId }, 'Input.dispatchKeyEvent', {
+          type: 'keyUp',
+          key: char
+        });
+        await new Promise(r => setTimeout(r, 10));
+      }
+      await chrome.debugger.detach({ tabId });
+      return { inserted: true, text, frameId: null, note: 'no iframe found, used main page' };
+    }
+  } catch (error) {
+    console.error('[ChromeControl] insertText error:', error);
+    try { await chrome.debugger.detach({ tabId }); } catch {}
+    return { inserted: false, error: error.message };
+  }
+}
+
+// Debug iframe contents
+async function iframeDebug(tabId) {
+  try {
+    await chrome.debugger.attach({ tabId }, '1.3');
+    await chrome.debugger.sendCommand({ tabId }, 'Page.enable');
+
+    const frameTree = await chrome.debugger.sendCommand({ tabId }, 'Page.getFrameTree');
+
+    let targetFrameId = null;
+    const findFrame = (frame) => {
+      const url = frame.frame?.url || '';
+      if (url.includes('idmsa.apple.com') || url.includes('signin.apple.com')) {
+        targetFrameId = frame.frame?.id;
+        return true;
+      }
+      if (frame.childFrames) {
+        for (const child of frame.childFrames) {
+          if (findFrame(child)) return true;
+        }
+      }
+      return false;
+    };
+    findFrame(frameTree.frameTree);
+
+    if (targetFrameId) {
+      const isolatedWorld = await chrome.debugger.sendCommand({ tabId }, 'Page.createIsolatedWorld', {
+        frameId: targetFrameId,
+        worldName: 'chromeControlDebug',
+        grantUniveralAccess: true
+      });
+
+      const script = `
+        const allInputs = document.querySelectorAll('input');
+        const result = {
+          totalInputs: allInputs.length,
+          inputs: Array.from(allInputs).map(i => ({
+            type: i.type,
+            name: i.name,
+            id: i.id,
+            className: i.className,
+            maxLength: i.maxLength,
+            value: i.value
+          }))
+        };
+        JSON.stringify(result, null, 2);
+      `;
+
+      const result = await chrome.debugger.sendCommand({ tabId }, 'Runtime.evaluate', {
+        expression: script,
+        contextId: isolatedWorld.executionContextId,
+        returnByValue: true
+      });
+
+      await chrome.debugger.detach({ tabId });
+      return { debug: JSON.parse(result?.result?.value || '{}') };
+    } else {
+      await chrome.debugger.detach({ tabId });
+      return { error: 'iframe not found' };
+    }
+  } catch (error) {
+    try { await chrome.debugger.detach({ tabId }); } catch {}
+    return { error: error.message };
+  }
+}
+
+// Type into iframe using debugger key events
+async function iframeType(tabId, text) {
+  try {
+    await chrome.debugger.attach({ tabId }, '1.3');
+
+    // Type each character using Input.dispatchKeyEvent
+    for (const char of text) {
+      // Key down with text
+      await chrome.debugger.sendCommand({ tabId }, 'Input.dispatchKeyEvent', {
+        type: 'keyDown',
+        key: char,
+        text: char,
+        unmodifiedText: char,
+        windowsVirtualKeyCode: char.charCodeAt(0),
+        nativeVirtualKeyCode: char.charCodeAt(0)
+      });
+      // Char event
+      await chrome.debugger.sendCommand({ tabId }, 'Input.dispatchKeyEvent', {
+        type: 'char',
+        key: char,
+        text: char,
+        unmodifiedText: char
+      });
+      // Key up
+      await chrome.debugger.sendCommand({ tabId }, 'Input.dispatchKeyEvent', {
+        type: 'keyUp',
+        key: char,
+        windowsVirtualKeyCode: char.charCodeAt(0),
+        nativeVirtualKeyCode: char.charCodeAt(0)
+      });
+      await new Promise(r => setTimeout(r, 50));
+    }
+
+    await chrome.debugger.detach({ tabId });
+    return { typed: true, text };
+  } catch (error) {
+    try { await chrome.debugger.detach({ tabId }); } catch {}
+    return { typed: false, error: error.message };
+  }
+}
+
+// Click element in iframe via isolated world
+async function iframeClick(tabId, selector) {
+  try {
+    await chrome.debugger.attach({ tabId }, '1.3');
+    await chrome.debugger.sendCommand({ tabId }, 'Page.enable');
+
+    const frameTree = await chrome.debugger.sendCommand({ tabId }, 'Page.getFrameTree');
+
+    // Find Apple auth iframe
+    let targetFrameId = null;
+    const findFrame = (frame) => {
+      const url = frame.frame?.url || '';
+      if (url.includes('idmsa.apple.com') || url.includes('signin.apple.com')) {
+        targetFrameId = frame.frame?.id;
+        return true;
+      }
+      if (frame.childFrames) {
+        for (const child of frame.childFrames) {
+          if (findFrame(child)) return true;
+        }
+      }
+      return false;
+    };
+    findFrame(frameTree.frameTree);
+
+    if (targetFrameId) {
+      const isolatedWorld = await chrome.debugger.sendCommand({ tabId }, 'Page.createIsolatedWorld', {
+        frameId: targetFrameId,
+        worldName: 'chromeControlClickWorld',
+        grantUniveralAccess: true
+      });
+
+      // More robust click: dispatch full mouse event sequence + focus + click
+      // Also supports text:XXX selector to click by text content
+      const script = `
+        const selector = '${selector.replace(/'/g, "\\'")}';
+        let el = null;
+
+        // Check if it's a text selector
+        if (selector.startsWith('text:')) {
+          const searchText = selector.substring(5).toLowerCase();
+          const allClickable = document.querySelectorAll('button, [role="button"], input[type="submit"], a, [onclick]');
+          for (const candidate of allClickable) {
+            const text = (candidate.textContent || candidate.value || '').toLowerCase().trim();
+            if (text.includes(searchText)) {
+              el = candidate;
+              break;
+            }
+          }
+        } else {
+          el = document.querySelector(selector);
+        }
+
+        if (el) {
+          // Focus first
+          el.focus();
+
+          // Get element center for coordinates
+          const rect = el.getBoundingClientRect();
+          const x = rect.left + rect.width / 2;
+          const y = rect.top + rect.height / 2;
+
+          // Create proper mouse event options
+          const eventInit = {
+            bubbles: true,
+            cancelable: true,
+            view: window,
+            clientX: x,
+            clientY: y,
+            screenX: x,
+            screenY: y,
+            button: 0,
+            buttons: 1
+          };
+
+          // Dispatch full mouse event sequence
+          el.dispatchEvent(new MouseEvent('mouseenter', eventInit));
+          el.dispatchEvent(new MouseEvent('mouseover', eventInit));
+          el.dispatchEvent(new MouseEvent('mousemove', eventInit));
+          el.dispatchEvent(new MouseEvent('mousedown', { ...eventInit, buttons: 1 }));
+          el.dispatchEvent(new MouseEvent('mouseup', { ...eventInit, buttons: 0 }));
+          el.dispatchEvent(new MouseEvent('click', { ...eventInit, buttons: 0 }));
+
+          // Also try the native click as backup
+          el.click();
+
+          JSON.stringify({
+            success: true,
+            text: el.textContent.trim().substring(0, 50),
+            tagName: el.tagName,
+            type: el.type || null,
+            id: el.id || null,
+            className: el.className || null
+          });
+        } else {
+          // Try to find buttons with similar text
+          const allButtons = Array.from(document.querySelectorAll('button, [role="button"], input[type="submit"], a'));
+          const buttonTexts = allButtons.map(b => b.textContent?.trim().substring(0, 30) || b.value || '').filter(t => t);
+          JSON.stringify({
+            success: false,
+            error: 'element not found: ' + selector,
+            availableButtons: buttonTexts.slice(0, 10)
+          });
+        }
+      `;
+
+      const result = await chrome.debugger.sendCommand({ tabId }, 'Runtime.evaluate', {
+        expression: script,
+        contextId: isolatedWorld.executionContextId,
+        returnByValue: true
+      });
+
+      await chrome.debugger.detach({ tabId });
+
+      let parsedResult;
+      try {
+        parsedResult = JSON.parse(result?.result?.value || '{}');
+      } catch {
+        parsedResult = { raw: result?.result?.value };
+      }
+
+      return { clicked: parsedResult.success !== false, result: parsedResult };
+    } else {
+      await chrome.debugger.detach({ tabId });
+      return { clicked: false, error: 'iframe not found' };
+    }
+  } catch (error) {
+    try { await chrome.debugger.detach({ tabId }); } catch {}
+    return { clicked: false, error: error.message };
   }
 }
 

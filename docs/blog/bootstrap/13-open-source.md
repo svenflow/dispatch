@@ -22,14 +22,14 @@ Sanitize the codebase for public release - remove PII, credentials, and personal
 | Phone numbers | `+16175551234` | Replace with `+1YOURNUMBER` |
 | Email addresses | `john@gmail.com` | Replace with `your-email@example.com` |
 | Contact names | `John Doe` | Replace with generic names |
-| Home IPs | `10.10.10.23` | Document as "your bridge IP" |
+| Home IPs | `10.0.0.10` | Document as "your bridge IP" |
 
 ### Hardcoded Paths
 
 | Bad | Good |
 |-----|------|
-| `/Users/nicklaude/dispatch` | `~/dispatch` or `$HOME/dispatch` |
-| `/Users/nicklaude/.claude` | `~/.claude` |
+| `/Users/jsmith/dispatch` | `~/dispatch` or `$HOME/dispatch` |
+| `/Users/jsmith/.claude` | `~/.claude` |
 
 ## File Structure for Public Repo
 

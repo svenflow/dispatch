@@ -6,7 +6,7 @@
 Transcript folder migration script.
 
 Migrates transcript folders from flat structure to backend-prefixed structure:
-  ~/transcripts/nikhil-thorat/ -> ~/transcripts/imessage/_15555550001/
+  ~/transcripts/jane-doe/ -> ~/transcripts/imessage/_15555550100/
 
 Usage:
   uv run ~/dispatch/scripts/migrate_transcripts.py --dry-run  # Preview changes

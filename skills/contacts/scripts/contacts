@@ -19,14 +19,17 @@ import sys
 import argparse
 
 # Import shared code from contacts_core
+# Use SQLite for reads (fast), AppleScript for writes (required by macOS)
 from contacts_core import (
-    list_contacts,
-    lookup_phone,
-    lookup_email,
+    # READ operations - use SQLite (queries all source DBs, fast)
+    list_contacts_sqlite as list_contacts,
+    lookup_phone_sqlite as lookup_phone,
+    lookup_email_sqlite as lookup_email,
+    get_notes_sqlite as get_notes,
+    get_tier_sqlite as get_tier,
+    # WRITE operations - use AppleScript (required by macOS)
     add_contact,
-    get_tier,
     set_tier,
-    get_notes,
     set_notes,
 )
 

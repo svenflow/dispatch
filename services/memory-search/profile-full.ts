@@ -9,7 +9,7 @@ import { createEmbedFunction, createRerankFunction, warmupModels, disposeLLM } f
 import { ensureCacheDir } from "./src/config";
 
 async function main() {
-  console.log("=== nicklaude-search FULL performance profile ===\n");
+  console.log("=== jsmith-search FULL performance profile ===\n");
 
   ensureCacheDir();
   const store = getStore();

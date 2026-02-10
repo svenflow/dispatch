@@ -264,7 +264,7 @@ class MessagesReader:
         conn.close()
         return messages
 
-    def _generate_group_name(self, cursor, chat_identifier: str, contacts_manager=None) -> str:
+    def _generate_group_name(self, cursor, chat_identifier: str, contacts_manager=None) -> str | None:
         """Generate a group name from participant names.
 
         Uses ContactsManager for fast in-memory lookups instead of spawning
@@ -948,10 +948,14 @@ class IPCServer:
             return await self._cmd_inject(request)
         elif cmd == "kill_session":
             chat_id = request.get("chat_id")
+            if not chat_id:
+                return {"ok": False, "error": "Missing chat_id"}
             ok = await self.backend.kill_session(chat_id)
             return {"ok": ok, "message": f"Killed {chat_id}" if ok else "Session not found"}
         elif cmd == "restart_session":
             chat_id = request.get("chat_id")
+            if not chat_id:
+                return {"ok": False, "error": "Missing chat_id"}
             session = await self.backend.restart_session(chat_id)
             return {"ok": session is not None, "message": f"Restarted {chat_id}" if session else "Failed to restart"}
         elif cmd == "kill_all_sessions":
@@ -961,7 +965,8 @@ class IPCServer:
             sessions = await self.backend.get_all_sessions()
             # Enrich with registry data (session_name, etc.)
             for s in sessions:
-                reg = self.registry.get(s.get("chat_id"))
+                s_chat_id = s.get("chat_id")
+                reg = self.registry.get(s_chat_id) if s_chat_id else None
                 if reg:
                     s["session_name"] = reg.get("session_name", "")
                     if not s.get("tier"):
@@ -975,6 +980,7 @@ class IPCServer:
         prompt = req.get("prompt", "")
         is_sms = req.get("sms", False)
         is_admin = req.get("admin", False)
+        is_sven_app = req.get("sven_app", False)
         is_bg = req.get("bg", False)
         contact_name = req.get("contact_name")
         tier = req.get("tier")
@@ -987,7 +993,7 @@ class IPCServer:
         # Wrap prompt if needed
         final_prompt = prompt
         if is_sms and contact_name and tier:
-            final_prompt = wrap_sms(final_prompt, contact_name, tier, chat_id, reply_to_guid=reply_to, source=source)
+            final_prompt = wrap_sms(final_prompt, contact_name, tier, chat_id, reply_to_guid=reply_to, source=source, sven_app=is_sven_app)
         if is_admin:
             final_prompt = wrap_admin(final_prompt)
 
@@ -1215,7 +1221,7 @@ class Manager:
             log.error(f"Error sending SMS to {phone}: {e}")
             return False
 
-    def _send_sms_image(self, phone: str, image_path: str, caption: str = None) -> bool:
+    def _send_sms_image(self, phone: str, image_path: str, caption: str | None = None) -> bool:
         """Send an image via SMS using the send-sms CLI.
 
         Returns True on success, False on failure.
@@ -1282,7 +1288,7 @@ class Manager:
             log.error(f"Error sending Signal to {chat_id}: {e}")
             return False
 
-    async def _spawn_healing_session(self, admin_name: str, admin_phone: str, custom_prompt: str = None):
+    async def _spawn_healing_session(self, admin_name: str, admin_phone: str, custom_prompt: str | None = None):
         """Spawn a healing Claude session to diagnose and fix system issues.
 
         Uses asyncio.create_subprocess_exec with claude -p for a one-shot session.
@@ -1443,6 +1449,9 @@ You have 15 minutes. Work efficiently.
         if text and text.strip() == "RESTART" and is_admin:
             # Determine which chat this is (group vs individual)
             target_chat_id = chat_identifier if is_group else phone
+            if not target_chat_id:
+                log.warning("RESTART: No chat_id available")
+                return
 
             # Look up session from registry
             session_data = self.registry.get(target_chat_id)
@@ -1537,7 +1546,7 @@ You have 15 minutes. Work efficiently.
                 log.error(f"Missing phone (chat_id) for individual message")
                 return
             await self.sessions.inject_message(
-                sender_name, phone, text, sender_tier,
+                sender_name or phone, phone, text, sender_tier,
                 attachments, audio_transcription, thread_originator_guid,
                 source=source
             )
@@ -1569,14 +1578,30 @@ You have 15 minutes. Work efficiently.
         lifecycle_log.info("DAEMON | SHUTDOWN | COMPLETE")
 
     async def _run_nightly_consolidation(self):
-        """Trigger memory consolidation for all registered contacts."""
-        registry = self.registry.all()
-        for chat_id, session_data in registry.items():
-            contact_name = session_data.get("contact_name", "Unknown")
-            if not session_data.get("session_name"):
-                continue
-            await self.sessions.inject_consolidation(contact_name, chat_id)
-            await asyncio.sleep(2)
+        """Run memory consolidation to Contacts.app notes for all contacts.
+
+        Calls the consolidation prototype which extracts personal facts
+        from conversations and writes them to Contacts.app notes.
+        See ~/dispatch/prototypes/memory-consolidation/PLAN.md for details.
+        """
+        import subprocess
+        consolidate_script = HOME / "dispatch/prototypes/memory-consolidation/consolidate.py"
+
+        log.info("Running nightly memory consolidation to Contacts.app...")
+        try:
+            result = subprocess.run(
+                ["uv", "run", str(consolidate_script), "--all"],
+                capture_output=True,
+                text=True,
+                timeout=3600  # 1 hour max
+            )
+            log.info(f"Consolidation complete: {result.stdout[-500:] if result.stdout else 'no output'}")
+            if result.returncode != 0:
+                log.error(f"Consolidation errors: {result.stderr[-500:] if result.stderr else 'none'}")
+        except subprocess.TimeoutExpired:
+            log.error("Consolidation timed out after 1 hour")
+        except Exception as e:
+            log.error(f"Consolidation failed: {e}")
 
     async def run(self):
         """Main async loop."""
@@ -1612,6 +1637,10 @@ You have 15 minutes. Work efficiently.
         # Track last health check time
         last_health_check = time.time()
         HEALTH_CHECK_INTERVAL = 300  # 5 minutes
+
+        # Track fast health check (Tier 1: regex-based fatal error detection)
+        last_fast_health = time.time()
+        FAST_HEALTH_INTERVAL = 60  # 1 minute
 
         # Track last idle check time
         last_idle_check = time.time()
@@ -1668,10 +1697,25 @@ You have 15 minutes. Work efficiently.
                     await self.reminders.process_due_reminders()
                     last_reminder_check = time.time()
 
-                # Periodic health check
+                # Fast health check (Tier 1: regex-based fatal error detection)
+                if time.time() - last_fast_health > FAST_HEALTH_INTERVAL:
+                    try:
+                        await self.sessions.fast_health_check()
+                    except Exception as e:
+                        log.error(f"Fast health check failed: {e}")
+                    last_fast_health = time.time()
+
+                # Periodic health check (existing + Tier 2 deep analysis)
                 if time.time() - last_health_check > HEALTH_CHECK_INTERVAL:
                     log.info("Running session health check...")
                     await self.sessions.health_check_all()
+
+                    # Tier 2: Haiku deep analysis (skip recently healed)
+                    try:
+                        recently_healed = set(self.sessions._recently_healed.keys())
+                        await self.sessions.deep_health_check(skip_chat_ids=recently_healed)
+                    except Exception as e:
+                        log.error(f"Deep health check failed: {e}")
 
                     # Check search daemon health
                     if self.search_daemon is not None:

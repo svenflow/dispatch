@@ -189,7 +189,7 @@ Create `favorites-rules.md` with restrictions:
 # ~/.claude/skills/hue/scripts/control.py
 import requests
 
-BRIDGE_IP = "10.10.10.23"
+BRIDGE_IP = "10.0.0.10"
 API_KEY = "your-hue-api-key"
 
 def set_light(name, on=True, brightness=254):
@@ -241,7 +241,7 @@ $SONOS subgain "Kitchen" -3             # Subwoofer gain (-15 to +15)
 ```
 
 ### Step 4.3: Lutron Caseta
-Similar pattern: bridge at `10.10.10.22`, API calls for dimmers and shades.
+Similar pattern: bridge at `10.0.0.12`, API calls for dimmers and shades.
 
 **Available commands:**
 ```bash
@@ -291,7 +291,7 @@ chrome type 123456 ref_3 "text"  # Type into input
 chrome screenshot 123456       # Take screenshot
 chrome js 123456 "document.title"  # Execute JavaScript
 chrome -p 1 tabs              # Use profile 1
-chrome -p nicklaude tabs      # Or by profile name
+chrome -p jsmith tabs      # Or by profile name
 ```
 
 **Advanced commands:**

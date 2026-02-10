@@ -326,7 +326,7 @@ launchctl list | grep dispatch
 launchctl unload ~/Library/LaunchAgents/com.dispatch.assistant.plist
 ```
 
-**GitHub reference:** See [`launchd/com.nicklaude.claude-assistant.plist`](https://github.com/nicklaude/dispatch/blob/main/launchd/com.nicklaude.claude-assistant.plist) for a working example.
+**GitHub reference:** See [`launchd/com.jsmith.claude-assistant.plist`](https://github.com/jsmith/dispatch/blob/main/launchd/com.jsmith.claude-assistant.plist) for a working example.
 
 ## Verification Checklist
 

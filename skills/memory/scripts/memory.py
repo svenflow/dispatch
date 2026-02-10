@@ -2,7 +2,7 @@
 """
 Memory CLI - Store and retrieve persistent memories about contacts.
 
-Uses nicklaude-search HTTP API at localhost:7890 as the backend.
+Uses jsmith-search HTTP API at localhost:7890 as the backend.
 
 Usage:
     memory.py save <contact> <text> [--type TYPE] [--importance N]
@@ -93,8 +93,8 @@ def normalize_contact(identifier: str) -> str:
     return identifier.lower().replace(" ", "-")
 
 
-def api_request(method: str, path: str, data: dict = None) -> dict:
-    """Make an API request to nicklaude-search."""
+def api_request(method: str, path: str, data: dict | None = None) -> dict:
+    """Make an API request to jsmith-search."""
     url = f"{SEARCH_API}{path}"
 
     if method == "GET" and data:
@@ -122,7 +122,7 @@ def api_request(method: str, path: str, data: dict = None) -> dict:
         sys.exit(1)
 
 
-def save_memory(contact: str, text: str, type_: str = None, importance: int = 3, tags: list = None):
+def save_memory(contact: str, text: str, type_: str | None = None, importance: int = 3, tags: list | None = None):
     """Save a memory to the database."""
     contact = normalize_contact(contact)
 
@@ -142,7 +142,7 @@ def save_memory(contact: str, text: str, type_: str = None, importance: int = 3,
         print(f"ERROR|{result.get('error', 'Unknown error')}")
 
 
-def load_memories(contact: str, type_: str = None, limit: int = 20):
+def load_memories(contact: str, type_: str | None = None, limit: int = 20):
     """Load memories for a contact."""
     contact = normalize_contact(contact)
 
@@ -167,7 +167,7 @@ def load_memories(contact: str, type_: str = None, limit: int = 20):
         print(f"  [{mem_id}] {ts_str} ({type_name}, imp={importance}): {text}")
 
 
-def search_memories(query: str, contact: str = None):
+def search_memories(query: str, contact: str | None = None):
     """Search memories by text."""
     params = {"q": query, "limit": 50}
     if contact:
@@ -432,7 +432,7 @@ def main():
     # Need urllib.parse for encoding
     import urllib.parse
 
-    parser = argparse.ArgumentParser(description="Memory CLI - backed by nicklaude-search")
+    parser = argparse.ArgumentParser(description="Memory CLI - backed by jsmith-search")
     subparsers = parser.add_subparsers(dest="command", help="Commands")
 
     # save
@@ -473,9 +473,12 @@ def main():
     summary_parser = subparsers.add_parser("summary", help="Generate compact summary for session")
     summary_parser.add_argument("contact", help="Contact name")
 
-    # consolidate
-    consolidate_parser = subparsers.add_parser("consolidate", help="Review today's transcript for memory extraction")
-    consolidate_parser.add_argument("contact", help="Contact name")
+    # consolidate (old: review transcripts, new: extract to Contacts.app)
+    consolidate_parser = subparsers.add_parser("consolidate", help="Extract memories to Contacts.app notes")
+    consolidate_parser.add_argument("contact", nargs="?", help="Contact name (omit with --all)")
+    consolidate_parser.add_argument("--all", action="store_true", help="Run for all contacts")
+    consolidate_parser.add_argument("--dry-run", action="store_true", help="Show without writing")
+    consolidate_parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
 
     args = parser.parse_args()
 
@@ -496,7 +499,21 @@ def main():
     elif args.command == "summary":
         summary_for_session(args.contact)
     elif args.command == "consolidate":
-        consolidate_memories(args.contact)
+        # Call the new consolidation prototype
+        import subprocess
+        cmd = [str(Path.home() / "dispatch/prototypes/memory-consolidation/consolidate.py")]
+        if args.all:
+            cmd.append("--all")
+        elif args.contact:
+            cmd.append(args.contact)
+        else:
+            print("ERROR: specify a contact name or use --all")
+            sys.exit(1)
+        if getattr(args, 'dry_run', False):
+            cmd.append("--dry-run")
+        if getattr(args, 'verbose', False):
+            cmd.append("--verbose")
+        subprocess.run(cmd)
     else:
         parser.print_help()
 

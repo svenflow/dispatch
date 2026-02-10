@@ -23,7 +23,7 @@ Build a test suite that validates the system without hitting the Claude API. Thi
 └─────────────────────────────────────────────────────────┘
 ```
 
-**GitHub:** [`tests/`](https://github.com/nicklaude/dispatch/tree/main/tests)
+**GitHub:** [`tests/`](https://github.com/jsmith/dispatch/tree/main/tests)
 
 ## Test Structure
 

@@ -373,13 +373,24 @@ editableDiv.dispatchEvent(new Event('blur', {bubbles: true}));
 
 4. The uploaded build will appear in TestFlight tab after processing (10-30 min)
 
-### Step 6: Handle Encryption Compliance
+### Step 6: Handle Encryption Compliance (CRITICAL - BLOCKS TESTING!)
 
-After upload, the build may show "Missing Compliance" status. This must be resolved before testing:
+**⚠️ IMPORTANT:** Builds get stuck in "Missing Compliance" status until you explicitly set encryption export compliance. Testers CANNOT download the app until this is resolved.
 
-1. Click "Manage" next to the compliance warning
-2. For apps that don't use custom encryption (only HTTPS): Select "No"
-3. This unlocks the build for testing
+**BEST PRACTICE: Add to Info.plist to skip compliance questions automatically:**
+
+```xml
+<key>ITSAppUsesNonExemptEncryption</key>
+<false/>
+```
+
+This tells Apple the app doesn't use custom encryption (only standard HTTPS), so compliance is handled automatically on every build. No more manual clicking!
+
+**Manual fallback (if plist key not set):**
+After upload, check the build status in TestFlight:
+1. If you see "Missing Compliance" - click "Manage" next to the warning
+2. For apps that don't use custom encryption (only HTTPS): Select "No" / "None of the algorithms mentioned above"
+3. Click Save - this unlocks the build for testing
 
 Most simple apps only use standard HTTPS, which counts as "No" for encryption compliance.
 
@@ -391,24 +402,52 @@ Most simple apps only use standard HTTPS, which counts as "No" for encryption co
 - Testers get an email invite and app appears in their TestFlight app
 - No Apple review required - ready immediately
 
-**Pre-configured internal testers (already in Users and Access):**
-- nsthorat@gmail.com (Nikhil) - Admin
-- nicklaudethorat@gmail.com (Sven) - Account Holder
+**⚠️ CRITICAL: Each app needs its own internal testing group!**
 
-For new apps, just add these users to an internal testing group - they're already set up.
+Even if testers are already in Users and Access from other apps, you must:
+1. **Create a new Internal Testing group** for the new app (TestFlight > Internal Testing > New Group)
+2. **Add testers to this app-specific group** - they won't automatically have access to new apps
+
+This is a common gotcha: testers in Users and Access can test ANY app they're added to, but they must be explicitly added to each app's testing group.
+
+**Pre-configured internal testers (already in Users and Access):**
+- user@example.com (Jane) - Admin
+- partner@example.com (Sven) - Account Holder
+
+For new apps, create a testing group and add these users to it - they're already set up in Users and Access.
 
 **To add NEW internal testers (not yet in Users and Access):**
-1. First add them to Users and Access:
+
+⚠️ **Common failure mode:** User added to Internal Testing group but never receives invite → They weren't added to Users and Access first!
+
+1. **First add them to Users and Access:**
    - Go to Users and Access > People > "+" button
    - Fill in First Name, Last Name, Email
    - Select role (Developer is good for testers - NOT Admin)
    - Click Next, select apps, click Invite
    - **IMPORTANT:** They must accept the email invitation BEFORE they appear in TestFlight
-2. Once they've accepted the App Store Connect invitation:
+2. **Then add them to the Internal Testing group:**
    - Go to TestFlight > Internal Testing group > Testers tab > "+" or Add Testers
    - They will now appear in the list of available testers
    - Select them and click Add
 3. They receive TestFlight invite via email automatically
+
+**⚠️ CRITICAL: New builds must be added to the Internal Testers group!**
+
+When you upload a new build, it does NOT automatically get added to the Internal Testers group. You must:
+1. Go to TestFlight > Version X.X section (scroll down past "Build Uploads")
+2. Find your new build in the list
+3. Click the "+" button in the GROUPS column to add it to Internal Testers
+4. Or click on the build number and add groups from the build detail page
+
+If the GROUPS column is empty for your build, testers won't see the update!
+
+**Debugging "no email received":**
+1. Check encryption compliance is set (Step 6) - builds stuck on "Missing Compliance" won't notify testers
+2. Check build is added to Internal Testers group (see above)
+3. Verify tester is in Users and Access (not just the beta group)
+4. Check tester email matches exactly
+5. Have them check spam folder
 
 **Note:** Internal testers MUST accept their App Store Connect invitation first. They won't appear in the "Add Testers" dialog until they've accepted. This is different from external testing where you can invite anyone by email directly.
 
@@ -450,14 +489,241 @@ For public link (external):
 
 Don't embed the link in a paragraph - send it standalone so they can tap/copy easily.
 
-## API Key Setup (for CI/automation)
+## App Store Connect CLI (`asc`)
 
+**Location:** `~/.claude/skills/ios-app/scripts/asc`
+
+A CLI for App Store Connect REST API operations. Handles JWT auth automatically using the API key stored at `~/.claude/secrets/AuthKey_55288ANG97.p8`.
+
+### Available Commands
+
+```bash
+# List all apps
+asc apps list
+
+# List bundle IDs
+asc bundles list
+
+# Register new bundle ID (required before creating app)
+asc bundles create <bundle_id> <name>
+asc bundles create com.sven.MyApp "My App"
+
+# List beta testers
+asc testers list
+
+# Add tester by email
+asc testers add <email> <first_name> <last_name>
+
+# Remove tester
+asc testers remove <tester_id>
+
+# List beta groups
+asc groups list
+asc groups list <app_id>  # For specific app
+
+# Create beta group
+asc groups create <app_id> <group_name>
+
+# Add tester to group
+asc groups add-tester <group_id> <tester_id>
+
+# List builds
+asc builds list
+asc builds list <app_id>  # For specific app
+```
+
+### What the API Can and CANNOT Do
+
+**✅ CAN do via API:**
+- List apps, builds, testers, groups
+- Register bundle IDs
+- Manage beta testers (add/remove)
+- Create/manage beta groups
+- Add testers to groups
+
+**❌ CANNOT do via API (Apple limitation):**
+- **Create new apps** - API only supports GET/UPDATE for apps resource
+- Delete apps
+- **Add internal testers who aren't already in Users and Access** - they must be team members first
+
+### Adding Testers via API
+
+**For external testing (non-team members like friends):**
+```bash
+# 1. Create external group
+asc groups create "External Beta" --app "App Name" --external
+
+# 2. Add tester directly to external group (creates tester + adds to group)
+asc groups add-tester "External Beta" "friend@email.com" --app "App Name"
+
+# 3. Submit build for beta review (required for external testing)
+#    Must be done in App Store Connect UI
+```
+External testing requires Apple beta review (~24-48 hours for first build).
+
+**For internal testing (team members):**
+```bash
+# Can only add testers who are ALREADY in Users and Access
+asc groups add-tester "Internal Testers" "team@member.com" --app "App Name"
+```
+If they're not in Users and Access, you'll get: `"Tester(s) cannot be assigned"`
+
+**Quick decision tree:**
+- Is tester already in Users and Access? → Use internal testing (no review)
+- Is tester external? → Use external testing (requires beta review)
+
+### Adding NEW Internal Testers (Chrome + API Hybrid)
+
+For friends who should be internal testers (no beta review needed), you must add them to Users and Access first via Chrome:
+
+**Step 1: Add to Users and Access via Chrome**
+```bash
+chrome navigate <tab_id> "https://appstoreconnect.apple.com/access/users"
+sleep 3
+```
+
+Then use JS injection to:
+1. Click the blue "+" button (id="add-user-btn-icon")
+2. Fill form: First Name, Last Name, Email
+3. Check "Developer" role (good for testers)
+4. Click Next → select apps → click Invite
+
+```javascript
+// Click add button
+document.querySelector("#add-user-btn-icon").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+// After modal opens, fill form (sorted by position: First Name, Last Name, Email)
+const inputs = Array.from(document.querySelectorAll("input[type=text], input:not([type])"))
+  .filter(i => i.offsetParent !== null)
+  .sort((a, b) => {
+    const aRect = a.getBoundingClientRect();
+    const bRect = b.getBoundingClientRect();
+    if (Math.abs(aRect.y - bRect.y) > 20) return aRect.y - bRect.y;
+    return aRect.x - bRect.x;
+  });
+
+const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+nativeInputValueSetter.call(inputs[0], "First");
+inputs[0].dispatchEvent(new Event("input", { bubbles: true }));
+nativeInputValueSetter.call(inputs[1], "Last");
+inputs[1].dispatchEvent(new Event("input", { bubbles: true }));
+nativeInputValueSetter.call(inputs[2], "email@example.com");
+inputs[2].dispatchEvent(new Event("input", { bubbles: true }));
+
+// Check Developer role
+const devCheckbox = Array.from(document.querySelectorAll("input[type=checkbox]")).find(cb => {
+  const label = cb.closest("label") || document.querySelector("label[for=\"" + cb.id + "\"]");
+  return label && label.textContent.includes("Developer");
+});
+if (devCheckbox && !devCheckbox.checked) devCheckbox.click();
+```
+
+**Step 2: Wait for acceptance**
+The user must accept the email invitation before they appear in TestFlight. You'll get `"Tester(s) cannot be assigned"` if they haven't accepted yet.
+
+**Step 3: Add to internal testing group via API**
+```bash
+asc groups add-tester "Internal Testers" "email@example.com" --app "App Name"
+```
+
+**Pre-configured internal testers (already in Users and Access):**
+- sammcgrail@gmail.com (Sam McGrail) - Admin
+- nsthorat@gmail.com (Nikhil Thorat) - Admin
+
+### Creating Apps (Chrome + API Hybrid)
+
+Apple's API doesn't support app creation, so we use a hybrid approach: **2 tool calls total** (API + single JS injection).
+
+**Step 1: Register bundle ID via API**
+```bash
+asc bundles create com.sven.MyNewApp "My New App"
+```
+
+**Step 2: Navigate to App Store Connect**
+```bash
+chrome navigate <tab_id> "https://appstoreconnect.apple.com/apps"
+sleep 3  # Wait for page load
+```
+
+**Step 3: Single JS injection does EVERYTHING** (clicks, form fill, submit)
+
+```bash
+chrome js <tab_id> '
+(async () => {
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+    // Click + button to open dropdown
+    document.querySelector("#new-app-btn-icon").click();
+    await sleep(500);
+
+    // Click "New App" in dropdown
+    document.querySelector("#new-app-btn").click();
+    await sleep(1500);
+
+    // Fill form using React-compatible value setter
+    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+
+    // Check iOS platform
+    const iosCheckbox = document.getElementById("platformsById.IOS");
+    if (iosCheckbox && !iosCheckbox.checked) iosCheckbox.click();
+
+    // App name
+    const nameInput = document.getElementById("name");
+    nativeInputValueSetter.call(nameInput, "My New App");
+    nameInput.dispatchEvent(new Event("input", {bubbles: true}));
+
+    // Language
+    const languageSelect = document.getElementById("primaryLocale");
+    languageSelect.value = "en-US";
+    languageSelect.dispatchEvent(new Event("change", {bubbles: true}));
+
+    // Bundle ID (must be registered first via API!)
+    const bundleIdSelect = document.getElementById("bundleId");
+    bundleIdSelect.value = "com.sven.MyNewApp";
+    bundleIdSelect.dispatchEvent(new Event("change", {bubbles: true}));
+
+    // SKU
+    const skuInput = document.getElementById("sku");
+    nativeInputValueSetter.call(skuInput, "mynewapp-001");
+    skuInput.dispatchEvent(new Event("input", {bubbles: true}));
+
+    // Full Access
+    const accessRadio = document.getElementById("userAccessFull");
+    if (accessRadio && !accessRadio.checked) accessRadio.click();
+
+    await sleep(500);
+
+    // Click Create button
+    const createBtn = Array.from(document.querySelectorAll("button")).find(b => b.innerText.trim() === "Create");
+    if (createBtn) createBtn.click();
+
+    return "App creation initiated";
+})();
+'
+```
+
+**Performance:** ~10 seconds total (vs 2+ minutes with separate tool calls)
+
+**Key insights:**
+- **Single JS injection** with async/await handles all clicks + form + submit
+- React text inputs need `nativeInputValueSetter` trick (regular `.value =` doesn't work)
+- Bundle ID dropdown only shows bundle IDs not already assigned to apps
+- Internal `await sleep()` handles timing between UI interactions
+- Form IDs: `platformsById.IOS`, `name`, `primaryLocale`, `bundleId`, `sku`, `userAccessFull`/`userAccessLimited`
+
+### API Key Setup
+
+The API key is pre-configured:
+- **Key ID:** 55288ANG97
+- **Issuer ID:** 3495282b-f9a7-4f98-90a5-0e58dd374f9e
+- **Private Key:** `~/.claude/secrets/AuthKey_55288ANG97.p8`
+
+To create a new API key:
 1. Go to App Store Connect > Users and Access > Integrations > App Store Connect API
 2. Generate API Key with "App Manager" role
 3. Download the .p8 key file (one-time download)
 4. Note the Key ID and Issuer ID
-5. Store the .p8 file at `~/.private_keys/AuthKey_{KEY_ID}.p8`
-   (altool looks here by default)
+5. Store the .p8 file at `~/.claude/secrets/AuthKey_{KEY_ID}.p8`
 
 ## Quick Reference: Full Build-to-TestFlight Script
 
@@ -466,6 +732,7 @@ Don't embed the link in a paragraph - send it standalone so they can tap/copy ea
 set -e
 
 APP_NAME="$1"
+BUILD_VERSION="$2"  # e.g., "13"
 PROJECT_DIR=~/code/ios-apps/$APP_NAME
 BUILD_DIR=$PROJECT_DIR/build
 
@@ -504,10 +771,29 @@ xcodebuild -exportArchive \
   -exportOptionsPlist "$BUILD_DIR/ExportOptions.plist" \
   -allowProvisioningUpdates
 
-echo "==> Done! Check App Store Connect for the build."
+echo "==> Waiting for build $BUILD_VERSION to be ready..."
+~/.claude/skills/ios-app/scripts/asc builds list --wait "$BUILD_VERSION" --timeout 300
+
+echo "==> Build $BUILD_VERSION is VALID and ready in TestFlight!"
 ```
 
-Usage: `bash deploy.sh HelloWorld`
+Usage: `bash deploy.sh HelloWorld 13`
+
+### Post-Upload Workflow (REQUIRED)
+
+**After uploading to TestFlight, ALWAYS:**
+
+1. **Wait for the build to be VALID** using the `--wait` flag:
+   ```bash
+   ~/.claude/skills/ios-app/scripts/asc builds list --wait <BUILD_VERSION> --timeout 300
+   ```
+
+2. **Text the user** when the build is ready:
+   ```bash
+   ~/.claude/skills/sms-assistant/scripts/send-sms "CHAT_ID" "build <VERSION> is ready in TestFlight! 🚀"
+   ```
+
+This ensures the user knows exactly when they can test the new build without having to check manually.
 
 ## App Icons (Required for TestFlight)
 
@@ -603,7 +889,7 @@ All apps use: `com.sven.AppName` (using assistant name from identity CLI)
 # Bundle ID format: com.sven.AppName (lowercase)
 ```
 
-**Note:** Legacy apps may still use `com.dispatch.*` or `com.nicklaude.*`. New apps should use `com.sven.*`
+**Note:** Legacy apps may still use `com.dispatch.*` or `com.jsmith.*`. New apps should use `com.sven.*`
 
 ## Complete Build-Run-Debug Workflow
 
@@ -822,3 +1108,96 @@ xcodebuild test -project ~/code/ios-apps/TodoApp/TodoApp.xcodeproj -scheme TodoA
 4. **Save screenshots to /tmp/** - Easy to access and send
 5. **Always send screenshots to user** - They need to approve before TestFlight
 6. **Add small delays if needed** - `Thread.sleep(forTimeInterval: 0.2)` for UI updates
+
+## Audio Recording Optimization (Fast Startup)
+
+For apps that need instant audio recording (like Shazam-style apps), use these optimizations:
+
+### The Problem
+
+Default audio setup in `startRecording()` can take 300-500ms:
+- `AVAudioSession.setCategory()` + `setActive()`: 100-300ms
+- `AVAudioEngine` creation + start: 100-200ms
+- `SFSpeechRecognizer` initialization: 50-100ms
+
+### The Solution: Pre-warm Everything
+
+**1. Add UIKit AppDelegate for earliest lifecycle hooks:**
+
+```swift
+import SwiftUI
+import AVFoundation
+
+class AppDelegate: NSObject, UIApplicationDelegate {
+    func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
+        // Pre-warm audio session BEFORE any views load
+        Task.detached(priority: .userInitiated) {
+            await AudioPrewarmer.shared.prewarm()
+        }
+        return true
+    }
+}
+
+@main
+struct MyApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+    // ...
+}
+```
+
+**2. Create AudioPrewarmer singleton:**
+
+```swift
+@MainActor
+class AudioPrewarmer {
+    static let shared = AudioPrewarmer()
+    private(set) var audioEngine: AVAudioEngine?
+    private(set) var isPrewarmed = false
+
+    func prewarm() async {
+        guard !isPrewarmed else { return }
+        do {
+            let audioSession = AVAudioSession.sharedInstance()
+            try audioSession.setCategory(.playAndRecord, mode: .measurement, options: [.defaultToSpeaker])
+            try audioSession.setActive(true)
+            audioEngine = AVAudioEngine()
+            audioEngine?.prepare()
+            isPrewarmed = true
+        } catch { print("Prewarm failed: \(error)") }
+    }
+
+    func getEngine() -> AVAudioEngine {
+        audioEngine ?? AVAudioEngine()
+    }
+}
+```
+
+**3. Defer speech recognition (start recording immediately):**
+
+```swift
+func startRecording() {
+    // Use pre-warmed engine
+    audioEngine = AudioPrewarmer.shared.getEngine()
+
+    // Install tap and start engine IMMEDIATELY
+    inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
+        // Buffer audio for speech recognition (set up async)
+        if self.isSpeechReady {
+            self.recognitionRequest?.append(buffer)
+        } else {
+            self.pendingBuffers.append(buffer)
+        }
+    }
+    try audioEngine.start()  // NOW RECORDING!
+
+    // Set up speech recognition AFTER recording starts
+    Task { await setupSpeechRecognition() }
+}
+```
+
+**Key insight:** Recording can start before transcription is ready. Buffer the audio and feed it to the recognizer once it's initialized.
+
+### Results
+
+- **Before:** 300-500ms from tap to recording
+- **After:** <50ms from tap to recording (speech catches up ~100ms later)

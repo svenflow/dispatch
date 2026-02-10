@@ -23,11 +23,11 @@ config.example.yaml  ──copy──▶  config.local.yaml
 ```
 
 **GitHub:**
-- Template: [`config.example.yaml`](https://github.com/nicklaude/dispatch/blob/main/config.example.yaml)
-- Loader: [`assistant/config.py`](https://github.com/nicklaude/dispatch/blob/main/assistant/config.py)
-- Identity CLI: [`bin/identity`](https://github.com/nicklaude/dispatch/blob/main/bin/identity)
-- SOUL template: [`templates/SOUL.md`](https://github.com/nicklaude/dispatch/blob/main/templates/SOUL.md)
-- Global CLAUDE.md template: [`templates/CLAUDE.global.md`](https://github.com/nicklaude/dispatch/blob/main/templates/CLAUDE.global.md)
+- Template: [`config.example.yaml`](https://github.com/jsmith/dispatch/blob/main/config.example.yaml)
+- Loader: [`assistant/config.py`](https://github.com/jsmith/dispatch/blob/main/assistant/config.py)
+- Identity CLI: [`bin/identity`](https://github.com/jsmith/dispatch/blob/main/bin/identity)
+- SOUL template: [`templates/SOUL.md`](https://github.com/jsmith/dispatch/blob/main/templates/SOUL.md)
+- Global CLAUDE.md template: [`templates/CLAUDE.global.md`](https://github.com/jsmith/dispatch/blob/main/templates/CLAUDE.global.md)
 
 ## Step 1: Copy the Template
 
@@ -56,8 +56,8 @@ Claude will ask you for the following information using `AskUserQuestion`. Have 
 |---------|---------|----------|
 | Partner name | "Jane Smith" | Wife tier (special privileges) |
 | Signal number | "+15559876543" | Signal messaging channel |
-| Hue bridge IP | "10.10.10.23" | Philips Hue lights |
-| Lutron bridge IP | "10.10.10.22" | Lutron Caseta dimmers |
+| Hue bridge IP | "10.0.0.10" | Philips Hue lights |
+| Lutron bridge IP | "10.0.0.12" | Lutron Caseta dimmers |
 
 ## Step 3: Interactive Setup
 
@@ -77,7 +77,7 @@ Claude: Do you have a partner who should get special "wife" tier access?
 You: Yes, Jane Smith
 
 Claude: What is your Hue bridge IP? (or "skip" if you don't have Hue)
-You: 10.10.10.23
+You: 10.0.0.10
 ```
 
 ## Step 4: Edit config.local.yaml
@@ -105,10 +105,10 @@ signal:
 hue:
   bridges:
     home:
-      ip: "10.10.10.23"
+      ip: "10.0.0.10"
 
 lutron:
-  bridge_ip: "10.10.10.22"
+  bridge_ip: "10.0.0.12"
 
 chrome:
   profiles:
@@ -161,7 +161,7 @@ hue_ip = get("hue.bridges.home.ip")
 
 The `identity` CLI reads from your config and outputs values for use in skills:
 
-**GitHub:** [`bin/identity`](https://github.com/nicklaude/dispatch/blob/main/bin/identity)
+**GitHub:** [`bin/identity`](https://github.com/jsmith/dispatch/blob/main/bin/identity)
 
 ```bash
 # Test the identity CLI

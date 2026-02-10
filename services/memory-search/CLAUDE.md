@@ -1,6 +1,6 @@
 # memory-search
 
-Hybrid semantic search daemon for the nicklaude assistant system. Combines BM25 full-text search with vector embeddings and LLM reranking.
+Hybrid semantic search daemon for the jsmith assistant system. Combines BM25 full-text search with vector embeddings and LLM reranking.
 
 ## Architecture
 

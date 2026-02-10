@@ -13,4 +13,43 @@ dependencies = [
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
+    "requests>=2.31.0",
+    "python-dotenv>=1.0.0",
+    "ty>=0.0.1a0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "strict"
+addopts = "-m 'not live_api'"
+markers = [
+    "live_api: tests that call real Claude API (run with -m live_api)",
+]
+# tests/live/ has its own conftest that removes the SDK mock and imports the
+# real claude_agent_sdk.  Recursing into it during normal collection breaks
+# all other tests that depend on the mock.  Run live tests explicitly:
+#   uv run --group dev pytest tests/live/ -m live_api
+norecursedirs = ["tests/live"]
+
+[tool.ruff]
+line-length = 100
+indent-width = 2
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]  # E=pycodestyle, F=pyflakes, I=isort (import sorting)
+ignore = ["E501"]  # Line too long - let formatter handle it, don't error on string literals
+
+[tool.ruff.lint.isort]
+force-single-line = false
+combine-as-imports = true
+
+[tool.ruff.format]
+indent-style = "space"
+
+[tool.ty.environment]
+# Extra paths for modules that are dynamically added to sys.path
+extra-paths = [
+    "skills/contacts/scripts",
+    "skills/reminders/scripts",
+    "skills/sms-assistant/scripts",
+    "skills/tts/scripts",
 ]

@@ -89,7 +89,7 @@ def export_memories(db_path: Path, output_dir: Path):
 
 def main():
     parser = argparse.ArgumentParser(description="Export memories to markdown")
-    parser.add_argument("--output", "-o", default="~/.cache/nicklaude-search/memories-export",
+    parser.add_argument("--output", "-o", default="~/.cache/jsmith-search/memories-export",
                         help="Output directory")
     parser.add_argument("--db", "-d", default=str(MEMORY_DB),
                         help="Path to memory.duckdb")

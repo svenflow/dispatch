@@ -8,9 +8,16 @@ Covers:
 - Master/BG session exemption from idle killing
 - Multiple unhealthy sessions handled correctly
 - Health check doesn't restart healthy sessions
+- Tier 1: Fast regex-based fatal error detection from transcripts
+- Tier 2: Deep Haiku-based session analysis
+- Deduplication between tiers
 """
 import asyncio
-from datetime import datetime, timedelta
+import json
+import os
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from unittest.mock import AsyncMock, patch, MagicMock
 
 import pytest
 import pytest_asyncio
@@ -107,3 +114,445 @@ class TestHealthCheckDoesNotOverRestart:
         s2 = sdk_backend.sessions.get("test:+15555550006")
         assert s2 is not None
         assert id(s2) == s1_id
+
+
+# ──────────────────────────────────────────────────────────────
+# Tier 1: Fast regex-based fatal error detection (health.py)
+# ──────────────────────────────────────────────────────────────
+
+def _make_assistant_entry(text: str, ts: datetime | None = None) -> dict:
+    """Create a fake transcript assistant entry for testing."""
+    if ts is None:
+        ts = datetime.now(timezone.utc)
+    return {
+        "type": "assistant",
+        "timestamp": ts.isoformat(),
+        "message": {
+            "content": [{"type": "text", "text": text}],
+            "model": "claude-opus-4-5-20251101",
+        },
+    }
+
+
+class TestCheckFatalRegex:
+    """Test regex-based fatal error detection."""
+
+    def test_detects_image_dimension_error(self):
+        from assistant.health import check_fatal_regex
+        entries = [_make_assistant_entry(
+            'API Error: 400 {"type":"error","error":{"type":"invalid_request_error",'
+            '"message":"messages.21.content.94.image.source.base64.data: At least one '
+            'of the image dimensions exceed max allowed size for many-image requests: 2000 pixels"}}'
+        )]
+        result = check_fatal_regex(entries)
+        assert result is not None
+        assert "invalid_request" in result or "image" in result
+
+    def test_detects_context_length_exceeded(self):
+        from assistant.health import check_fatal_regex
+        entries = [_make_assistant_entry(
+            'API Error: 400 {"type":"error","error":{"type":"invalid_request_error",'
+            '"message":"context_length_exceeded: the prompt is too long"}}'
+        )]
+        result = check_fatal_regex(entries)
+        assert result is not None
+
+    def test_detects_prompt_too_long(self):
+        from assistant.health import check_fatal_regex
+        entries = [_make_assistant_entry(
+            'API Error: 400 prompt is too long: 250000 tokens'
+        )]
+        result = check_fatal_regex(entries)
+        assert result is not None
+
+    def test_detects_auth_failed(self):
+        from assistant.health import check_fatal_regex
+        entries = [_make_assistant_entry(
+            'Error: "authentication_failed" - your API key is invalid'
+        )]
+        result = check_fatal_regex(entries)
+        assert result == "auth_failed"
+
+    def test_detects_billing_error(self):
+        from assistant.health import check_fatal_regex
+        entries = [_make_assistant_entry(
+            'Error: "billing_error" - account has insufficient credits'
+        )]
+        result = check_fatal_regex(entries)
+        assert result == "billing_error"
+
+    def test_ignores_transient_rate_limit(self):
+        from assistant.health import check_fatal_regex
+        entries = [_make_assistant_entry(
+            'Rate limit exceeded. Retrying in 5 seconds...'
+        )]
+        result = check_fatal_regex(entries)
+        assert result is None
+
+    def test_ignores_server_overload(self):
+        from assistant.health import check_fatal_regex
+        entries = [_make_assistant_entry(
+            'Server overloaded (529). Retrying...'
+        )]
+        result = check_fatal_regex(entries)
+        assert result is None
+
+    def test_ignores_normal_text(self):
+        from assistant.health import check_fatal_regex
+        entries = [_make_assistant_entry(
+            "I'll help you with that task. Let me check the files."
+        )]
+        result = check_fatal_regex(entries)
+        assert result is None
+
+    def test_empty_entries(self):
+        from assistant.health import check_fatal_regex
+        assert check_fatal_regex([]) is None
+
+    def test_multiple_entries_catches_fatal_in_any(self):
+        from assistant.health import check_fatal_regex
+        entries = [
+            _make_assistant_entry("I'll look into that."),
+            _make_assistant_entry("Let me check the code."),
+            _make_assistant_entry(
+                'API Error: 400 {"type":"error","error":{"type":"invalid_request_error",'
+                '"message":"image dimensions exceed max allowed size"}}'
+            ),
+        ]
+        result = check_fatal_regex(entries)
+        assert result is not None
+
+    def test_detects_content_size_exceeds(self):
+        from assistant.health import check_fatal_regex
+        entries = [_make_assistant_entry(
+            'API Error: 400 content size exceeds maximum allowed size'
+        )]
+        result = check_fatal_regex(entries)
+        assert result == "content_too_large"
+
+
+class TestExtractAssistantText:
+    """Test text extraction from transcript entries."""
+
+    def test_extracts_text_blocks(self):
+        from assistant.health import extract_assistant_text
+        entries = [
+            _make_assistant_entry("Hello world"),
+            _make_assistant_entry("Second message"),
+        ]
+        result = extract_assistant_text(entries)
+        assert "Hello world" in result
+        assert "Second message" in result
+
+    def test_respects_max_chars(self):
+        from assistant.health import extract_assistant_text
+        entries = [_make_assistant_entry("x" * 5000)]
+        result = extract_assistant_text(entries, max_chars=100)
+        assert len(result) <= 100
+
+    def test_empty_entries(self):
+        from assistant.health import extract_assistant_text
+        assert extract_assistant_text([]) == ""
+
+    def test_skips_non_text_content(self):
+        from assistant.health import extract_assistant_text
+        entries = [{
+            "type": "assistant",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "message": {
+                "content": [{"type": "tool_use", "name": "Bash", "input": {"command": "ls"}}],
+            },
+        }]
+        result = extract_assistant_text(entries)
+        assert result == ""
+
+
+class TestGetTranscriptEntriesSince:
+    """Test transcript JSONL reading."""
+
+    def test_reads_entries_after_timestamp(self, tmp_path):
+        from assistant.health import get_transcript_entries_since
+
+        # Create a fake transcript
+        now = datetime.now(timezone.utc)
+        old = now - timedelta(minutes=10)
+        recent = now - timedelta(seconds=30)
+
+        lines = [
+            json.dumps({
+                "type": "assistant",
+                "timestamp": old.isoformat(),
+                "message": {"content": [{"type": "text", "text": "old message"}]},
+            }),
+            json.dumps({
+                "type": "assistant",
+                "timestamp": recent.isoformat(),
+                "message": {"content": [{"type": "text", "text": "recent message"}]},
+            }),
+        ]
+
+        # Write to a fake transcript location
+        session_id = "test-session-abc"
+        sanitized_cwd = str(tmp_path / "cwd").replace("/", "-")
+        if not sanitized_cwd.startswith("-"):
+            sanitized_cwd = "-" + sanitized_cwd
+        project_dir = Path.home() / ".claude" / "projects" / sanitized_cwd
+        project_dir.mkdir(parents=True, exist_ok=True)
+        transcript = project_dir / f"{session_id}.jsonl"
+        transcript.write_text("\n".join(lines))
+
+        try:
+            since = now - timedelta(minutes=5)
+            entries = get_transcript_entries_since(str(tmp_path / "cwd"), session_id, since)
+            assert len(entries) == 1
+            assert "recent message" in json.dumps(entries[0])
+        finally:
+            # Cleanup
+            transcript.unlink(missing_ok=True)
+            try:
+                project_dir.rmdir()
+            except OSError:
+                pass
+
+    def test_returns_empty_for_missing_transcript(self):
+        from assistant.health import get_transcript_entries_since
+        entries = get_transcript_entries_since("/nonexistent/path", "no-session", datetime.now(timezone.utc))
+        assert entries == []
+
+    def test_filters_non_assistant_types(self, tmp_path):
+        from assistant.health import get_transcript_entries_since
+
+        now = datetime.now(timezone.utc)
+        lines = [
+            json.dumps({"type": "user", "timestamp": now.isoformat(), "message": {"content": "hello"}}),
+            json.dumps({"type": "system", "timestamp": now.isoformat(), "subtype": "init"}),
+            json.dumps({"type": "assistant", "timestamp": now.isoformat(), "message": {"content": [{"type": "text", "text": "response"}]}}),
+        ]
+
+        session_id = "test-filter"
+        sanitized_cwd = str(tmp_path / "filter-cwd").replace("/", "-")
+        if not sanitized_cwd.startswith("-"):
+            sanitized_cwd = "-" + sanitized_cwd
+        project_dir = Path.home() / ".claude" / "projects" / sanitized_cwd
+        project_dir.mkdir(parents=True, exist_ok=True)
+        transcript = project_dir / f"{session_id}.jsonl"
+        transcript.write_text("\n".join(lines))
+
+        try:
+            since = now - timedelta(minutes=1)
+            entries = get_transcript_entries_since(str(tmp_path / "filter-cwd"), session_id, since)
+            assert len(entries) == 1
+            assert entries[0]["type"] == "assistant"
+        finally:
+            transcript.unlink(missing_ok=True)
+            try:
+                project_dir.rmdir()
+            except OSError:
+                pass
+
+
+# ──────────────────────────────────────────────────────────────
+# Tier 2: Deep Haiku analysis (health.py)
+# ──────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+class TestCheckDeepHaiku:
+    """Test Haiku-based session analysis."""
+
+    async def test_returns_none_for_empty_entries(self):
+        from assistant.health import check_deep_haiku
+        result = await check_deep_haiku([], "test-session")
+        assert result is None
+
+    async def test_returns_none_for_short_text(self):
+        from assistant.health import check_deep_haiku
+        entries = [_make_assistant_entry("ok")]
+        result = await check_deep_haiku(entries, "test-session")
+        assert result is None
+
+    async def test_fatal_response_returns_reason(self):
+        from assistant.health import check_deep_haiku
+        from claude_agent_sdk import AssistantMessage, TextBlock, ResultMessage
+
+        async def _fake_query(**kwargs):
+            yield AssistantMessage([TextBlock("FATAL: Repeated image dimension errors with no recovery")])
+            yield ResultMessage()
+
+        entries = [_make_assistant_entry("API Error: 400 image dimensions exceed max")]
+
+        with patch("claude_agent_sdk.query", _fake_query):
+            result = await check_deep_haiku(entries, "test-session")
+
+        assert result is not None
+        assert "image" in result.lower()
+
+    async def test_healthy_response_returns_none(self):
+        from assistant.health import check_deep_haiku
+        from claude_agent_sdk import AssistantMessage, TextBlock, ResultMessage
+
+        async def _fake_query(**kwargs):
+            yield AssistantMessage([TextBlock("HEALTHY")])
+            yield ResultMessage()
+
+        entries = [_make_assistant_entry("I'll help with that task.")]
+
+        with patch("claude_agent_sdk.query", _fake_query):
+            result = await check_deep_haiku(entries, "test-session")
+
+        assert result is None
+
+    async def test_api_failure_returns_none(self):
+        from assistant.health import check_deep_haiku
+
+        entries = [_make_assistant_entry("Some error message that is long enough")]
+
+        async def _failing_query(**kwargs):
+            raise Exception("SDK query failed")
+            yield  # noqa: unreachable — makes this an async generator
+
+        with patch("claude_agent_sdk.query", _failing_query):
+            result = await check_deep_haiku(entries, "test-session")
+
+        assert result is None  # Graceful fallback, don't crash
+
+
+# ──────────────────────────────────────────────────────────────
+# Integration: SDKBackend fast_health_check / deep_health_check
+# ──────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+class TestFastHealthCheck:
+    """Test Tier 1 fast regex health check on SDKBackend."""
+
+    async def test_no_sessions_returns_empty(self, sdk_backend):
+        result = await sdk_backend.fast_health_check()
+        assert result == []
+
+    async def test_healthy_sessions_not_restarted(self, sdk_backend):
+        await sdk_backend.create_session("User", "test:+15555550006", "admin", source="test")
+        # No transcript = no entries = no fatal errors
+        result = await sdk_backend.fast_health_check()
+        assert result == []
+
+    async def test_detects_fatal_from_transcript(self, sdk_backend):
+        await sdk_backend.create_session("User", "test:+15555550006", "admin", source="test")
+        session = sdk_backend.sessions["test:+15555550006"]
+
+        # Mock get_transcript_entries_since to return a fatal entry
+        fatal_entry = _make_assistant_entry(
+            'API Error: 400 {"type":"error","error":{"type":"invalid_request_error",'
+            '"message":"image dimensions exceed max allowed size for many-image requests: 2000 pixels"}}'
+        )
+
+        with patch("assistant.sdk_backend.get_transcript_entries_since", return_value=[fatal_entry]):
+            with patch("assistant.sdk_backend.check_fatal_regex", return_value="image_too_large"):
+                result = await sdk_backend.fast_health_check()
+
+        assert "test:+15555550006" in result
+        assert "test:+15555550006" in sdk_backend._recently_healed
+
+    async def test_skips_bg_sessions(self, sdk_backend):
+        await sdk_backend.create_session("User", "test:+15555550006-bg", "admin", source="test")
+
+        with patch("assistant.sdk_backend.get_transcript_entries_since") as mock:
+            await sdk_backend.fast_health_check()
+            mock.assert_not_called()
+
+    async def test_skips_recently_healed(self, sdk_backend):
+        await sdk_backend.create_session("User", "test:+15555550006", "admin", source="test")
+        sdk_backend._recently_healed["test:+15555550006"] = datetime.now()
+
+        with patch("assistant.sdk_backend.get_transcript_entries_since") as mock:
+            await sdk_backend.fast_health_check()
+            mock.assert_not_called()
+
+    async def test_updates_last_fast_check(self, sdk_backend):
+        await sdk_backend.create_session("User", "test:+15555550006", "admin", source="test")
+
+        with patch("assistant.sdk_backend.get_transcript_entries_since", return_value=[]):
+            await sdk_backend.fast_health_check()
+
+        assert "test:+15555550006" in sdk_backend._last_fast_check
+
+
+@pytest.mark.asyncio
+class TestDeepHealthCheck:
+    """Test Tier 2 deep Haiku health check on SDKBackend."""
+
+    async def test_no_sessions_returns_empty(self, sdk_backend):
+        result = await sdk_backend.deep_health_check()
+        assert result == []
+
+    async def test_skips_sessions_in_skip_set(self, sdk_backend):
+        await sdk_backend.create_session("User", "test:+15555550006", "admin", source="test")
+
+        with patch("assistant.sdk_backend.get_transcript_entries_since") as mock:
+            await sdk_backend.deep_health_check(skip_chat_ids={"test:+15555550006"})
+            mock.assert_not_called()
+
+    async def test_skips_recently_healed(self, sdk_backend):
+        await sdk_backend.create_session("User", "test:+15555550006", "admin", source="test")
+        sdk_backend._recently_healed["test:+15555550006"] = datetime.now()
+
+        with patch("assistant.sdk_backend.get_transcript_entries_since") as mock:
+            await sdk_backend.deep_health_check()
+            mock.assert_not_called()
+
+    async def test_calls_haiku_with_entries(self, sdk_backend):
+        await sdk_backend.create_session("User", "test:+15555550006", "admin", source="test")
+
+        entries = [_make_assistant_entry("Something suspicious")]
+
+        with patch("assistant.sdk_backend.get_transcript_entries_since", return_value=entries):
+            with patch("assistant.sdk_backend.check_deep_haiku", new_callable=AsyncMock, return_value=None) as mock_haiku:
+                await sdk_backend.deep_health_check()
+                mock_haiku.assert_called_once()
+
+    async def test_restarts_on_fatal_haiku_diagnosis(self, sdk_backend):
+        await sdk_backend.create_session("User", "test:+15555550006", "admin", source="test")
+
+        entries = [_make_assistant_entry("Repeated errors")]
+
+        with patch("assistant.sdk_backend.get_transcript_entries_since", return_value=entries):
+            with patch("assistant.sdk_backend.check_deep_haiku", new_callable=AsyncMock, return_value="Session stuck in error loop"):
+                result = await sdk_backend.deep_health_check()
+
+        assert "test:+15555550006" in result
+        assert "test:+15555550006" in sdk_backend._recently_healed
+
+
+@pytest.mark.asyncio
+class TestHealingDeduplication:
+    """Test that Tier 1 and Tier 2 don't double-heal the same session."""
+
+    async def test_recently_healed_expires(self, sdk_backend):
+        """Recently healed entries should expire after 5 minutes."""
+        sdk_backend._recently_healed["old"] = datetime.now() - timedelta(minutes=6)
+        sdk_backend._recently_healed["recent"] = datetime.now()
+
+        # fast_health_check cleans stale entries
+        with patch("assistant.sdk_backend.get_transcript_entries_since", return_value=[]):
+            await sdk_backend.fast_health_check()
+
+        assert "old" not in sdk_backend._recently_healed
+        assert "recent" in sdk_backend._recently_healed
+
+    async def test_tier1_heal_prevents_tier2(self, sdk_backend):
+        """Session healed by fast check should be skipped by deep check."""
+        await sdk_backend.create_session("User", "test:+15555550006", "admin", source="test")
+
+        fatal_entry = _make_assistant_entry('API Error: 400 invalid_request_error image dimensions')
+
+        # Tier 1 catches it
+        with patch("assistant.sdk_backend.get_transcript_entries_since", return_value=[fatal_entry]):
+            with patch("assistant.sdk_backend.check_fatal_regex", return_value="image_too_large"):
+                healed = await sdk_backend.fast_health_check()
+
+        assert "test:+15555550006" in healed
+
+        # Tier 2 should skip it
+        with patch("assistant.sdk_backend.get_transcript_entries_since") as mock_entries:
+            with patch("assistant.sdk_backend.check_deep_haiku") as mock_haiku:
+                await sdk_backend.deep_health_check(skip_chat_ids=set(healed))
+                mock_entries.assert_not_called()
+                mock_haiku.assert_not_called()

@@ -42,3 +42,4 @@ skills.bak/
 
 # ── LaunchD (system-specific) ──────────────────────────────────
 launchd/*.plist
+skills/tts/models/
