@@ -251,8 +251,8 @@ def sample_message():
         from_phone: str = "+15555551234",
         text: str = "Hello from test",
         is_group: bool = False,
-        chat_id: str = None,
-        group_name: str = None,
+        chat_id: str | None = None,
+        group_name: str | None = None,
         source: str = "test",
     ) -> dict:
         return {
@@ -272,8 +272,8 @@ def normalized_message():
         phone: str = "+15555551234",
         text: str = "Hello from test",
         is_group: bool = False,
-        chat_identifier: str = None,
-        group_name: str = None,
+        chat_identifier: str | None = None,
+        group_name: str | None = None,
         source: str = "test",
     ) -> dict:
         return {

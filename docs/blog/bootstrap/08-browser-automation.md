@@ -38,7 +38,7 @@ AppleScript/osascript for Chrome is unreliable and limited. A native Chrome exte
 
 ## Implementation
 
-**GitHub:** [`skills/chrome-control/`](https://github.com/nicklaude/dispatch/tree/main/skills/chrome-control)
+**GitHub:** [`skills/chrome-control/`](https://github.com/jsmith/dispatch/tree/main/skills/chrome-control)
 
 The complete implementation includes:
 
@@ -165,7 +165,7 @@ ln -sf ~/dispatch/skills/chrome-control ~/.claude/skills/chrome-control
 
 ## SKILL.md Reference
 
-The [`SKILL.md`](https://github.com/nicklaude/dispatch/blob/main/skills/chrome-control/SKILL.md) teaches Claude:
+The [`SKILL.md`](https://github.com/jsmith/dispatch/blob/main/skills/chrome-control/SKILL.md) teaches Claude:
 - When to use browser automation
 - Command syntax and examples
 - Profile permissions (assistant vs owner)

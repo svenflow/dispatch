@@ -41,7 +41,7 @@ def extract_transcription(attributed_body: bytes) -> str:
 
     return ""
 
-def get_latest_audio_transcription(phone: str = None) -> dict:
+def get_latest_audio_transcription(phone: str | None = None) -> dict:
     """Get the most recent audio message transcription."""
     conn = sqlite3.connect(str(MESSAGES_DB))
 

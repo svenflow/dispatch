@@ -24,8 +24,8 @@ Keep the system running reliably 24/7:
 ```
 
 **GitHub:**
-- [`assistant/sdk_backend.py`](https://github.com/nicklaude/dispatch/blob/main/assistant/sdk_backend.py) - Health check implementation
-- [`assistant/sdk_session.py`](https://github.com/nicklaude/dispatch/blob/main/assistant/sdk_session.py) - Session health state
+- [`assistant/sdk_backend.py`](https://github.com/jsmith/dispatch/blob/main/assistant/sdk_backend.py) - Health check implementation
+- [`assistant/sdk_session.py`](https://github.com/jsmith/dispatch/blob/main/assistant/sdk_session.py) - Session health state
 
 ## Health Check Logic
 

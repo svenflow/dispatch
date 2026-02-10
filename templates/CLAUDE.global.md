@@ -27,20 +27,24 @@ CLIs are testable, reusable, handle edge cases, and are debuggable. One-off expl
 
 ### 6. Session Management via CLI Only
 ```bash
-claude-assistant kill-session <name>   # Kill specific session
-claude-assistant restart-session <name> # Restart specific session
-claude-assistant restart-sessions      # Restart all sessions
+claude-assistant kill-session <session>   # Kill specific session
+claude-assistant restart-session <session> # Restart specific session
+claude-assistant restart-sessions         # Restart all sessions
 ```
+**session** is the `{backend}/{sanitized_chat_id}` format from `sessions.json`, e.g. `imessage/_15555550100` or `imessage/2df6be1ed7534cd797e5fdb2c4bd6bd8`. Find it via `claude-assistant status` or check `~/dispatch/state/sessions.json`.
 
 ### 7. Prompt Injection via CLI Only
 **ALWAYS use `inject-prompt`** — never inject prompts directly into sessions.
 ```bash
-claude-assistant inject-prompt <chat_id> "prompt"        # Basic
-claude-assistant inject-prompt <chat_id> --sms "msg"     # SMS format
-claude-assistant inject-prompt <chat_id> --admin "cmd"   # Admin override
-claude-assistant inject-prompt <chat_id> --bg "prompt"   # Background session
+claude-assistant inject-prompt <session> "prompt"        # Basic
+claude-assistant inject-prompt <session> --sms "msg"     # SMS format
+claude-assistant inject-prompt <session> --admin "cmd"   # Admin override
+claude-assistant inject-prompt <session> --bg "prompt"   # Background session
 ```
-Why: lazy session creation, locking (no race conditions), registry sync, consistent tag wrapping, security (admin-only).
+`<session>` accepts any of: session_name (`imessage/_15555550100`), chat_id (`2df6be1ed7534cd797e5fdb2c4bd6bd8`), or contact name (`Jane Doe`).
+Why: **auto-creates sessions for unknown contacts**, lazy session creation, locking (no race conditions), registry sync, consistent tag wrapping, security (admin-only).
+
+**Auto-create behavior:** If chat_id isn't in the registry or Contacts, a new session is created automatically with `favorite` tier (restricted). Add the contact to the appropriate Contacts.app group afterward if elevated access is needed.
 
 ## System Overview
 
@@ -83,7 +87,7 @@ Tiers are managed via macOS Contacts.app groups. See tier-specific rule files in
 - `~/dispatch/` - Main daemon code
 - `~/.claude/skills/` - Reusable skill modules
 - `~/transcripts/{backend}/{sanitized_chat_id}/` - Conversation history per contact
-  - Examples: `~/transcripts/imessage/_16175969496/`, `~/transcripts/signal/_16175969496/`
+  - Examples: `~/transcripts/imessage/_15555550100/`, `~/transcripts/signal/_15555550100/`
   - Backend: `imessage`, `signal`, or `test`
   - Sanitized chat_id: `+` replaced with `_`, registry prefix stripped
 - `~/dispatch/state/sessions.json` - Session metadata (maps chat_id → session info)
@@ -191,7 +195,7 @@ description: What this skill does. Include trigger words.
 ### How Skills Get Embedded into Sessions
 
 1. Transcript directory created at `~/transcripts/{backend}/{sanitized_chat_id}/`
-   - Example: `~/transcripts/imessage/_16175969496/`
+   - Example: `~/transcripts/imessage/_15555550100/`
 2. Symlink: `~/transcripts/{backend}/{sanitized_chat_id}/.claude -> ~/.claude` (gives access to all skills)
 3. sms-assistant SKILL.md injected with placeholders replaced (`{{CONTACT_NAME}}`, `{{TIER}}`, `{{CHAT_ID}}`)
 4. Contact memory loaded from Contacts.app notes

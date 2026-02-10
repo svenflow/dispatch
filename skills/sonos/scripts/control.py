@@ -75,7 +75,7 @@ def list_speakers():
         print(f"    Volume: {speaker.volume}% | State: {state}{group_info}")
         print()
 
-def get_status(name: str = None):
+def get_status(name: str | None = None):
     """Get status of speaker(s)."""
     if name:
         speaker = find_speaker(name)
@@ -132,7 +132,7 @@ def control_playback(name: str, action: str):
         coordinator.previous()
         print(f"Skipped to previous track on {coordinator.player_name}")
 
-def set_volume(name: str, level: int = None):
+def set_volume(name: str, level: int | None = None):
     """Set or get volume."""
     speaker = find_speaker(name)
     if not speaker:
@@ -252,7 +252,7 @@ def get_eq(name: str):
     except:
         pass
 
-def set_bass(name: str, level: int = None):
+def set_bass(name: str, level: int | None = None):
     """Get or set bass level (-10 to +10)."""
     speaker = find_speaker(name)
     if not speaker:
@@ -266,7 +266,7 @@ def set_bass(name: str, level: int = None):
     else:
         print(f"{speaker.player_name} bass: {speaker.bass}")
 
-def set_treble(name: str, level: int = None):
+def set_treble(name: str, level: int | None = None):
     """Get or set treble level (-10 to +10)."""
     speaker = find_speaker(name)
     if not speaker:
@@ -280,7 +280,7 @@ def set_treble(name: str, level: int = None):
     else:
         print(f"{speaker.player_name} treble: {speaker.treble}")
 
-def set_loudness(name: str, enabled: bool = None):
+def set_loudness(name: str, enabled: bool | None = None):
     """Get or set loudness compensation."""
     speaker = find_speaker(name)
     if not speaker:
@@ -293,7 +293,7 @@ def set_loudness(name: str, enabled: bool = None):
     else:
         print(f"{speaker.player_name} loudness: {'On' if speaker.loudness else 'Off'}")
 
-def set_night_mode(name: str, enabled: bool = None):
+def set_night_mode(name: str, enabled: bool | None = None):
     """Get or set night mode (soundbars only)."""
     speaker = find_speaker(name)
     if not speaker:
@@ -309,7 +309,7 @@ def set_night_mode(name: str, enabled: bool = None):
     except Exception as e:
         print(f"Night mode not supported on {speaker.player_name}")
 
-def set_dialog_mode(name: str, enabled: bool = None):
+def set_dialog_mode(name: str, enabled: bool | None = None):
     """Get or set dialog/speech enhancement (soundbars only)."""
     speaker = find_speaker(name)
     if not speaker:
@@ -333,7 +333,7 @@ def set_dialog_mode(name: str, enabled: bool = None):
     except Exception as e:
         print(f"Dialog enhancement not supported on {speaker.player_name}")
 
-def set_sub_gain(name: str, level: int = None):
+def set_sub_gain(name: str, level: int | None = None):
     """Get or set subwoofer gain (-15 to +15)."""
     speaker = find_speaker(name)
     if not speaker:

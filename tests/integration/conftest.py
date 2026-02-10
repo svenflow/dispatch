@@ -172,7 +172,7 @@ def chatdb_helper(fake_chatdb):
             self._handles[phone] = handle_id
             return handle_id
 
-        def add_chat(self, chat_id: str, display_name: str = None, is_group: bool = False) -> int:
+        def add_chat(self, chat_id: str, display_name: str | None = None, is_group: bool = False) -> int:
             """Add a chat and return its ROWID."""
             if chat_id in self._chats:
                 return self._chats[chat_id]
@@ -193,9 +193,9 @@ def chatdb_helper(fake_chatdb):
             self,
             text: str,
             sender_phone: str,
-            chat_id: str = None,
+            chat_id: str | None = None,
             is_from_me: bool = False,
-            timestamp: int = None,
+            timestamp: int | None = None,
         ) -> int:
             """
             Add a message to the database.

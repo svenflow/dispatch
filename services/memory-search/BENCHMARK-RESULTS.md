@@ -63,7 +63,7 @@ Scheduling and error-related queries performed best. Web and people queries were
 
 **Use the existing cross-encoder (qwen3-reranker via node-llama-cpp)**
 
-It's already integrated in nicklaude-search and is the optimal choice for:
+It's already integrated in jsmith-search and is the optimal choice for:
 - Speed: Sub-400ms for 10 documents
 - Quality: Best F1 on real data
 - Simplicity: Single model call per document pair

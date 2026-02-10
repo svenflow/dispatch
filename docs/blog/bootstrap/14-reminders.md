@@ -37,8 +37,8 @@ Give Claude the ability to schedule tasks for later execution. Reminders let you
 ```
 
 **GitHub:**
-- [`skills/reminders/`](https://github.com/nicklaude/dispatch/tree/main/skills/reminders) - Scripts and SKILL.md
-- [`assistant/manager.py`](https://github.com/nicklaude/dispatch/blob/main/assistant/manager.py) - ReminderPoller class
+- [`skills/reminders/`](https://github.com/jsmith/dispatch/tree/main/skills/reminders) - Scripts and SKILL.md
+- [`assistant/manager.py`](https://github.com/jsmith/dispatch/blob/main/assistant/manager.py) - ReminderPoller class
 
 ## Key Components
 

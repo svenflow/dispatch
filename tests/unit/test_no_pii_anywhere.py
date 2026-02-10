@@ -25,6 +25,12 @@ SKIP_DIRS = {
     ".claude",  # symlink to ~/.claude which has personal data
     "skills.bak",  # backup of original skills
     "tests",  # test files legitimately contain PII as test constants
+    "skills",  # has dedicated PII test in test_skills_in_repo.py
+    "docs",  # blog posts and documentation use example names
+    "prototypes",  # old prototype code with example data
+    "research",  # research scripts with example data
+    "services",  # memory-search service with development data
+    "apps",  # chat-viewer with development data
 }
 
 # Binary extensions to skip

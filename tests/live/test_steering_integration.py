@@ -21,6 +21,10 @@ import asyncio
 import os
 import sys
 import time
+
+import pytest
+
+pytestmark = [pytest.mark.asyncio, pytest.mark.live_api]
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any

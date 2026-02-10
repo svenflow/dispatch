@@ -23,7 +23,7 @@ import { existsSync, mkdirSync } from "fs";
 // =============================================================================
 
 const HOME = homedir();
-const MODEL_CACHE_DIR = join(HOME, ".cache", "nicklaude-search", "models");
+const MODEL_CACHE_DIR = join(HOME, ".cache", "jsmith-search", "models");
 
 // HuggingFace model URIs (same as qmd)
 const EMBED_MODEL_URI = "hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf";

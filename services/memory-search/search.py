@@ -8,7 +8,7 @@
 # ]
 # ///
 """
-nicklaude-search: Hybrid semantic search for the nicklaude assistant system.
+jsmith-search: Hybrid semantic search for the jsmith assistant system.
 
 Combines BM25 full-text search with vector semantic search using RRF fusion.
 Inspired by qmd (https://github.com/tobi/qmd) but simplified for our needs.
@@ -45,7 +45,7 @@ def get_embedding_model():
 # Configuration
 # =============================================================================
 
-DEFAULT_DB_PATH = Path.home() / ".cache" / "nicklaude-search" / "index.sqlite"
+DEFAULT_DB_PATH = Path.home() / ".cache" / "jsmith-search" / "index.sqlite"
 EMBEDDING_DIM = 384  # all-MiniLM-L6-v2 dimension
 CHUNK_SIZE_CHARS = 2000  # Simpler char-based chunking
 CHUNK_OVERLAP_CHARS = 200
@@ -565,7 +565,7 @@ def hybrid_search(conn: sqlite3.Connection, query: str, limit: int = 10,
 
 def main():
     parser = argparse.ArgumentParser(
-        description="nicklaude-search: Hybrid semantic search"
+        description="jsmith-search: Hybrid semantic search"
     )
     subparsers = parser.add_subparsers(dest="command", help="Commands")
 

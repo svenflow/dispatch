@@ -4,8 +4,8 @@ import subprocess
 from unittest.mock import patch, MagicMock
 import sys
 
-# Add contacts-cli to path for imports
-sys.path.insert(0, str(__import__('pathlib').Path.home() / "code/contacts-cli"))
+# Add contacts skill to path for imports
+sys.path.insert(0, str(__import__('pathlib').Path.home() / "dispatch/skills/contacts/scripts"))
 
 from contacts_core import (
     ensure_contacts_running,

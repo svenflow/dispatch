@@ -1,15 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:atom="http://www.w3.org/2005/Atom">
   <channel>
-    <title>Nicklaude TTS</title>
+    <title>Jsmith TTS</title>
     <description>Private podcast feed for text-to-speech audio</description>
-    <link>https://storage.googleapis.com/nicklaude-podcast</link>
-    <atom:link href="https://storage.googleapis.com/nicklaude-podcast/feed.xml" rel="self" type="application/rss+xml"/>
+    <link>https://storage.googleapis.com/jsmith-podcast</link>
+    <atom:link href="https://storage.googleapis.com/jsmith-podcast/feed.xml" rel="self" type="application/rss+xml"/>
     <language>en-us</language>
-    <itunes:author>Nicklaude</itunes:author>
+    <itunes:author>Jsmith</itunes:author>
     <itunes:category text="Technology"/>
     <itunes:explicit>false</itunes:explicit>
-    <itunes:image href="https://storage.googleapis.com/nicklaude-podcast/cover.png"/>
+    <itunes:image href="https://storage.googleapis.com/jsmith-podcast/cover.png"/>
 
   </channel>
 </rss>

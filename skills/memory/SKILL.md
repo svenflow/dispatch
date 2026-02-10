@@ -84,18 +84,46 @@ curl -X POST http://localhost:7890/memory/delete \
   -d '{"id":123}'
 ```
 
-## Memory Consolidation (Nightly)
+## Memory Consolidation (Nightly to Contacts.app)
 
-Run this to review today's conversations and extract memories:
+Extracts personal facts from conversations and writes them to Contacts.app notes.
+Runs automatically at 2am via the manager daemon.
 
 ```bash
+# Manual run for one contact
 uv run ~/.claude/skills/memory/scripts/memory.py consolidate "contact-name"
+
+# Run for all contacts
+uv run ~/.claude/skills/memory/scripts/memory.py consolidate --all
+
+# Dry run (preview without writing)
+uv run ~/.claude/skills/memory/scripts/memory.py consolidate --dry-run "contact-name"
+
+# Verbose output (shows extraction details)
+uv run ~/.claude/skills/memory/scripts/memory.py consolidate --verbose "contact-name"
 ```
 
-This outputs today's messages for review. Then:
-1. Review the conversation highlights
-2. Save important memories: `memory save "contact" "insight" --type TYPE`
-3. Sync CLAUDE.md: `memory sync "contact"`
+**What gets extracted:**
+- Family/relationships (spouse, kids, pets)
+- Location/living situation
+- Hobbies/interests
+- Important dates (birthday, anniversary)
+- Preferences (food, music, travel)
+- Life events (expecting baby, moving, new job)
+
+**What does NOT get extracted:**
+- Technical/coding preferences (those stay in CLAUDE.md)
+- Transactional details ("asked about weather")
+- System/infrastructure details
+
+**Tier-aware prompts:** Wife tier gets extra emphasis on birthdays, anniversaries, and health info. Family tier emphasizes kids' names and where they live.
+
+**Safety:**
+- Backups saved to `~/.claude/state/notes-backup/` before each write
+- User Notes section in Contacts.app is preserved
+- 2-pass review rejects updates that lose important info
+
+**Check status:** `claude-assistant status` shows last consolidation run.
 
 ## Memory Types
 
@@ -162,7 +190,7 @@ Per-contact summaries live in transcript folders:
 `~/transcripts/{backend}/{sanitized_chat_id}/CLAUDE.md`
 
 Examples:
-- `~/transcripts/imessage/_16175969496/CLAUDE.md`
-- `~/transcripts/signal/_16175969496/CLAUDE.md`
+- `~/transcripts/imessage/_15555550100/CLAUDE.md`
+- `~/transcripts/signal/_15555550100/CLAUDE.md`
 
 These are auto-loaded by Claude Code when working in that directory.

@@ -31,6 +31,7 @@ from assistant.common import (
     format_message_body,
     get_reply_chain,
 )
+from assistant.health import get_transcript_entries_since, check_fatal_regex, check_deep_haiku
 from assistant.sdk_session import SDKSession
 
 log = logging.getLogger(__name__)
@@ -152,6 +153,10 @@ class SDKBackend:
         self.contacts = contacts_manager
         self.sessions: Dict[str, SDKSession] = {}  # chat_id -> SDKSession
         self._lock = asyncio.Lock()
+
+        # Two-tier healing state
+        self._last_fast_check: Dict[str, datetime] = {}  # chat_id -> last scan timestamp
+        self._recently_healed: Dict[str, datetime] = {}  # chat_id -> heal timestamp
 
     # ──────────────────────────────────────────────────────────────
     # Individual sessions
@@ -299,9 +304,9 @@ class SDKBackend:
         chat_id: str,
         text: str,
         tier: str,
-        attachments: list = None,
-        audio_transcription: str = None,
-        thread_originator_guid: str = None,
+        attachments: list | None = None,
+        audio_transcription: str | None = None,
+        thread_originator_guid: str | None = None,
         source: str = "imessage",
     ) -> bool:
         """Inject a message into an existing session.
@@ -346,7 +351,7 @@ class SDKBackend:
     # Group sessions
     # ──────────────────────────────────────────────────────────────
 
-    def get_group_session_name(self, chat_id: str, display_name: str = None,
+    def get_group_session_name(self, chat_id: str, display_name: str | None = None,
                                 source: str = "imessage") -> str:
         existing = self.registry.get(chat_id)
         if existing:
@@ -356,8 +361,8 @@ class SDKBackend:
     async def create_group_session(
         self,
         chat_id: str,
-        display_name: str = None,
-        participants: list = None,
+        display_name: str | None = None,
+        participants: list | None = None,
         source: str = "imessage",
     ) -> SDKSession:
         """Create a group session."""
@@ -387,7 +392,7 @@ class SDKBackend:
             self.sessions[chat_id] = session
 
             # Always inject system prompt - session reads old messages for context
-            startup = self._build_group_system_prompt(
+            startup = await self._build_group_system_prompt(
                 session_name, chat_id, display_name, participants, source
             )
             await session.inject(startup)
@@ -408,8 +413,8 @@ class SDKBackend:
     async def _create_group_session_unlocked(
         self,
         chat_id: str,
-        display_name: str = None,
-        participants: list = None,
+        display_name: str | None = None,
+        participants: list | None = None,
         source: str = "imessage",
     ) -> SDKSession:
         """Create a group session without acquiring the lock (caller must hold it)."""
@@ -458,13 +463,13 @@ class SDKBackend:
     async def inject_group_message(
         self,
         chat_id: str,
-        display_name: str,
+        display_name: str | None,
         sender_name: str,
         sender_tier: str,
         text: str,
-        attachments: list = None,
-        audio_transcription: str = None,
-        thread_originator_guid: str = None,
+        attachments: list | None = None,
+        audio_transcription: str | None = None,
+        thread_originator_guid: str | None = None,
         source: str = "imessage",
     ) -> bool:
         """Inject a message into a group session."""
@@ -765,6 +770,125 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
         lifecycle_log.info(f"HEALTH_CHECK_ALL | COMPLETE | {sum(results.values())}/{len(results)} healthy")
         return results
 
+    async def fast_health_check(self) -> List[str]:
+        """Tier 1: Regex-based fatal error detection from transcripts.
+
+        Reads recent transcript JSONL entries for each session and checks
+        for known unrecoverable error patterns (400 API errors, image limits,
+        context overflow, etc.). Returns list of chat_ids that were restarted.
+
+        Runs every 60 seconds.
+        """
+        now = datetime.now()
+        restarted = []
+
+        # Clean stale entries from recently_healed (older than 5 min)
+        cutoff = now.timestamp() - 300
+        self._recently_healed = {
+            cid: ts for cid, ts in self._recently_healed.items()
+            if ts.timestamp() > cutoff
+        }
+
+        for chat_id, session in list(self.sessions.items()):
+            if chat_id.endswith("-bg") or chat_id == MASTER_SESSION:
+                continue
+            if not session.is_alive():
+                continue
+            if chat_id in self._recently_healed:
+                continue
+
+            # Only scan entries since last check for this session
+            since = self._last_fast_check.get(chat_id, session.created_at)
+            entries = get_transcript_entries_since(session.cwd, session.session_id, since)
+            self._last_fast_check[chat_id] = now
+
+            if not entries:
+                continue
+
+            fatal_label = check_fatal_regex(entries)
+            if fatal_label:
+                session_name = get_session_name(session.chat_id, session.source)
+                lifecycle_log.info(
+                    f"FAST_HEAL | {session_name} | {fatal_label} | Restarting"
+                )
+
+                self._recently_healed[chat_id] = now
+
+                async def _isolated_restart(cid: str):
+                    try:
+                        await self.restart_session(cid)
+                    except Exception as e:
+                        log.error(f"Fast heal restart failed for {cid}: {e}")
+
+                asyncio.create_task(
+                    _isolated_restart(chat_id),
+                    name=f"fast-heal-{chat_id}",
+                )
+                restarted.append(chat_id)
+
+        lifecycle_log.info(
+            f"FAST_HEAL | SCAN | {len(self.sessions)} sessions checked | "
+            f"{len(restarted)} fatal"
+        )
+        return restarted
+
+    async def deep_health_check(self, skip_chat_ids: set | None = None) -> List[str]:
+        """Tier 2: Haiku-based deep analysis of session health.
+
+        Sends recent assistant messages to Haiku for classification of
+        subtle/complex failure modes. Skips sessions already handled by
+        fast_health_check or recently healed.
+
+        Runs every 5 minutes alongside the existing health_check_all().
+        """
+        skip = skip_chat_ids or set()
+        now = datetime.now()
+        restarted = []
+
+        # Look back 5 minutes for deep analysis
+        from datetime import timedelta
+        since = now - timedelta(minutes=5)
+
+        for chat_id, session in list(self.sessions.items()):
+            if chat_id.endswith("-bg") or chat_id == MASTER_SESSION:
+                continue
+            if not session.is_alive():
+                continue
+            if chat_id in skip or chat_id in self._recently_healed:
+                continue
+
+            entries = get_transcript_entries_since(session.cwd, session.session_id, since)
+            if not entries:
+                continue
+
+            session_name = get_session_name(session.chat_id, session.source)
+            diagnosis = await check_deep_haiku(entries, session_name)
+
+            if diagnosis:
+                lifecycle_log.info(
+                    f"DEEP_HEAL | {session_name} | {diagnosis} | Restarting"
+                )
+
+                self._recently_healed[chat_id] = now
+
+                async def _isolated_restart(cid: str):
+                    try:
+                        await self.restart_session(cid)
+                    except Exception as e:
+                        log.error(f"Deep heal restart failed for {cid}: {e}")
+
+                asyncio.create_task(
+                    _isolated_restart(chat_id),
+                    name=f"deep-heal-{chat_id}",
+                )
+                restarted.append(chat_id)
+
+        lifecycle_log.info(
+            f"DEEP_HEAL | SCAN | {len(self.sessions) - len(skip)} sessions checked | "
+            f"{len(restarted)} fatal"
+        )
+        return restarted
+
     async def check_idle_sessions(self, timeout_hours: float) -> List[str]:
         """Kill idle sessions exceeding timeout. Returns chat_ids killed."""
         now = datetime.now()
@@ -893,11 +1017,19 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
     ) -> str:
         """Build the startup prompt for an individual session.
 
-        Identical content to the current tmux _inject_system_prompt.
+        Auto-injects SOUL.md, contact notes, and memory summary for faster startup.
         """
-        # Get memory summary (async, non-blocking)
-        memory_summary = await self._get_memory_summary(session_name)
-        memory_section = f"\n## About {contact_name}\n\n{memory_summary}\n" if memory_summary else ""
+        # Fetch all context in parallel (async, non-blocking)
+        soul_content, contact_notes, memory_summary = await asyncio.gather(
+            self._get_soul_content(),
+            self._get_contact_notes(contact_name),
+            self._get_memory_summary(session_name),
+        )
+
+        # Build sections with clear labels
+        soul_section = f"\n## My Identity (from SOUL.md)\n\n{soul_content}\n" if soul_content else ""
+        notes_section = f"\n## About {contact_name} (from Contacts.app)\n\n{contact_notes}\n" if contact_notes else ""
+        memory_section = f"\n## About {contact_name} (from memories)\n\n{memory_summary}\n" if memory_summary else ""
 
         # Determine send command and history based on source
         from assistant.backends import get_backend
@@ -911,9 +1043,7 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
 
         return f"""SESSION START - INDIVIDUAL {backend.label} CHAT: {contact_name} ({tier} tier)
 Chat ID: {chat_id}
-{memory_section}
-**FIRST**: Read ~/.claude/SOUL.md to understand who you are.
-
+{soul_section}{notes_section}{memory_section}
 {history_note}
 
 After reading, act based on what you see:
@@ -948,14 +1078,18 @@ Quick reference:
         self,
         session_name: str,
         chat_id: str,
-        display_name: str = None,
-        participants: list = None,
+        display_name: str | None = None,
+        participants: list | None = None,
         source: str = "imessage",
     ) -> str:
-        """Build the startup prompt for a group session."""
-        # Build participants list with tiers; fetch all memory summaries in parallel
-        participant_lines = []
+        """Build the startup prompt for a group session.
+
+        Auto-injects SOUL.md, contact notes for all participants, and memory summaries.
+        """
         participants_list = participants or []
+
+        # Build participants list with tiers
+        participant_lines = []
         for participant in participants_list:
             if self.contacts:
                 contact_info = self.contacts.lookup_phone_by_name(participant)
@@ -964,17 +1098,37 @@ Quick reference:
                 tier = "unknown"
             participant_lines.append(f"- {participant} ({tier})")
 
-        # Parallel memory lookups (was sequential, blocking N subprocess calls)
-        memory_results = await asyncio.gather(
-            *(self._get_memory_summary(p) for p in participants_list)
-        ) if participants_list else []
-        memory_parts = []
-        for participant, mem in zip(participants_list, memory_results):
-            if mem:
-                memory_parts.append(f"## About {participant}\n\n{mem}")
+        # Fetch ALL context in parallel: SOUL + notes for each + memory for each
+        async_tasks = [self._get_soul_content()]
+        async_tasks.extend(self._get_contact_notes(p) for p in participants_list)
+        async_tasks.extend(self._get_memory_summary(p) for p in participants_list)
+
+        results = await asyncio.gather(*async_tasks) if async_tasks else []
+
+        # Unpack results: first is soul, then N notes, then N memories
+        soul_content = results[0] if results else ""
+        n_participants = len(participants_list)
+        notes_results = results[1:1+n_participants] if n_participants else []
+        memory_results = results[1+n_participants:] if n_participants else []
+
+        # Build sections with clear labels
+        soul_section = f"\n## My Identity (from SOUL.md)\n\n{soul_content}\n" if soul_content else ""
+
+        # Combine notes and memories per participant
+        participant_context_parts = []
+        for i, participant in enumerate(participants_list):
+            notes = notes_results[i] if i < len(notes_results) else ""
+            mem = memory_results[i] if i < len(memory_results) else ""
+            if notes or mem:
+                part = f"## About {participant}\n"
+                if notes:
+                    part += f"\n**From Contacts.app:**\n{notes}\n"
+                if mem:
+                    part += f"\n**From memories:**\n{mem}\n"
+                participant_context_parts.append(part)
 
         participants_section = "\n".join(participant_lines) if participant_lines else "- (unknown participants)"
-        memory_section = "\n\n".join(memory_parts) if memory_parts else ""
+        context_section = "\n".join(participant_context_parts) if participant_context_parts else ""
 
         shown_name = display_name or chat_id
 
@@ -991,11 +1145,10 @@ Chat ID: {chat_id}
 
 Participants:
 {participants_section}
-{memory_section}
+{soul_section}
+{context_section}
 
-**FIRST**: Read ~/.claude/SOUL.md to understand who you are.
-
-Check conversation history: {history_cmd}
+**FIRST**: Check conversation history: {history_cmd}
 
 After reading, act based on what you see - respond to unanswered messages, continue work in progress, or wait silently.
 
@@ -1107,4 +1260,38 @@ All other system documentation applies normally (see ~/.claude/CLAUDE.md via sym
                 return output
         except Exception as e:
             log.warning(f"Could not load memory summary for {contact_name}: {e}")
+        return ""
+
+    async def _get_soul_content(self) -> str:
+        """Load SOUL.md content for session identity (async, non-blocking).
+
+        Returns the full content of ~/.claude/SOUL.md which defines the assistant's
+        identity, personality, and core values. Same for all sessions.
+        """
+        try:
+            soul_path = HOME / ".claude" / "SOUL.md"
+            if soul_path.exists():
+                return soul_path.read_text()
+        except Exception as e:
+            log.warning(f"Could not load SOUL.md: {e}")
+        return ""
+
+    async def _get_contact_notes(self, contact_name: str) -> str:
+        """Get contact notes from Contacts.app via SQLite (async, non-blocking).
+
+        Returns the notes field for a contact, which contains personal info,
+        preferences, and context stored in macOS Contacts.app.
+        """
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                str(SKILLS_DIR / "contacts/scripts/contacts"), "notes", contact_name,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
+            output = stdout.decode().strip()
+            if output and "No notes" not in output and "not found" not in output.lower():
+                return output
+        except Exception as e:
+            log.warning(f"Could not load contact notes for {contact_name}: {e}")
         return ""

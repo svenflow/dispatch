@@ -204,7 +204,7 @@ mod tests {
 
     #[test]
     fn test_shell_prompt_without_claude() {
-        let content = "nicklaude@mac ~ $";
+        let content = "jsmith@mac ~ $";
         assert!(matches!(
             check_session_content(content),
             HealthStatus::Unhealthy(UnhealthyReason::ClaudeNotRunning)
@@ -213,7 +213,7 @@ mod tests {
 
     #[test]
     fn test_shell_prompt_with_claude() {
-        let content = "claude: Processing...\nnicklaude@mac ~ $";
+        let content = "claude: Processing...\njsmith@mac ~ $";
         // Should be healthy because "claude" appears in content
         assert_eq!(check_session_content(content), HealthStatus::Healthy);
     }

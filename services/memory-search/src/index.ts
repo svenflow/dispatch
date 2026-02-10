@@ -1,5 +1,5 @@
 /**
- * Main exports for nicklaude-search
+ * Main exports for jsmith-search
  */
 
 export * from "./config";

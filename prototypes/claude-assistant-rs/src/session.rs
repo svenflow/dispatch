@@ -277,8 +277,8 @@ mod tests {
     #[test]
     fn test_session_name_for_contact() {
         assert_eq!(
-            SessionManager::session_name_for_contact("Nikhil Thorat"),
-            "nikhil-thorat"
+            SessionManager::session_name_for_contact("Jane Doe"),
+            "jane-doe"
         );
         assert_eq!(
             SessionManager::session_name_for_contact("John Doe"),

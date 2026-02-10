@@ -7,9 +7,9 @@ Migrate transcript folders from flat structure to backend-prefixed structure for
 ## New Structure
 
 ```
-~/transcripts/imessage/_16175969496/
+~/transcripts/imessage/_15555550100/
 ~/transcripts/imessage/2df6be1ed7534cd797e5fdb2c4bd6bd8/
-~/transcripts/signal/_16175969496/
+~/transcripts/signal/_15555550100/
 ~/transcripts/signal/IVzMluTGB6Jn9YeC_wfFxfPZXpV6ZRjI-Igu8EOOVbo/
 ~/transcripts/master/  (UNCHANGED)
 ```

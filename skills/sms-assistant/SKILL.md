@@ -262,18 +262,18 @@ If you need more context about what you were doing before a restart, read the pr
 
 ```bash
 # Read last 15 entries from previous session (use session_name format: backend/sanitized_chat_id)
-uv run ~/.claude/skills/sms-assistant/scripts/read_transcript.py --session imessage/_16175969496
+uv run ~/.claude/skills/sms-assistant/scripts/read_transcript.py --session imessage/_15555550100
 
 # Read more entries
-uv run ~/.claude/skills/sms-assistant/scripts/read_transcript.py --session imessage/_16175969496 --limit 30
+uv run ~/.claude/skills/sms-assistant/scripts/read_transcript.py --session imessage/_15555550100 --limit 30
 
 # Read current session instead of previous
-uv run ~/.claude/skills/sms-assistant/scripts/read_transcript.py --session imessage/_16175969496 --current
+uv run ~/.claude/skills/sms-assistant/scripts/read_transcript.py --session imessage/_15555550100 --current
 ```
 
 Session names use the format `{backend}/{sanitized_chat_id}`:
-- `imessage/_16175969496` (phone number with + replaced by _)
-- `signal/_16175969496` (Signal phone)
+- `imessage/_15555550100` (phone number with + replaced by _)
+- `signal/_15555550100` (Signal phone)
 - `imessage/b3d258b9a4de447ca412eb335c82a077` (group UUID)
 
 This shows:
@@ -410,7 +410,7 @@ Time formats: `5m`, `2h`, `1d`, `tomorrow`, `tomorrow 2pm`, `2026-01-24 14:30`
 The admin can inject commands using the CLI:
 
 ```bash
-claude-assistant inject-prompt <admin_chat_id> --admin "do something"
+claude-assistant inject-prompt <session> --admin "do something"
 ```
 
 This produces:

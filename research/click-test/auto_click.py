@@ -13,7 +13,7 @@ import time
 import sys
 from PIL import Image
 
-CHROME = "/Users/nicklaude/code/chrome-control/chrome"
+CHROME = "/Users/jsmith/code/chrome-control/chrome"
 TOOLBAR_HEIGHT = 87
 
 def get_window_bounds():
@@ -93,7 +93,7 @@ def navigate(tab_id, url):
     subprocess.run([CHROME, "navigate", tab_id, url], capture_output=True)
 
 def run_test(tab_id, diameter, rounds, bounds):
-    url = f"file:///Users/nicklaude/code/click-test/index.html?diameter={diameter}&rounds={rounds}&bg=white&color=black"
+    url = f"file:///Users/jsmith/code/click-test/index.html?diameter={diameter}&rounds={rounds}&bg=white&color=black"
     navigate(tab_id, url)
     time.sleep(2)
 

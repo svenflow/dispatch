@@ -30,151 +30,185 @@ TIER_GROUP_MAP = {
 # SQLite read path (fast, no Contacts.app dependency)
 # ──────────────────────────────────────────────────────────────
 
-def _find_addressbook_db() -> Path:
-    """Find the AddressBook database, checking per-source DBs if root is empty.
+def _get_all_addressbook_dbs() -> List[Path]:
+    """Get all AddressBook database paths (root + all sources).
 
-    macOS may store contacts in per-source databases under Sources/<UUID>/
-    instead of the root AddressBook-v22.abcddb, especially with iCloud sync.
+    macOS stores contacts across multiple SQLite databases:
+    - Root: AddressBook-v22.abcddb (may be stale)
+    - Sources: Sources/<UUID>/AddressBook-v22.abcddb (one per account/source)
+
+    iCloud sync writes to per-source DBs, so we must query ALL of them.
     """
-    # Check root DB first
-    if ADDRESSBOOK_DB.exists():
-        try:
-            conn = sqlite3.connect(f"file:{ADDRESSBOOK_DB}?mode=ro", uri=True, timeout=5)
-            count = conn.execute("SELECT COUNT(*) FROM ZABCDRECORD WHERE ZFIRSTNAME IS NOT NULL OR ZLASTNAME IS NOT NULL").fetchone()[0]
-            conn.close()
-            if count > 0:
-                return ADDRESSBOOK_DB
-        except Exception:
-            pass
+    dbs = []
 
-    # Check per-source databases
+    # Add root DB if it exists
+    if ADDRESSBOOK_DB.exists():
+        dbs.append(ADDRESSBOOK_DB)
+
+    # Add all per-source databases
     sources_dir = ADDRESSBOOK_DIR / "Sources"
     if sources_dir.exists():
         for source_dir in sources_dir.iterdir():
             source_db = source_dir / "AddressBook-v22.abcddb"
             if source_db.exists():
-                try:
-                    conn = sqlite3.connect(f"file:{source_db}?mode=ro", uri=True, timeout=5)
-                    count = conn.execute("SELECT COUNT(*) FROM ZABCDRECORD WHERE ZFIRSTNAME IS NOT NULL OR ZLASTNAME IS NOT NULL").fetchone()[0]
-                    conn.close()
-                    if count > 0:
-                        return source_db
-                except Exception:
-                    continue
+                dbs.append(source_db)
 
-    # Fallback to root
-    return ADDRESSBOOK_DB
+    return dbs
 
 
-def _get_db_connection() -> sqlite3.Connection:
-    """Open a read-only connection to the AddressBook database."""
-    db_path = _find_addressbook_db()
+def _get_db_connection(db_path: Path | None = None) -> sqlite3.Connection:
+    """Open a read-only connection to an AddressBook database."""
+    if db_path is None:
+        # Default to first available DB (for backwards compat)
+        dbs = _get_all_addressbook_dbs()
+        db_path = dbs[0] if dbs else ADDRESSBOOK_DB
     uri = f"file:{db_path}?mode=ro"
     conn = sqlite3.connect(uri, uri=True, timeout=5)
     conn.row_factory = sqlite3.Row
     return conn
 
 
-def list_contacts_sqlite(tier_filter: str = None) -> List[Dict[str, str]]:
-    """List all contacts with tiers via direct SQLite read.
+def _query_all_dbs(query_func):
+    """Run a query function across all AddressBook databases and merge results.
+
+    query_func takes a sqlite3.Connection and returns results.
+    For list queries, results are merged (deduped by name).
+    For single-item queries, first non-None result wins.
+    """
+    dbs = _get_all_addressbook_dbs()
+    all_results = []
+
+    for db_path in dbs:
+        try:
+            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5)
+            conn.row_factory = sqlite3.Row
+            result = query_func(conn)
+            conn.close()
+            if result is not None:
+                if isinstance(result, list):
+                    all_results.extend(result)
+                else:
+                    return result  # First non-None wins for single-item queries
+        except Exception:
+            continue
+
+    return all_results if all_results else None
+
+
+def list_contacts_sqlite(tier_filter: str | None = None) -> List[Dict[str, str]]:
+    """List all contacts with tiers via direct SQLite read, querying ALL source databases.
 
     Returns list of dicts with 'name', 'phone', 'emails', 'tier', 'notes'.
+    Merges contacts from all databases, deduping by name (preferring entries with notes).
     """
-    try:
-        conn = _get_db_connection()
-    except Exception:
-        return []
+    all_contacts: Dict[str, Dict] = {}  # Keyed by name for deduping
 
-    try:
-        # Build tier mapping: contact Z_PK -> tier
-        tier_map: Dict[int, str] = {}
-        cursor = conn.execute("""
-            SELECT pg.Z_22CONTACTS AS contact_pk, g.ZNAME AS group_name
-            FROM Z_22PARENTGROUPS pg
-            JOIN ZABCDRECORD g ON g.Z_PK = pg.Z_19PARENTGROUPS1
-            WHERE g.ZNAME IN ({})
-        """.format(",".join(f"'{g}'" for g in TIER_GROUP_MAP)))
-        for row in cursor:
-            group_name = row["group_name"]
-            contact_pk = row["contact_pk"]
-            # First match wins (admin > wife > family > favorite)
-            if contact_pk not in tier_map:
-                tier_map[contact_pk] = TIER_GROUP_MAP[group_name]
+    for db_path in _get_all_addressbook_dbs():
+        try:
+            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5)
+            conn.row_factory = sqlite3.Row
 
-        # Get all contacts with phones and emails
-        contacts_by_pk: Dict[int, Dict] = {}
-
-        # Get all people (not groups - groups have ZFIRSTNAME=NULL and no phone)
-        cursor = conn.execute("""
-            SELECT Z_PK, ZFIRSTNAME, ZLASTNAME
-            FROM ZABCDRECORD
-            WHERE ZFIRSTNAME IS NOT NULL OR ZLASTNAME IS NOT NULL
-        """)
-        for row in cursor:
-            pk = row["Z_PK"]
-            first = row["ZFIRSTNAME"] or ""
-            last = row["ZLASTNAME"] or ""
-            name = f"{first} {last}".strip()
-            tier = tier_map.get(pk, "unknown")
-            if tier_filter and tier != tier_filter:
-                continue
-            contacts_by_pk[pk] = {
-                "name": name,
-                "phone": None,
-                "emails": [],
-                "tier": tier,
-            }
-
-        # Attach phone numbers
-        if contacts_by_pk:
-            cursor = conn.execute("SELECT ZOWNER, ZFULLNUMBER FROM ZABCDPHONENUMBER")
-            for row in cursor:
-                pk = row["ZOWNER"]
-                if pk in contacts_by_pk and not contacts_by_pk[pk]["phone"]:
-                    contacts_by_pk[pk]["phone"] = row["ZFULLNUMBER"]
-
-        # Attach emails
-        if contacts_by_pk:
-            cursor = conn.execute("SELECT ZOWNER, ZADDRESS FROM ZABCDEMAILADDRESS")
-            for row in cursor:
-                pk = row["ZOWNER"]
-                if pk in contacts_by_pk and row["ZADDRESS"]:
-                    contacts_by_pk[pk]["emails"].append(row["ZADDRESS"].lower())
-
-        # Attach notes
-        if contacts_by_pk:
+            # Build tier mapping: contact Z_PK -> tier
+            tier_map: Dict[int, str] = {}
             cursor = conn.execute("""
-                SELECT r.Z_PK, n.ZTEXT
-                FROM ZABCDRECORD r
-                JOIN ZABCDNOTE n ON n.Z_PK = r.ZNOTE
-                WHERE n.ZTEXT IS NOT NULL
+                SELECT pg.Z_22CONTACTS AS contact_pk, g.ZNAME AS group_name
+                FROM Z_22PARENTGROUPS pg
+                JOIN ZABCDRECORD g ON g.Z_PK = pg.Z_19PARENTGROUPS1
+                WHERE g.ZNAME IN ({})
+            """.format(",".join(f"'{g}'" for g in TIER_GROUP_MAP)))
+            for row in cursor:
+                group_name = row["group_name"]
+                contact_pk = row["contact_pk"]
+                # First match wins (admin > wife > family > favorite)
+                if contact_pk not in tier_map:
+                    tier_map[contact_pk] = TIER_GROUP_MAP[group_name]
+
+            # Get all contacts with phones and emails (local to this DB)
+            contacts_by_pk: Dict[int, Dict] = {}
+
+            # Get all people (not groups - groups have ZFIRSTNAME=NULL and no phone)
+            cursor = conn.execute("""
+                SELECT Z_PK, ZFIRSTNAME, ZLASTNAME
+                FROM ZABCDRECORD
+                WHERE ZFIRSTNAME IS NOT NULL OR ZLASTNAME IS NOT NULL
             """)
             for row in cursor:
                 pk = row["Z_PK"]
-                if pk in contacts_by_pk:
-                    contacts_by_pk[pk]["notes"] = row["ZTEXT"]
+                first = row["ZFIRSTNAME"] or ""
+                last = row["ZLASTNAME"] or ""
+                name = f"{first} {last}".strip()
+                tier = tier_map.get(pk, "unknown")
+                if tier_filter and tier != tier_filter:
+                    continue
+                contacts_by_pk[pk] = {
+                    "name": name,
+                    "phone": None,
+                    "emails": [],
+                    "tier": tier,
+                }
 
-        conn.close()
-        return list(contacts_by_pk.values())
+            # Attach phone numbers
+            if contacts_by_pk:
+                cursor = conn.execute("SELECT ZOWNER, ZFULLNUMBER FROM ZABCDPHONENUMBER")
+                for row in cursor:
+                    pk = row["ZOWNER"]
+                    if pk in contacts_by_pk and not contacts_by_pk[pk]["phone"]:
+                        contacts_by_pk[pk]["phone"] = row["ZFULLNUMBER"]
 
-    except Exception:
-        conn.close()
-        return []
+            # Attach emails
+            if contacts_by_pk:
+                cursor = conn.execute("SELECT ZOWNER, ZADDRESS FROM ZABCDEMAILADDRESS")
+                for row in cursor:
+                    pk = row["ZOWNER"]
+                    if pk in contacts_by_pk and row["ZADDRESS"]:
+                        contacts_by_pk[pk]["emails"].append(row["ZADDRESS"].lower())
+
+            # Attach notes
+            if contacts_by_pk:
+                cursor = conn.execute("""
+                    SELECT r.Z_PK, n.ZTEXT
+                    FROM ZABCDRECORD r
+                    JOIN ZABCDNOTE n ON n.Z_PK = r.ZNOTE
+                    WHERE n.ZTEXT IS NOT NULL
+                """)
+                for row in cursor:
+                    pk = row["Z_PK"]
+                    if pk in contacts_by_pk:
+                        contacts_by_pk[pk]["notes"] = row["ZTEXT"]
+
+            conn.close()
+
+            # Merge into all_contacts (prefer entries with notes or better tier)
+            for contact in contacts_by_pk.values():
+                name = contact["name"]
+                if name not in all_contacts:
+                    all_contacts[name] = contact
+                else:
+                    existing = all_contacts[name]
+                    # Prefer the entry with notes
+                    if contact.get("notes") and not existing.get("notes"):
+                        all_contacts[name] = contact
+                    # Or prefer non-unknown tier
+                    elif contact["tier"] != "unknown" and existing["tier"] == "unknown":
+                        all_contacts[name] = contact
+
+        except Exception:
+            continue
+
+    return list(all_contacts.values())
 
 
 def lookup_phone_sqlite(phone: str) -> Optional[Dict[str, str]]:
-    """Look up contact by phone number via SQLite. Returns {name, phone, tier} or None."""
+    """Look up contact by phone number via SQLite, querying ALL source databases.
+
+    Returns {name, phone, tier} or None if not found.
+    """
     normalized = ''.join(c for c in phone if c.isdigit() or c == '+')
     if not normalized:
         return None
 
-    try:
-        conn = _get_db_connection()
-    except Exception:
-        return None
-
-    try:
-        # Build tier mapping
+    def query_phone(conn):
+        # Build tier mapping for this DB
         tier_map: Dict[int, str] = {}
         cursor = conn.execute("""
             SELECT pg.Z_22CONTACTS, g.ZNAME
@@ -205,29 +239,23 @@ def lookup_phone_sqlite(phone: str) -> Optional[Dict[str, str]]:
                     last = name_row["ZLASTNAME"] or ""
                     name = f"{first} {last}".strip()
                     tier = tier_map.get(owner_pk, "unknown")
-                    conn.close()
                     return {"name": name, "phone": full, "tier": tier}
+        return None
 
-        conn.close()
-        return None
-    except Exception:
-        conn.close()
-        return None
+    return _query_all_dbs(query_phone)
 
 
 def lookup_email_sqlite(email: str) -> Optional[Dict[str, str]]:
-    """Look up contact by email via SQLite. Returns {name, email, tier} or None."""
+    """Look up contact by email via SQLite, querying ALL source databases.
+
+    Returns {name, email, tier} or None if not found.
+    """
     email_lower = email.lower().strip()
     if not email_lower:
         return None
 
-    try:
-        conn = _get_db_connection()
-    except Exception:
-        return None
-
-    try:
-        # Build tier mapping
+    def query_email(conn):
+        # Build tier mapping for this DB
         tier_map: Dict[int, str] = {}
         cursor = conn.execute("""
             SELECT pg.Z_22CONTACTS, g.ZNAME
@@ -254,32 +282,66 @@ def lookup_email_sqlite(email: str) -> Optional[Dict[str, str]]:
                 last = name_row["ZLASTNAME"] or ""
                 name = f"{first} {last}".strip()
                 tier = tier_map.get(owner_pk, "unknown")
-                conn.close()
                 return {"name": name, "email": row["ZADDRESS"], "tier": tier}
+        return None
 
-        conn.close()
-        return None
-    except Exception:
-        conn.close()
-        return None
+    return _query_all_dbs(query_email)
 
 
 def get_notes_sqlite(name: str) -> Optional[str]:
-    """Get contact notes via SQLite."""
-    try:
-        conn = _get_db_connection()
+    """Get contact notes via SQLite, querying ALL source databases.
+
+    iCloud sync writes notes to per-source DBs, so we check all of them
+    and return the first non-empty notes found.
+    """
+    def query_notes(conn):
         row = conn.execute("""
             SELECT n.ZTEXT FROM ZABCDRECORD r
             JOIN ZABCDNOTE n ON n.Z_PK = r.ZNOTE
             WHERE (r.ZFIRSTNAME || ' ' || COALESCE(r.ZLASTNAME, '')) LIKE ?
             OR r.ZSORTINGFIRSTNAME LIKE ?
         """, (f"%{name}%", f"%{name.lower()}%")).fetchone()
-        conn.close()
-        if row:
+        if row and row["ZTEXT"]:
             return row["ZTEXT"]
         return None
-    except Exception:
+
+    return _query_all_dbs(query_notes)
+
+
+def get_tier_sqlite(name: str) -> Optional[str]:
+    """Get a contact's tier by name via SQLite, querying ALL source databases.
+
+    Returns tier string ('admin', 'wife', 'family', 'favorite') or 'unknown'.
+    """
+    def query_tier(conn):
+        # Build tier mapping for this DB
+        tier_map: Dict[int, str] = {}
+        cursor = conn.execute("""
+            SELECT pg.Z_22CONTACTS, g.ZNAME
+            FROM Z_22PARENTGROUPS pg
+            JOIN ZABCDRECORD g ON g.Z_PK = pg.Z_19PARENTGROUPS1
+            WHERE g.ZNAME IN ({})
+        """.format(",".join(f"'{g}'" for g in TIER_GROUP_MAP)))
+        for row in cursor:
+            if row[0] not in tier_map:
+                tier_map[row[0]] = TIER_GROUP_MAP[row[1]]
+
+        # Find contact by name
+        row = conn.execute("""
+            SELECT Z_PK FROM ZABCDRECORD
+            WHERE (ZFIRSTNAME || ' ' || COALESCE(ZLASTNAME, '')) LIKE ?
+            OR ZSORTINGFIRSTNAME LIKE ?
+        """, (f"%{name}%", f"%{name.lower()}%")).fetchone()
+
+        if row:
+            pk = row["Z_PK"]
+            tier = tier_map.get(pk)
+            if tier:
+                return tier
         return None
+
+    result = _query_all_dbs(query_tier)
+    return result if result else "unknown"
 
 
 # ──────────────────────────────────────────────────────────────
@@ -630,7 +692,7 @@ end tell
     return success and output == "CREATED"
 
 
-def list_contacts(tier_filter: str = None) -> List[Dict[str, str]]:
+def list_contacts(tier_filter: str | None = None) -> List[Dict[str, str]]:
     """List all contacts with their tiers.
 
     Returns list of dicts with 'name', 'phone', 'emails', 'tier'.

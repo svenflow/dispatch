@@ -1,0 +1,405 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "requests",
+#     "pyjwt[crypto]",
+# ]
+# ///
+"""
+App Store Connect CLI - manage TestFlight testers and crash reports via API
+
+Usage:
+    asc list-apps                      List all apps
+    asc list-testers [--app APP_ID]    List beta testers
+    asc list-groups --app APP_ID       List beta groups for an app
+    asc add-tester EMAIL --group GROUP_ID  Add tester to beta group
+    asc tester-status EMAIL            Check tester invitation status
+    asc list-crashes --app APP_ID      List TestFlight crash reports
+    asc get-crash CRASH_ID             Get full crash log text
+"""
+
+import argparse
+import time
+import sys
+from pathlib import Path
+import jwt
+import requests
+
+# Config
+KEY_ID = "55288ANG97"
+ISSUER_ID = "3495282b-f9a7-4f98-90a5-0e58dd374f9e"
+KEY_FILE = Path("~/.claude/secrets/AuthKey_55288ANG97.p8").expanduser()
+BASE_URL = "https://api.appstoreconnect.apple.com/v1"
+
+
+def get_token():
+    """Generate JWT token for API authentication"""
+    if not KEY_FILE.exists():
+        print(f"Error: Key file not found: {KEY_FILE}", file=sys.stderr)
+        sys.exit(1)
+
+    private_key = KEY_FILE.read_text()
+
+    # JWT payload
+    now = int(time.time())
+    payload = {
+        "iss": ISSUER_ID,
+        "iat": now,
+        "exp": now + 20 * 60,  # 20 minutes
+        "aud": "appstoreconnect-v1"
+    }
+
+    # Generate token
+    token = jwt.encode(
+        payload,
+        private_key,
+        algorithm="ES256",
+        headers={"kid": KEY_ID}
+    )
+
+    return token
+
+
+def api_request(method, endpoint, data=None, params=None):
+    """Make authenticated API request"""
+    token = get_token()
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+
+    url = f"{BASE_URL}/{endpoint}"
+
+    if method == "GET":
+        response = requests.get(url, headers=headers, params=params)
+    elif method == "POST":
+        response = requests.post(url, headers=headers, json=data)
+    elif method == "DELETE":
+        response = requests.delete(url, headers=headers)
+    else:
+        raise ValueError(f"Unknown method: {method}")
+
+    if response.status_code >= 400:
+        print(f"API Error {response.status_code}: {response.text}", file=sys.stderr)
+        sys.exit(1)
+
+    if response.status_code == 204:
+        return None
+
+    return response.json()
+
+
+def list_apps():
+    """List all apps"""
+    data = api_request("GET", "apps")
+    for app in data.get("data", []):
+        attrs = app["attributes"]
+        print(f"{app['id']}\t{attrs['name']}\t{attrs.get('bundleId', '')}")
+
+
+def list_testers(app_id=None):
+    """List beta testers"""
+    params = {}
+    if app_id:
+        params["filter[apps]"] = app_id
+
+    data = api_request("GET", "betaTesters", params=params)
+
+    for tester in data.get("data", []):
+        attrs = tester["attributes"]
+        invite_type = attrs.get("inviteType", "N/A")
+        name = f"{attrs.get('firstName', '')} {attrs.get('lastName', '')}".strip()
+        print(f"{tester['id']}\t{attrs['email']}\t{name}\t{invite_type}")
+
+
+def list_groups(app_id):
+    """List beta groups for an app"""
+    params = {"filter[app]": app_id}
+    data = api_request("GET", "betaGroups", params=params)
+
+    for group in data.get("data", []):
+        attrs = group["attributes"]
+        internal = "internal" if attrs.get("isInternalGroup", False) else "external"
+        print(f"{group['id']}\t{attrs['name']}\t{internal}")
+
+
+def add_tester(email, group_id, first_name=None, last_name=None):
+    """Add a tester to a beta group"""
+    # Create the tester
+    payload = {
+        "data": {
+            "type": "betaTesters",
+            "attributes": {
+                "email": email,
+            },
+            "relationships": {
+                "betaGroups": {
+                    "data": [
+                        {"type": "betaGroups", "id": group_id}
+                    ]
+                }
+            }
+        }
+    }
+
+    if first_name:
+        payload["data"]["attributes"]["firstName"] = first_name
+    if last_name:
+        payload["data"]["attributes"]["lastName"] = last_name
+
+    data = api_request("POST", "betaTesters", data=payload)
+
+    if data:
+        tester = data.get("data", {})
+        print(f"Created tester: {tester.get('id')}")
+        print(f"Email: {email}")
+        print(f"Added to group: {group_id}")
+    else:
+        print(f"Added {email} to group {group_id}")
+
+
+def tester_status(email):
+    """Check status of a tester by email"""
+    params = {"filter[email]": email}
+    data = api_request("GET", "betaTesters", params=params)
+
+    testers = data.get("data", [])
+    if not testers:
+        print(f"No tester found with email: {email}")
+        return
+
+    tester = testers[0]
+    attrs = tester["attributes"]
+
+    print(f"ID: {tester['id']}")
+    print(f"Email: {attrs['email']}")
+    print(f"Name: {attrs.get('firstName', '')} {attrs.get('lastName', '')}")
+    print(f"Invite Type: {attrs.get('inviteType', 'N/A')}")
+
+
+def invite_user(email, first_name, last_name, role="DEVELOPER"):
+    """Invite a user to App Store Connect team"""
+    valid_roles = ["ADMIN", "FINANCE", "TECHNICAL", "ACCOUNT_HOLDER", "READ_ONLY",
+                   "SALES", "MARKETING", "DEVELOPER", "APP_MANAGER", "CUSTOMER_SUPPORT"]
+
+    if role.upper() not in valid_roles:
+        print(f"Invalid role: {role}. Valid roles: {', '.join(valid_roles)}", file=sys.stderr)
+        sys.exit(1)
+
+    payload = {
+        "data": {
+            "type": "userInvitations",
+            "attributes": {
+                "email": email,
+                "firstName": first_name,
+                "lastName": last_name,
+                "roles": [role.upper()],
+                "allAppsVisible": True
+            }
+        }
+    }
+
+    data = api_request("POST", "userInvitations", data=payload)
+
+    if data:
+        invitation = data.get("data", {})
+        attrs = invitation.get("attributes", {})
+        print(f"Invited user: {attrs.get('email')}")
+        print(f"Name: {attrs.get('firstName')} {attrs.get('lastName')}")
+        print(f"Role: {', '.join(attrs.get('roles', []))}")
+        print(f"Status: Invitation sent")
+    else:
+        print(f"Invitation sent to {email}")
+
+
+def list_users():
+    """List all users in the App Store Connect team"""
+    data = api_request("GET", "users")
+
+    for user in data.get("data", []):
+        attrs = user["attributes"]
+        roles = ", ".join(attrs.get("roles", []))
+        name = f"{attrs.get('firstName', '')} {attrs.get('lastName', '')}".strip()
+        print(f"{user['id']}\t{attrs['username']}\t{name}\t{roles}")
+
+
+def list_builds(app_id):
+    """List builds for an app"""
+    params = {"filter[app]": app_id, "sort": "-uploadedDate", "limit": 10}
+    data = api_request("GET", "builds", params=params)
+
+    for build in data.get("data", []):
+        attrs = build["attributes"]
+        version = attrs.get("version", "?")
+        processing = attrs.get("processingState", "?")
+        uploaded = attrs.get("uploadedDate", "?")[:10] if attrs.get("uploadedDate") else "?"
+        print(f"{build['id']}\t{version}\t{processing}\t{uploaded}")
+
+
+def resend_invite(email, app_id):
+    """Resend TestFlight invitation to a beta tester for a specific app"""
+    # First, get the tester ID
+    params = {"filter[email]": email}
+    data = api_request("GET", "betaTesters", params=params)
+
+    testers = data.get("data", [])
+    if not testers:
+        print(f"No tester found with email: {email}", file=sys.stderr)
+        sys.exit(1)
+
+    tester_id = testers[0]["id"]
+
+    # Send invitation via POST to betaTesterInvitations
+    payload = {
+        "data": {
+            "type": "betaTesterInvitations",
+            "relationships": {
+                "betaTester": {
+                    "data": {"type": "betaTesters", "id": tester_id}
+                },
+                "app": {
+                    "data": {"type": "apps", "id": app_id}
+                }
+            }
+        }
+    }
+
+    data = api_request("POST", "betaTesterInvitations", data=payload)
+    print(f"Invitation resent to {email} for app {app_id}")
+
+
+def list_crashes(app_id, build_id=None, limit=20):
+    """List TestFlight crash submissions for an app"""
+    params = {
+        "limit": limit,
+        "sort": "-createdDate",
+        "fields[betaFeedbackCrashSubmissions]": "createdDate,deviceModel,osVersion,appPlatform,crashLog"
+    }
+    if build_id:
+        params["filter[build]"] = build_id
+
+    data = api_request("GET", f"apps/{app_id}/betaFeedbackCrashSubmissions", params=params)
+
+    crashes = data.get("data", [])
+
+    if not crashes:
+        print("No crash reports found")
+        return
+
+    for crash in crashes:
+        attrs = crash["attributes"]
+        crash_id = crash["id"]
+        created = attrs.get("createdDate", "?")[:19].replace("T", " ") if attrs.get("createdDate") else "?"
+        device = attrs.get("deviceModel", "?")
+        os_version = attrs.get("osVersion", "?")
+        platform = attrs.get("appPlatform", "?")
+
+        # Get crash log ID from relationships
+        crash_log_rel = crash.get("relationships", {}).get("crashLog", {}).get("data", {})
+        crash_log_id = crash_log_rel.get("id", "N/A") if crash_log_rel else "N/A"
+
+        print(f"{crash_id}\t{created}\t{device}\t{os_version}\t{platform}\t{crash_log_id}")
+
+
+def get_crash(submission_id):
+    """Get full crash log text from a crash submission"""
+    params = {"fields[betaCrashLogs]": "logText"}
+    data = api_request("GET", f"betaFeedbackCrashSubmissions/{submission_id}/crashLog", params=params)
+
+    if not data or "data" not in data:
+        print("Crash log not found", file=sys.stderr)
+        sys.exit(1)
+
+    attrs = data["data"].get("attributes", {})
+    log_text = attrs.get("logText", "")
+
+    if log_text:
+        print(log_text)
+    else:
+        print("No crash log text available")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="App Store Connect CLI")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    # list-apps
+    subparsers.add_parser("list-apps", help="List all apps")
+
+    # list-testers
+    lt = subparsers.add_parser("list-testers", help="List beta testers")
+    lt.add_argument("--app", help="Filter by app ID")
+
+    # list-groups
+    lg = subparsers.add_parser("list-groups", help="List beta groups for an app")
+    lg.add_argument("--app", required=True, help="App ID")
+
+    # add-tester
+    at = subparsers.add_parser("add-tester", help="Add tester to beta group")
+    at.add_argument("email", help="Tester email address")
+    at.add_argument("--group", required=True, help="Beta group ID")
+    at.add_argument("--first-name", help="Tester first name")
+    at.add_argument("--last-name", help="Tester last name")
+
+    # tester-status
+    ts = subparsers.add_parser("tester-status", help="Check tester status")
+    ts.add_argument("email", help="Tester email address")
+
+    # invite-user
+    iu = subparsers.add_parser("invite-user", help="Invite user to App Store Connect team")
+    iu.add_argument("email", help="User email address")
+    iu.add_argument("--first-name", required=True, help="User first name")
+    iu.add_argument("--last-name", required=True, help="User last name")
+    iu.add_argument("--role", default="DEVELOPER", help="User role (ADMIN, DEVELOPER, APP_MANAGER, etc.)")
+
+    # list-users
+    subparsers.add_parser("list-users", help="List all users in the team")
+
+    # list-builds
+    lb = subparsers.add_parser("list-builds", help="List builds for an app")
+    lb.add_argument("--app", required=True, help="App ID")
+
+    # resend-invite
+    ri = subparsers.add_parser("resend-invite", help="Resend TestFlight invitation to a tester")
+    ri.add_argument("email", help="Tester email address")
+    ri.add_argument("--app", required=True, help="App ID")
+
+    # list-crashes
+    lc = subparsers.add_parser("list-crashes", help="List TestFlight crash submissions")
+    lc.add_argument("--app", required=True, help="App ID")
+    lc.add_argument("--build", help="Filter by build ID")
+    lc.add_argument("--limit", type=int, default=20, help="Max results (default 20)")
+
+    # get-crash
+    gc = subparsers.add_parser("get-crash", help="Get full crash log text")
+    gc.add_argument("crash_id", help="Crash log ID")
+
+    args = parser.parse_args()
+
+    if args.command == "list-apps":
+        list_apps()
+    elif args.command == "list-testers":
+        list_testers(args.app)
+    elif args.command == "list-groups":
+        list_groups(args.app)
+    elif args.command == "add-tester":
+        add_tester(args.email, args.group, args.first_name, args.last_name)
+    elif args.command == "tester-status":
+        tester_status(args.email)
+    elif args.command == "invite-user":
+        invite_user(args.email, args.first_name, args.last_name, args.role)
+    elif args.command == "list-users":
+        list_users()
+    elif args.command == "list-builds":
+        list_builds(args.app)
+    elif args.command == "resend-invite":
+        resend_invite(args.email, args.app)
+    elif args.command == "list-crashes":
+        list_crashes(args.app, args.build, args.limit)
+    elif args.command == "get-crash":
+        get_crash(args.crash_id)
+
+
+if __name__ == "__main__":
+    main()

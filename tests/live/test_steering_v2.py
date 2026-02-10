@@ -19,6 +19,10 @@ Run: uv run tests/test_steering_v2.py [--test N]
 import asyncio
 import sys
 import time
+
+import pytest
+
+pytestmark = [pytest.mark.asyncio, pytest.mark.live_api]
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any

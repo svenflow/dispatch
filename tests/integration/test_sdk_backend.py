@@ -268,6 +268,7 @@ class TestSessionRegistry:
 
         assert '+19999991111' in registry2.all()
         entry = registry2.get('+19999991111')
+        assert entry is not None
         assert entry['session_name'] == 'test-admin'
         assert entry['contact_name'] == 'Test Admin'
         assert entry['tier'] == 'admin'
@@ -292,6 +293,7 @@ class TestSessionRegistry:
         registry.update_session_id('+19999991111', 'test-session-id-123')
 
         entry = registry.get('+19999991111')
+        assert entry is not None
         assert entry['session_id'] == 'test-session-id-123'
 
         # Cleanup
@@ -309,6 +311,7 @@ class TestSessionRegistry:
         )
 
         entry1 = registry.get('+19999991111')
+        assert entry1 is not None
         original_time = entry1.get('last_message_time')
 
         # Update timestamp
@@ -317,6 +320,7 @@ class TestSessionRegistry:
         registry.update_last_message_time('+19999991111')
 
         entry2 = registry.get('+19999991111')
+        assert entry2 is not None
         new_time = entry2.get('last_message_time')
 
         assert new_time != original_time

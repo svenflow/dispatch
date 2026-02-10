@@ -1,0 +1,575 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "pyjwt>=2.8.0",
+#     "cryptography>=41.0.0",
+#     "requests>=2.31.0",
+# ]
+# ///
+"""
+App Store Connect CLI
+
+Manage apps, testers, builds, and bundle IDs via the App Store Connect REST API.
+No Chrome automation needed!
+
+Usage:
+    asc apps list                                   List all apps
+    asc bundles list                                List bundle IDs
+    asc bundles create IDENTIFIER NAME              Register a bundle ID
+    asc testers list [--app APP_NAME]               List beta testers
+    asc testers add EMAIL [--app APP_NAME]          Add beta tester
+    asc testers remove EMAIL                        Remove beta tester
+    asc builds list [--app APP_NAME]                List builds
+    asc groups list [--app APP_NAME]                List beta groups
+    asc groups add-tester GROUP EMAIL               Add tester to group
+    asc groups create NAME --app APP_NAME           Create a beta group
+
+Configuration:
+    API credentials from ~/.claude/secrets/:
+    - AuthKey_<KEY_ID>.p8 (private key)
+
+    Issuer ID: 3495282b-f9a7-4f98-90a5-0e58dd374f9e
+    Key ID: 55288ANG97
+"""
+
+import argparse
+import json
+import sys
+import time
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+import jwt
+import requests
+
+
+# Configuration
+ISSUER_ID = "3495282b-f9a7-4f98-90a5-0e58dd374f9e"
+KEY_ID = "55288ANG97"
+SECRETS_DIR = Path.home() / ".claude" / "secrets"
+PRIVATE_KEY_PATH = SECRETS_DIR / f"AuthKey_{KEY_ID}.p8"
+
+BASE_URL = "https://api.appstoreconnect.apple.com/v1"
+
+
+def get_jwt_token():
+    """Generate a JWT token for App Store Connect API authentication."""
+    if not PRIVATE_KEY_PATH.exists():
+        print(f"Error: Private key not found at {PRIVATE_KEY_PATH}", file=sys.stderr)
+        print("Download the key from App Store Connect > Users and Access > Integrations", file=sys.stderr)
+        sys.exit(1)
+
+    private_key = PRIVATE_KEY_PATH.read_text()
+
+    now = datetime.now(timezone.utc)
+    payload = {
+        "iss": ISSUER_ID,
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(minutes=20)).timestamp()),
+        "aud": "appstoreconnect-v1",
+    }
+
+    token = jwt.encode(payload, private_key, algorithm="ES256", headers={"kid": KEY_ID})
+    return token
+
+
+def api_request(method, endpoint, data=None, params=None):
+    """Make an authenticated request to the App Store Connect API."""
+    token = get_jwt_token()
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+
+    url = f"{BASE_URL}/{endpoint}"
+
+    if method == "GET":
+        response = requests.get(url, headers=headers, params=params)
+    elif method == "POST":
+        response = requests.post(url, headers=headers, json=data)
+    elif method == "DELETE":
+        response = requests.delete(url, headers=headers)
+    elif method == "PATCH":
+        response = requests.patch(url, headers=headers, json=data)
+    else:
+        raise ValueError(f"Unknown method: {method}")
+
+    if response.status_code == 204:  # No content
+        return None
+
+    if response.status_code >= 400:
+        try:
+            error = response.json()
+            errors = error.get("errors", [])
+            for err in errors:
+                print(f"Error: {err.get('title', 'Unknown')} - {err.get('detail', '')}", file=sys.stderr)
+        except:
+            print(f"Error: {response.status_code} - {response.text}", file=sys.stderr)
+        sys.exit(1)
+
+    return response.json()
+
+
+def list_apps():
+    """List all apps in App Store Connect."""
+    result = api_request("GET", "apps", params={"limit": 200})
+    apps = result.get("data", [])
+
+    print(f"{'Name':<40} {'Bundle ID':<40} {'ID'}")
+    print("-" * 100)
+    for app in apps:
+        attrs = app.get("attributes", {})
+        name = attrs.get("name", "Unknown")
+        bundle_id = attrs.get("bundleId", "Unknown")
+        app_id = app.get("id", "Unknown")
+        print(f"{name:<40} {bundle_id:<40} {app_id}")
+
+    return apps
+
+
+def list_bundle_ids():
+    """List all bundle IDs."""
+    result = api_request("GET", "bundleIds", params={"limit": 200})
+    bundle_ids = result.get("data", [])
+
+    print(f"{'Identifier':<40} {'Name':<30} {'Platform':<10} {'ID'}")
+    print("-" * 100)
+    for bundle in bundle_ids:
+        attrs = bundle.get("attributes", {})
+        identifier = attrs.get("identifier", "Unknown")
+        name = attrs.get("name", "Unknown")
+        platform = attrs.get("platform", "Unknown")
+        bundle_id = bundle.get("id", "Unknown")
+        print(f"{identifier:<40} {name:<30} {platform:<10} {bundle_id}")
+
+    print(f"\nTotal: {len(bundle_ids)} bundle IDs")
+    return bundle_ids
+
+
+def create_bundle_id(identifier, name, platform="IOS"):
+    """Register a new bundle ID."""
+    data = {
+        "data": {
+            "type": "bundleIds",
+            "attributes": {
+                "identifier": identifier,
+                "name": name,
+                "platform": platform.upper(),
+            }
+        }
+    }
+
+    result = api_request("POST", "bundleIds", data=data)
+    bundle = result.get("data", {})
+    bundle_id = bundle.get("id")
+    print(f"Created bundle ID: {identifier} (ID: {bundle_id})")
+    print(f"Name: {name}")
+    print(f"Platform: {platform}")
+    return bundle
+
+
+def get_bundle_id_resource(identifier):
+    """Get bundle ID resource from identifier."""
+    result = api_request("GET", "bundleIds", params={"filter[identifier]": identifier, "limit": 1})
+    bundle_ids = result.get("data", [])
+    if bundle_ids:
+        return bundle_ids[0].get("id")
+    return None
+
+
+def create_beta_group(name, app_name, is_internal=True):
+    """Create a new beta group."""
+    app_id = get_app_id(app_name)
+    if not app_id:
+        print(f"Error: App '{app_name}' not found", file=sys.stderr)
+        sys.exit(1)
+
+    data = {
+        "data": {
+            "type": "betaGroups",
+            "attributes": {
+                "name": name,
+                "isInternalGroup": is_internal,
+            },
+            "relationships": {
+                "app": {
+                    "data": {"type": "apps", "id": app_id}
+                }
+            }
+        }
+    }
+
+    result = api_request("POST", "betaGroups", data=data)
+    group = result.get("data", {})
+    group_id = group.get("id")
+    print(f"Created beta group: {name} (ID: {group_id})")
+    print(f"Internal: {is_internal}")
+    return group
+
+
+def get_app_id(app_name_or_bundle):
+    """Get app ID from name or bundle ID."""
+    result = api_request("GET", "apps", params={"limit": 200})
+    apps = result.get("data", [])
+
+    # Try exact match first
+    for app in apps:
+        attrs = app.get("attributes", {})
+        if attrs.get("name") == app_name_or_bundle or attrs.get("bundleId") == app_name_or_bundle:
+            return app.get("id")
+
+    # Try case-insensitive partial match
+    app_name_lower = app_name_or_bundle.lower()
+    for app in apps:
+        attrs = app.get("attributes", {})
+        name = attrs.get("name", "").lower()
+        bundle_id = attrs.get("bundleId", "").lower()
+        if app_name_lower in name or app_name_lower in bundle_id:
+            return app.get("id")
+
+    return None
+
+
+def list_testers(app_name=None):
+    """List beta testers, optionally filtered by app."""
+    params = {"limit": 200}
+    if app_name:
+        app_id = get_app_id(app_name)
+        if not app_id:
+            print(f"Error: App '{app_name}' not found", file=sys.stderr)
+            sys.exit(1)
+        params["filter[apps]"] = app_id
+
+    result = api_request("GET", "betaTesters", params=params)
+    testers = result.get("data", [])
+
+    print(f"{'Email':<40} {'First Name':<20} {'Last Name':<20} {'Invite Type'}")
+    print("-" * 100)
+    for tester in testers:
+        attrs = tester.get("attributes", {})
+        email = attrs.get("email", "Unknown")
+        first = attrs.get("firstName", "")
+        last = attrs.get("lastName", "")
+        invite_type = attrs.get("inviteType", "Unknown")
+        print(f"{email:<40} {first:<20} {last:<20} {invite_type}")
+
+    print(f"\nTotal: {len(testers)} testers")
+    return testers
+
+
+def add_tester(email, app_name=None, first_name=None, last_name=None):
+    """Add a beta tester."""
+    data = {
+        "data": {
+            "type": "betaTesters",
+            "attributes": {
+                "email": email,
+            }
+        }
+    }
+
+    if first_name:
+        data["data"]["attributes"]["firstName"] = first_name
+    if last_name:
+        data["data"]["attributes"]["lastName"] = last_name
+
+    if app_name:
+        app_id = get_app_id(app_name)
+        if not app_id:
+            print(f"Error: App '{app_name}' not found", file=sys.stderr)
+            sys.exit(1)
+        data["data"]["relationships"] = {
+            "betaGroups": {
+                "data": []  # Will need to find a beta group first
+            }
+        }
+
+    result = api_request("POST", "betaTesters", data=data)
+    tester = result.get("data", {})
+    tester_id = tester.get("id")
+    print(f"Added tester: {email} (ID: {tester_id})")
+    return tester
+
+
+def remove_tester(email, app_name=None):
+    """Remove a beta tester."""
+    # First find the tester
+    params = {"filter[email]": email, "limit": 1}
+    result = api_request("GET", "betaTesters", params=params)
+    testers = result.get("data", [])
+
+    if not testers:
+        print(f"Error: Tester '{email}' not found", file=sys.stderr)
+        sys.exit(1)
+
+    tester_id = testers[0].get("id")
+    api_request("DELETE", f"betaTesters/{tester_id}")
+    print(f"Removed tester: {email}")
+
+
+def list_builds(app_name=None, wait_version=None, timeout=300):
+    """List builds, optionally filtered by app.
+
+    If wait_version is provided, poll until that version has status VALID or timeout.
+    """
+    params = {"limit": 20, "sort": "-uploadedDate"}
+    if app_name:
+        app_id = get_app_id(app_name)
+        if not app_id:
+            print(f"Error: App '{app_name}' not found", file=sys.stderr)
+            sys.exit(1)
+        params["filter[app]"] = app_id
+
+    start_time = time.time()
+
+    while True:
+        result = api_request("GET", "builds", params=params)
+        builds = result.get("data", [])
+
+        # If waiting for a specific version, check its status
+        if wait_version:
+            for build in builds:
+                attrs = build.get("attributes", {})
+                version = attrs.get("version", "")
+                status = attrs.get("processingState", "")
+
+                if version == wait_version:
+                    if status == "VALID":
+                        print(f"Build {wait_version} is now VALID!")
+                        return builds
+                    elif status in ["INVALID", "FAILED"]:
+                        print(f"Build {wait_version} failed with status: {status}", file=sys.stderr)
+                        sys.exit(1)
+                    else:
+                        elapsed = time.time() - start_time
+                        if elapsed >= timeout:
+                            print(f"Timeout waiting for build {wait_version} (status: {status})", file=sys.stderr)
+                            sys.exit(1)
+                        print(f"Build {wait_version} status: {status}... waiting (elapsed: {int(elapsed)}s)")
+                        time.sleep(10)
+                        break
+            else:
+                # Build not found yet
+                elapsed = time.time() - start_time
+                if elapsed >= timeout:
+                    print(f"Timeout waiting for build {wait_version} to appear", file=sys.stderr)
+                    sys.exit(1)
+                print(f"Build {wait_version} not found yet... waiting (elapsed: {int(elapsed)}s)")
+                time.sleep(10)
+            continue
+
+        # Normal listing (no wait)
+        print(f"{'Version':<15} {'Build':<10} {'Status':<25} {'Uploaded'}")
+        print("-" * 80)
+        for build in builds:
+            attrs = build.get("attributes", {})
+            version = attrs.get("version", "Unknown")
+            build_num = attrs.get("uploadedDate", "")[:10] if attrs.get("uploadedDate") else ""
+            status = attrs.get("processingState", "Unknown")
+            uploaded = attrs.get("uploadedDate", "Unknown")
+            if uploaded and uploaded != "Unknown":
+                uploaded = uploaded[:19].replace("T", " ")
+            print(f"{version:<15} {build_num:<10} {status:<25} {uploaded}")
+
+        return builds
+
+
+def list_groups(app_name=None):
+    """List beta groups."""
+    params = {"limit": 200}
+    if app_name:
+        app_id = get_app_id(app_name)
+        if not app_id:
+            print(f"Error: App '{app_name}' not found", file=sys.stderr)
+            sys.exit(1)
+        params["filter[app]"] = app_id
+
+    result = api_request("GET", "betaGroups", params=params)
+    groups = result.get("data", [])
+
+    print(f"{'Name':<30} {'Public':<8} {'Internal':<10} {'ID'}")
+    print("-" * 80)
+    for group in groups:
+        attrs = group.get("attributes", {})
+        name = attrs.get("name", "Unknown")
+        is_internal = attrs.get("isInternalGroup", False)
+        public_link = attrs.get("publicLinkEnabled", False)
+        group_id = group.get("id")
+        print(f"{name:<30} {str(public_link):<8} {str(is_internal):<10} {group_id}")
+
+    return groups
+
+
+def add_tester_to_group(group_name_or_id, email, app_name=None):
+    """Add a tester to a beta group."""
+    # Find the group
+    params = {"limit": 200}
+    if app_name:
+        app_id = get_app_id(app_name)
+        if app_id:
+            params["filter[app]"] = app_id
+
+    result = api_request("GET", "betaGroups", params=params)
+    groups = result.get("data", [])
+
+    group_id = None
+    for group in groups:
+        if group.get("id") == group_name_or_id:
+            group_id = group_name_or_id
+            break
+        if group.get("attributes", {}).get("name", "").lower() == group_name_or_id.lower():
+            group_id = group.get("id")
+            break
+
+    if not group_id:
+        print(f"Error: Group '{group_name_or_id}' not found", file=sys.stderr)
+        sys.exit(1)
+
+    # Find or create the tester
+    tester_params = {"filter[email]": email, "limit": 1}
+    tester_result = api_request("GET", "betaTesters", params=tester_params)
+    testers = tester_result.get("data", [])
+
+    if testers:
+        tester_id = testers[0].get("id")
+    else:
+        # Create the tester
+        tester_data = {
+            "data": {
+                "type": "betaTesters",
+                "attributes": {
+                    "email": email,
+                },
+                "relationships": {
+                    "betaGroups": {
+                        "data": [{"type": "betaGroups", "id": group_id}]
+                    }
+                }
+            }
+        }
+        result = api_request("POST", "betaTesters", data=tester_data)
+        tester_id = result.get("data", {}).get("id")
+        print(f"Created tester: {email} (ID: {tester_id})")
+        print(f"Added to group: {group_name_or_id}")
+        return
+
+    # Add existing tester to group
+    data = {
+        "data": [{"type": "betaTesters", "id": tester_id}]
+    }
+    api_request("POST", f"betaGroups/{group_id}/relationships/betaTesters", data=data)
+    print(f"Added {email} to group: {group_name_or_id}")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="App Store Connect CLI")
+    subparsers = parser.add_subparsers(dest="command", help="Commands")
+
+    # apps command
+    apps_parser = subparsers.add_parser("apps", help="Manage apps")
+    apps_subparsers = apps_parser.add_subparsers(dest="subcommand")
+    apps_list = apps_subparsers.add_parser("list", help="List apps")
+
+    # bundles command
+    bundles_parser = subparsers.add_parser("bundles", help="Manage bundle IDs")
+    bundles_subparsers = bundles_parser.add_subparsers(dest="subcommand")
+
+    bundles_list = bundles_subparsers.add_parser("list", help="List bundle IDs")
+
+    bundles_create = bundles_subparsers.add_parser("create", help="Create bundle ID")
+    bundles_create.add_argument("identifier", help="Bundle identifier (e.g., com.sven.MyApp)")
+    bundles_create.add_argument("name", help="Description/name for the bundle ID")
+    bundles_create.add_argument("--platform", default="IOS", help="Platform: IOS, MAC_OS (default: IOS)")
+
+    # testers command
+    testers_parser = subparsers.add_parser("testers", help="Manage beta testers")
+    testers_subparsers = testers_parser.add_subparsers(dest="subcommand")
+
+    testers_list = testers_subparsers.add_parser("list", help="List testers")
+    testers_list.add_argument("--app", help="Filter by app name or bundle ID")
+
+    testers_add = testers_subparsers.add_parser("add", help="Add tester")
+    testers_add.add_argument("email", help="Tester email")
+    testers_add.add_argument("--app", help="App name or bundle ID")
+    testers_add.add_argument("--first-name", help="First name")
+    testers_add.add_argument("--last-name", help="Last name")
+
+    testers_remove = testers_subparsers.add_parser("remove", help="Remove tester")
+    testers_remove.add_argument("email", help="Tester email")
+    testers_remove.add_argument("--app", help="App name or bundle ID")
+
+    # builds command
+    builds_parser = subparsers.add_parser("builds", help="Manage builds")
+    builds_subparsers = builds_parser.add_subparsers(dest="subcommand")
+
+    builds_list = builds_subparsers.add_parser("list", help="List builds")
+    builds_list.add_argument("--app", help="Filter by app name or bundle ID")
+    builds_list.add_argument("--wait", metavar="VERSION", help="Wait until build VERSION is VALID (e.g., --wait 12)")
+    builds_list.add_argument("--timeout", type=int, default=300, help="Timeout in seconds for --wait (default: 300)")
+
+    # groups command
+    groups_parser = subparsers.add_parser("groups", help="Manage beta groups")
+    groups_subparsers = groups_parser.add_subparsers(dest="subcommand")
+
+    groups_list = groups_subparsers.add_parser("list", help="List groups")
+    groups_list.add_argument("--app", help="Filter by app name or bundle ID")
+
+    groups_add_tester = groups_subparsers.add_parser("add-tester", help="Add tester to group")
+    groups_add_tester.add_argument("group", help="Group name or ID")
+    groups_add_tester.add_argument("email", help="Tester email")
+    groups_add_tester.add_argument("--app", help="App name or bundle ID")
+
+    groups_create = groups_subparsers.add_parser("create", help="Create beta group")
+    groups_create.add_argument("name", help="Group name")
+    groups_create.add_argument("--app", required=True, help="App name or bundle ID (required)")
+    groups_create.add_argument("--external", action="store_true", help="Create external group (default: internal)")
+
+    args = parser.parse_args()
+
+    if args.command == "apps":
+        if args.subcommand == "list":
+            list_apps()
+        else:
+            apps_parser.print_help()
+
+    elif args.command == "bundles":
+        if args.subcommand == "list":
+            list_bundle_ids()
+        elif args.subcommand == "create":
+            create_bundle_id(args.identifier, args.name, args.platform)
+        else:
+            bundles_parser.print_help()
+
+    elif args.command == "testers":
+        if args.subcommand == "list":
+            list_testers(args.app)
+        elif args.subcommand == "add":
+            add_tester(args.email, args.app, args.first_name, args.last_name)
+        elif args.subcommand == "remove":
+            remove_tester(args.email, args.app)
+        else:
+            testers_parser.print_help()
+
+    elif args.command == "builds":
+        if args.subcommand == "list":
+            list_builds(args.app, wait_version=args.wait, timeout=args.timeout)
+        else:
+            builds_parser.print_help()
+
+    elif args.command == "groups":
+        if args.subcommand == "list":
+            list_groups(args.app)
+        elif args.subcommand == "add-tester":
+            add_tester_to_group(args.group, args.email, args.app)
+        elif args.subcommand == "create":
+            create_beta_group(args.name, args.app, is_internal=not args.external)
+        else:
+            groups_parser.print_help()
+
+    else:
+        parser.print_help()
+
+
+if __name__ == "__main__":
+    main()

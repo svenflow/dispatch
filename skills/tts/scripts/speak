@@ -1,0 +1,131 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["kokoro-onnx", "soundfile"]
+# ///
+"""
+Local text-to-speech using Kokoro ONNX model.
+
+Usage:
+    speak "Hello world"                    # Generate with default voice (bm_lewis)
+    speak "Hello world" -v af_nova         # Use specific voice
+    speak "Hello world" -o output.wav      # Save to file
+    speak --voices                         # List all available voices
+    speak --play "Hello world"             # Generate and play immediately
+"""
+
+import argparse
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+
+def get_model_dir():
+    """Get the models directory."""
+    return Path(__file__).parent.parent / "models"
+
+
+def list_voices():
+    """List all available voices."""
+    from kokoro_onnx import Kokoro
+
+    model_dir = get_model_dir()
+    kokoro = Kokoro(
+        str(model_dir / "kokoro-v1.0.onnx"),
+        str(model_dir / "voices-v1.0.bin")
+    )
+
+    voices = sorted(kokoro.get_voices())
+
+    # Group by prefix
+    groups = {}
+    for v in voices:
+        prefix = v[:2]
+        if prefix not in groups:
+            groups[prefix] = []
+        groups[prefix].append(v)
+
+    labels = {
+        'af': 'American Female',
+        'am': 'American Male',
+        'bf': 'British Female',
+        'bm': 'British Male',
+        'ef': 'Spanish Female',
+        'em': 'Spanish Male',
+        'ff': 'French Female',
+        'hf': 'Hindi Female',
+        'hm': 'Hindi Male',
+        'if': 'Italian Female',
+        'im': 'Italian Male',
+        'jf': 'Japanese Female',
+        'jm': 'Japanese Male',
+        'pf': 'Portuguese Female',
+        'pm': 'Portuguese Male',
+        'zf': 'Chinese Female',
+        'zm': 'Chinese Male',
+    }
+
+    for prefix in sorted(groups.keys()):
+        label = labels.get(prefix, prefix)
+        print(f"\n{label}:")
+        for v in groups[prefix]:
+            marker = " (default)" if v == "bm_lewis" else ""
+            print(f"  {v}{marker}")
+
+
+def speak(text: str, voice: str = "bm_lewis", output: str | None = None, speed: float = 1.0) -> str:
+    """Convert text to speech and return the output path."""
+    from kokoro_onnx import Kokoro
+    import soundfile as sf
+
+    model_dir = get_model_dir()
+    kokoro = Kokoro(
+        str(model_dir / "kokoro-v1.0.onnx"),
+        str(model_dir / "voices-v1.0.bin")
+    )
+
+    samples, sr = kokoro.create(text, voice=voice, speed=speed)
+
+    if output:
+        out_path = output
+    else:
+        out_path = tempfile.mktemp(suffix=".wav")
+
+    sf.write(out_path, samples, sr)
+    return out_path
+
+
+def play_audio(path: str):
+    """Play audio file using afplay (macOS)."""
+    subprocess.run(["afplay", path], check=True)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Local text-to-speech with Kokoro")
+    parser.add_argument("text", nargs="?", help="Text to speak")
+    parser.add_argument("-v", "--voice", default="bm_lewis", help="Voice to use (default: bm_lewis)")
+    parser.add_argument("-o", "--output", help="Output file path (default: temp file)")
+    parser.add_argument("-s", "--speed", type=float, default=1.0, help="Speech speed (default: 1.0)")
+    parser.add_argument("--voices", action="store_true", help="List all available voices")
+    parser.add_argument("--play", action="store_true", help="Play audio after generating")
+
+    args = parser.parse_args()
+
+    if args.voices:
+        list_voices()
+        return
+
+    if not args.text:
+        parser.print_help()
+        sys.exit(1)
+
+    out_path = speak(args.text, voice=args.voice, output=args.output, speed=args.speed)
+    print(out_path)
+
+    if args.play:
+        play_audio(out_path)
+
+
+if __name__ == "__main__":
+    main()

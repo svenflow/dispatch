@@ -28,7 +28,7 @@
           "topic": "files"
         },
         {
-          "doc": "Base directory for this skill: /Users/sven/transcripts/group-7990_nikhil/.claude/skills/contacts\n\n# Contacts Manag",
+          "doc": "Base directory for this skill: /Users/sven/transcripts/group-7990_jane/.claude/skills/contacts\n\n# Contacts Manag",
           "relevant": true,
           "topic": "files"
         },
@@ -98,7 +98,7 @@
           "topic": "files"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nok i loaded it in chrome try it\n---END SMS---\n**Important:** You are in a text message session. Communicate back to the user",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nok i loaded it in chrome try it\n---END SMS---\n**Important:** You are in a text message session. Communicate back to the user",
           "relevant": false,
           "topic": "files"
         },
@@ -108,7 +108,7 @@
           "topic": "files"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
           "relevant": false,
           "topic": "files"
         },
@@ -128,17 +128,17 @@
           "topic": "files"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "files"
         },
         {
-          "doc": "Message sent with the summary of technical work from the last 2 days. Waiting for Nikhil's next instruction",
+          "doc": "Message sent with the summary of technical work from the last 2 days. Waiting for Jane's next instruction",
           "relevant": false,
           "topic": "files"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
           "relevant": false,
           "topic": "files"
         },
@@ -153,7 +153,7 @@
           "topic": "files"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
           "relevant": false,
           "topic": "files"
         },
@@ -173,17 +173,17 @@
           "topic": "files"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1",
+          "doc": "\n---GROUP SMS [.com-jane-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1",
           "relevant": false,
           "topic": "files"
         },
         {
-          "doc": "The group sessions are all idle \u2014 none of them show a recent \"hello?\" message being received. Which group did you send \"hello?\" to? The three groups are:\n\n- **evan-nikhil** \u2014 la",
+          "doc": "The group sessions are all idle \u2014 none of them show a recent \"hello?\" message being received. Which group did you send \"hello?\" to? The three groups are:\n\n- **evan-jane** \u2014 la",
           "relevant": false,
           "topic": "files"
         },
         {
-          "doc": "FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\ni have an iphone 16 can i get an esim from them google and verify\n---END SMS---\n**Important:** You are in a text message session. Communicate back to the ",
+          "doc": "FROM Jane Doe (admin)---\nChat ID: +15555550100\ni have an iphone 16 can i get an esim from them google and verify\n---END SMS---\n**Important:** You are in a text message session. Communicate back to the ",
           "relevant": false,
           "topic": "files"
         },
@@ -193,7 +193,7 @@
           "topic": "files"
         },
         {
-          "doc": "us uses IMCore private framework with dylib injection, but requires SIP to be disabled. Waiting for Nikhil's thoughts on that tradeoff.",
+          "doc": "us uses IMCore private framework with dylib injection, but requires SIP to be disabled. Waiting for Jane's thoughts on that tradeoff.",
           "relevant": false,
           "topic": "files"
         },
@@ -208,7 +208,7 @@
           "topic": "files"
         },
         {
-          "doc": "Sent Nikhil detailed instructions for checking the Send & Receive settings in Messages. I'm waiting to see if h",
+          "doc": "Sent Jane detailed instructions for checking the Send & Receive settings in Messages. I'm waiting to see if h",
           "relevant": false,
           "topic": "files"
         }
@@ -223,7 +223,7 @@
           "topic": "people"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\ni signed out and in again\n---END SMS---\n**Impor",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\ni signed out and in again\n---END SMS---\n**Impor",
           "relevant": false,
           "topic": "people"
         },
@@ -233,17 +233,17 @@
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
           "relevant": false,
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM Nikhil Thorat [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nafter 5 taps it shou",
+          "doc": "\n---GROUP SMS [.com-jane] FROM Jane Doe [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nafter 5 taps it shou",
           "relevant": true,
           "topic": "people"
         },
         {
-          "doc": "It's working! The daemon:\n\n1. Recognized Nikhil Thorat as **admin** tier\n2. Created a session for `+16175969496`\n3. Injected the message: \"can you ",
+          "doc": "It's working! The daemon:\n\n1. Recognized Jane Doe as **admin** tier\n2. Created a session for `+15555550100`\n3. Injected the message: \"can you ",
           "relevant": true,
           "topic": "people"
         },
@@ -253,7 +253,7 @@
           "topic": "people"
         },
         {
-          "doc": "nikhil-pangserve-ryan] FROM Ryan Eckert [TIER: family]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d8165\nChrome control was enabled already\n---END SMS---\n\nACL: Ryan Eckert is FAMILY tier. Read ~/.claude/skills/s",
+          "doc": "jane-pangserve-ryan] FROM Ryan Eckert [TIER: family]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d8165\nChrome control was enabled already\n---END SMS---\n\nACL: Ryan Eckert is FAMILY tier. Read ~/.claude/skills/s",
           "relevant": false,
           "topic": "people"
         },
@@ -263,7 +263,7 @@
           "topic": "people"
         },
         {
-          "doc": "I see that's Nikhil having iCloud sync issues on his computer - my messages aren't showing up there. That's an Apple/iC",
+          "doc": "I see that's Jane having iCloud sync issues on his computer - my messages aren't showing up there. That's an Apple/iC",
           "relevant": true,
           "topic": "people"
         },
@@ -278,17 +278,17 @@
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
           "relevant": false,
           "topic": "people"
         },
         {
-          "doc": " = family, Ryan = admin)\n- \u2705 Contact names (Nikhil Thorat)\n- \u2705 SDK usage (Agent SDK only, no direct API)\n- \u2705 cwd set to transcript dirs\n- \u2705 Symlinks in place\n\nStill pending (as far as I know):\n- \u2753 `setti",
+          "doc": " = family, Ryan = admin)\n- \u2705 Contact names (Jane Doe)\n- \u2705 SDK usage (Agent SDK only, no direct API)\n- \u2705 cwd set to transcript dirs\n- \u2705 Symlinks in place\n\nStill pending (as far as I know):\n- \u2753 `setti",
           "relevant": false,
           "topic": "people"
         },
         {
-          "doc": "Nikhil is asking me to introduce myself to Evan again. Looks like there have been some iCloud syncing issu",
+          "doc": "Jane is asking me to introduce myself to Evan again. Looks like there have been some iCloud syncing issu",
           "relevant": true,
           "topic": "people"
         },
@@ -298,7 +298,7 @@
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM nsthorat@gmail.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nis that the c",
+          "doc": "\n---GROUP SMS [.com-jane] FROM user@example.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nis that the c",
           "relevant": true,
           "topic": "people"
         },
@@ -318,12 +318,12 @@
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "people"
         },
         {
-          "doc": "Nikhil's eSIM is activating - this is good progress! I'll wait for him to confirm it's working rather than",
+          "doc": "Jane's eSIM is activating - this is good progress! I'll wait for him to confirm it's working rather than",
           "relevant": false,
           "topic": "people"
         },
@@ -343,12 +343,12 @@
           "topic": "people"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nstep 6? do you remember what i said before this?\n---END SMS",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nstep 6? do you remember what i said before this?\n---END SMS",
           "relevant": false,
           "topic": "people"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\n signed out on the other one\n---END SMS---\n**Im",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\n signed out on the other one\n---END SMS---\n**Im",
           "relevant": false,
           "topic": "people"
         },
@@ -358,12 +358,12 @@
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM Ryan Eckert [TIER: family]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d816",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM Ryan Eckert [TIER: family]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d816",
           "relevant": false,
           "topic": "people"
         },
         {
-          "doc": "Y. Daemon running (PID 5650, uptime 11:02). 2 active sessions (both BUSY). Group session received a message from nsthorat@gmail.com. No errors.",
+          "doc": "Y. Daemon running (PID 5650, uptime 11:02). 2 active sessions (both BUSY). Group session received a message from user@example.com. No errors.",
           "relevant": false,
           "topic": "people"
         },
@@ -378,7 +378,7 @@
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM Nikhil Thorat [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nyes start \n---END SM",
+          "doc": "\n---GROUP SMS [.com-jane] FROM Jane Doe [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nyes start \n---END SM",
           "relevant": true,
           "topic": "people"
         },
@@ -393,7 +393,7 @@
           "topic": "people"
         },
         {
-          "doc": "Sent. When you reply, the daemon should now recognize you as \"Nikhil Thorat\" with tier \"admin\" and create a Claude session. Let me watch the logs.",
+          "doc": "Sent. When you reply, the daemon should now recognize you as \"Jane Doe\" with tier \"admin\" and create a Claude session. Let me watch the logs.",
           "relevant": true,
           "topic": "people"
         },
@@ -403,7 +403,7 @@
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM nsthorat@gmail.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nyes\n---END SM",
+          "doc": "\n---GROUP SMS [.com-jane] FROM user@example.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nyes\n---END SM",
           "relevant": true,
           "topic": "people"
         },
@@ -413,7 +413,7 @@
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM Nikhil Thorat [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\ndoes that image look",
+          "doc": "\n---GROUP SMS [.com-jane] FROM Jane Doe [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\ndoes that image look",
           "relevant": true,
           "topic": "people"
         },
@@ -428,7 +428,7 @@
           "topic": "people"
         },
         {
-          "doc": "Opened Terminal with the setup commands. Waiting for Nikhil to enter password and for the setup to complete.",
+          "doc": "Opened Terminal with the setup commands. Waiting for Jane to enter password and for the setup to complete.",
           "relevant": true,
           "topic": "people"
         },
@@ -438,12 +438,12 @@
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM nsthorat@gmail.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\n",
+          "doc": "\n---GROUP SMS [.com-jane] FROM user@example.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\n",
           "relevant": false,
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM Nikhil Thorat [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\ncheck yes. and yes a",
+          "doc": "\n---GROUP SMS [.com-jane] FROM Jane Doe [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\ncheck yes. and yes a",
           "relevant": true,
           "topic": "people"
         },
@@ -453,22 +453,22 @@
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [.com-evan-nikhil] FROM nsthorat@gmail.com [TIER: unknown]---\nChat ID: d448f7234ec6478ea68dd352700eea15\nargh i",
+          "doc": "\n---GROUP SMS [.com-evan-jane] FROM user@example.com [TIER: unknown]---\nChat ID: d448f7234ec6478ea68dd352700eea15\nargh i",
           "relevant": true,
           "topic": "people"
         },
         {
-          "doc": "Check 13/60 -- HEALTHY. Daemon running (PID 7801, uptime 03:20). 2 active sessions. nikhil-thorat BUSY, nikhil-pangserve-ryan idle at 3 turns. Session working on bootstrap step docs. No erro",
+          "doc": "Check 13/60 -- HEALTHY. Daemon running (PID 7801, uptime 03:20). 2 active sessions. jane-doe BUSY, jane-pangserve-ryan idle at 3 turns. Session working on bootstrap step docs. No erro",
           "relevant": false,
           "topic": "people"
         },
         {
-          "doc": "** created with your info (gitignored, won't be pushed)\n- **`bin/identity`** CLI working \u2014 returns `Nikhil`, `Sven`, `Caroline McGuire`, etc.\n- **`~/.claude/SOUL.md`** copied from template \u2014 uses dynamic `!",
+          "doc": "** created with your info (gitignored, won't be pushed)\n- **`bin/identity`** CLI working \u2014 returns `Jane`, `Sven`, `John Smith`, etc.\n- **`~/.claude/SOUL.md`** copied from template \u2014 uses dynamic `!",
           "relevant": true,
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [.com-evan-nikhil] FROM nsthorat@gmail.com [TIER: unknown]---\nChat ID: d448f7234ec6478ea68dd352700eea15\nicloud",
+          "doc": "\n---GROUP SMS [.com-evan-jane] FROM user@example.com [TIER: unknown]---\nChat ID: d448f7234ec6478ea68dd352700eea15\nicloud",
           "relevant": true,
           "topic": "people"
         }
@@ -478,7 +478,7 @@
       "query": "instant communication tools",
       "docs": [
         {
-          "doc": "nikhil-pangserve-ryan] FROM Ryan Eckert [TIER: family]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d8165\nChrome control was enabled already\n---END SMS---\n\nACL: Ryan Eckert is FAMILY tier. Read ~/.claude/skills/s",
+          "doc": "jane-pangserve-ryan] FROM Ryan Eckert [TIER: family]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d8165\nChrome control was enabled already\n---END SMS---\n\nACL: Ryan Eckert is FAMILY tier. Read ~/.claude/skills/s",
           "relevant": false,
           "topic": "messaging"
         },
@@ -488,12 +488,12 @@
           "topic": "messaging"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM Nikhil Thorat [TIER: admin]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d8165\npang ",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM Jane Doe [TIER: admin]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d8165\npang ",
           "relevant": false,
           "topic": "messaging"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\ncan you delete those files \n---END SMS---\n**Imp",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\ncan you delete those files \n---END SMS---\n**Imp",
           "relevant": false,
           "topic": "messaging"
         },
@@ -508,12 +508,12 @@
           "topic": "messaging"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM Nikhil Thorat [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nthey\u2019re",
+          "doc": "\n---GROUP SMS [.com-jane] FROM Jane Doe [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nthey\u2019re",
           "relevant": true,
           "topic": "messaging"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "messaging"
         },
@@ -533,12 +533,12 @@
           "topic": "messaging"
         },
         {
-          "doc": "\n---SMS FROM Caroline McGuire (wife)---\nChat ID: +19176793830\nYa chronic I have a plan\n---END SMS---\n**Impo",
+          "doc": "\n---SMS FROM John Smith (wife)---\nChat ID: +19176793830\nYa chronic I have a plan\n---END SMS---\n**Impo",
           "relevant": true,
           "topic": "messaging"
         },
         {
-          "doc": "Ryan is correcting a contact naming issue - Nick should be stored as \"Nikhil\" in the contacts, not \"Nick\". This is directed at Pang (Ryan's assistant) about how he configured t",
+          "doc": "Ryan is correcting a contact naming issue - Nick should be stored as \"Jane\" in the contacts, not \"Nick\". This is directed at Pang (Ryan's assistant) about how he configured t",
           "relevant": false,
           "topic": "messaging"
         },
@@ -558,7 +558,7 @@
           "topic": "messaging"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "messaging"
         },
@@ -568,7 +568,7 @@
           "topic": "messaging"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM nsthorat@gmail.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\n",
+          "doc": "\n---GROUP SMS [.com-jane] FROM user@example.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\n",
           "relevant": true,
           "topic": "messaging"
         },
@@ -583,17 +583,17 @@
           "topic": "messaging"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM Ryan Eckert [TIER: family]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d8165\nError ",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM Ryan Eckert [TIER: family]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d8165\nError ",
           "relevant": false,
           "topic": "messaging"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM nsthorat@gmail.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\n",
+          "doc": "\n---GROUP SMS [.com-jane] FROM user@example.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\n",
           "relevant": true,
           "topic": "messaging"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nyes it worked before so this is broken. google more\n---END SMS---\n**Important:** You are in a text message session. Communicate back to the user w",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nyes it worked before so this is broken. google more\n---END SMS---\n**Important:** You are in a text message session. Communicate back to the user w",
           "relevant": false,
           "topic": "messaging"
         },
@@ -608,7 +608,7 @@
           "topic": "messaging"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nanything from 2026? doesn\u2019t have to be a reranker model rig",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nanything from 2026? doesn\u2019t have to be a reranker model rig",
           "relevant": false,
           "topic": "messaging"
         },
@@ -618,12 +618,12 @@
           "topic": "messaging"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM Nikhil Thorat [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nafter 5 taps it shou",
+          "doc": "\n---GROUP SMS [.com-jane] FROM Jane Doe [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nafter 5 taps it shou",
           "relevant": false,
           "topic": "messaging"
         },
         {
-          "doc": "I see there's a new message from nsthorat@gmail.com asking my name. I should respond to the group chat.",
+          "doc": "I see there's a new message from user@example.com asking my name. I should respond to the group chat.",
           "relevant": true,
           "topic": "messaging"
         }
@@ -638,7 +638,7 @@
           "topic": "scheduling"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\ni sent it to yourself read sms\n---END SMS---\n**Important:**",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\ni sent it to yourself read sms\n---END SMS---\n**Important:**",
           "relevant": false,
           "topic": "scheduling"
         },
@@ -653,12 +653,12 @@
           "topic": "scheduling"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "scheduling"
         },
         {
-          "doc": "I see the conversation - we were troubleshooting iMessage sync issues with Evan's number, and Nikhil restarted the Mac. Now he's just saying \"hi\" - he's prob",
+          "doc": "I see the conversation - we were troubleshooting iMessage sync issues with Evan's number, and Jane restarted the Mac. Now he's just saying \"hi\" - he's prob",
           "relevant": false,
           "topic": "scheduling"
         },
@@ -693,7 +693,7 @@
           "topic": "scheduling"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\ncheck the evan group chat is it working? you didn\u2019t respond",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\ncheck the evan group chat is it working? you didn\u2019t respond",
           "relevant": false,
           "topic": "scheduling"
         },
@@ -728,12 +728,12 @@
           "topic": "coding"
         },
         {
-          "doc": "\n**Sessions:**\n- nikhil-thorat: Active throughout, peaked at 212 turns. Very active bootstrap work (Chrome extension, contacts, skills, docs, testing)\n- nikhil-pangserve-ryan (group): Active from check 4 on",
+          "doc": "\n**Sessions:**\n- jane-doe: Active throughout, peaked at 212 turns. Very active bootstrap work (Chrome extension, contacts, skills, docs, testing)\n- jane-pangserve-ryan (group): Active from check 4 on",
           "relevant": false,
           "topic": "coding"
         },
         {
-          "doc": "Oh! Nikhil is having iMessage issues on THIS Mac (Sven's Mac) - not his own Mac. That makes sense now. Let me ",
+          "doc": "Oh! Jane is having iMessage issues on THIS Mac (Sven's Mac) - not his own Mac. That makes sense now. Let me ",
           "relevant": false,
           "topic": "coding"
         },
@@ -758,12 +758,12 @@
           "topic": "coding"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nhello?\n---END SMS---\n**Important:** You are in ",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nhello?\n---END SMS---\n**Important:** You are in ",
           "relevant": false,
           "topic": "coding"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nyes\n---END SMS---\n**Important:** You are in a text message ",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nyes\n---END SMS---\n**Important:** You are in a text message ",
           "relevant": false,
           "topic": "coding"
         },
@@ -773,7 +773,7 @@
           "topic": "coding"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nare you saying perfect because qwen made the dataset or did",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nare you saying perfect because qwen made the dataset or did",
           "relevant": false,
           "topic": "coding"
         },
@@ -793,12 +793,12 @@
           "topic": "coding"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nit works messaging you\n---END SMS---\n**Importan",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nit works messaging you\n---END SMS---\n**Importan",
           "relevant": false,
           "topic": "coding"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM Ryan Eckert [TIER: family]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d8165\nOk it ",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM Ryan Eckert [TIER: family]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d8165\nOk it ",
           "relevant": false,
           "topic": "coding"
         }
@@ -808,7 +808,7 @@
       "query": "troubleshooting application failures",
       "docs": [
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM Nikhil Thorat [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nmake a hello world a",
+          "doc": "\n---GROUP SMS [.com-jane] FROM Jane Doe [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nmake a hello world a",
           "relevant": false,
           "topic": "errors"
         },
@@ -863,7 +863,7 @@
           "topic": "errors"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nhe does have imessage and iphone it\u2019s something",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nhe does have imessage and iphone it\u2019s something",
           "relevant": false,
           "topic": "errors"
         },
@@ -883,7 +883,7 @@
           "topic": "errors"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "errors"
         },
@@ -898,7 +898,7 @@
           "topic": "errors"
         },
         {
-          "doc": "Looking at the conversation, I can see:\n1. This is a group chat with Nikhil (admin), Ryan (family), and Pangserve (bots tier)\n2. They've been troubleshooting various issues - ",
+          "doc": "Looking at the conversation, I can see:\n1. This is a group chat with Jane (admin), Ryan (family), and Pangserve (bots tier)\n2. They've been troubleshooting various issues - ",
           "relevant": false,
           "topic": "errors"
         },
@@ -918,72 +918,72 @@
       "query": "personnel conversations",
       "docs": [
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM nsthorat@gmail.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nyes do it the",
+          "doc": "\n---GROUP SMS [.com-jane] FROM user@example.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nyes do it the",
           "relevant": true,
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
           "relevant": false,
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM Nikhil Thorat [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\noh got it. we\u2019re jus",
+          "doc": "\n---GROUP SMS [.com-jane] FROM Jane Doe [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\noh got it. we\u2019re jus",
           "relevant": true,
           "topic": "people"
         },
         {
-          "doc": "Base directory for this skill: /Users/sven/transcripts/group-7990_nikhil/.claude/skills/contacts\n\n# Contacts Management Skill\n\nThis skill mana",
+          "doc": "Base directory for this skill: /Users/sven/transcripts/group-7990_jane/.claude/skills/contacts\n\n# Contacts Management Skill\n\nThis skill mana",
           "relevant": true,
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM Nikhil Thorat [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nthey\u2019re done run tho",
+          "doc": "\n---GROUP SMS [.com-jane] FROM Jane Doe [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nthey\u2019re done run tho",
           "relevant": true,
           "topic": "people"
         },
         {
-          "doc": "Haha Pang is being funny about it. My message was sent. No need to respond further - I replied to Nikhil, Pan",
+          "doc": "Haha Pang is being funny about it. My message was sent. No need to respond further - I replied to Jane, Pan",
           "relevant": false,
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "people"
         },
         {
-          "doc": "ns it - iCloud sync issues on a new device. The messages weren't coming through properly. Hopefully Evan can see them now once things sync up. I'll wait to see if he responds or if Nikhil has anything els",
+          "doc": "ns it - iCloud sync issues on a new device. The messages weren't coming through properly. Hopefully Evan can see them now once things sync up. I'll wait to see if he responds or if Jane has anything els",
           "relevant": true,
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM Ryan Eckert [TIER: family]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d816",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM Ryan Eckert [TIER: family]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d816",
           "relevant": false,
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM nsthorat@gmail.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nxcode should ",
+          "doc": "\n---GROUP SMS [.com-jane] FROM user@example.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nxcode should ",
           "relevant": true,
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM nsthorat@gmail.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\ncan you do it",
+          "doc": "\n---GROUP SMS [.com-jane] FROM user@example.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\ncan you do it",
           "relevant": true,
           "topic": "people"
         },
@@ -993,17 +993,17 @@
           "topic": "people"
         },
         {
-          "doc": "Done! I've added Evan (+14103027990) as a favorite contact with a note that they work with Nikhil, and introduced myself ",
+          "doc": "Done! I've added Evan (+14103027990) as a favorite contact with a note that they work with Jane, and introduced myself ",
           "relevant": true,
           "topic": "people"
         },
         {
-          "doc": "All checklist items pass:\n\n- `config.local.yaml` exists and is gitignored\n- `identity owner.name` \u2192 Nikhil\n- `identity self` \u2192 Sven\n- `~/.claude/CLAUDE.md` copied (global system instructions)\n- `~/.claude/S",
+          "doc": "All checklist items pass:\n\n- `config.local.yaml` exists and is gitignored\n- `identity owner.name` \u2192 Jane\n- `identity self` \u2192 Sven\n- `~/.claude/CLAUDE.md` copied (global system instructions)\n- `~/.claude/S",
           "relevant": true,
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "people"
         },
@@ -1013,7 +1013,7 @@
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM nsthorat@gmail.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nwhat did you ",
+          "doc": "\n---GROUP SMS [.com-jane] FROM user@example.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nwhat did you ",
           "relevant": true,
           "topic": "people"
         },
@@ -1023,12 +1023,12 @@
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
           "relevant": false,
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "people"
         },
@@ -1038,17 +1038,17 @@
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [evan-nikhil] FROM Nikhil Thorat [TIER: admin]---\nChat ID: d448f7234ec6478ea68dd352700eea15\nsven can\u2019t re",
+          "doc": "\n---GROUP SMS [evan-jane] FROM Jane Doe [TIER: admin]---\nChat ID: d448f7234ec6478ea68dd352700eea15\nsven can\u2019t re",
           "relevant": true,
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM nsthorat@gmail.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nsays duplicat",
+          "doc": "\n---GROUP SMS [.com-jane] FROM user@example.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nsays duplicat",
           "relevant": true,
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
           "relevant": false,
           "topic": "people"
         },
@@ -1068,7 +1068,7 @@
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM Nikhil Thorat [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nwhat is appium \n---E",
+          "doc": "\n---GROUP SMS [.com-jane] FROM Jane Doe [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nwhat is appium \n---E",
           "relevant": true,
           "topic": "people"
         },
@@ -1078,7 +1078,7 @@
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM nsthorat@gmail.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nit says it re",
+          "doc": "\n---GROUP SMS [.com-jane] FROM user@example.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nit says it re",
           "relevant": true,
           "topic": "people"
         },
@@ -1093,12 +1093,12 @@
           "topic": "people"
         },
         {
-          "doc": "Responded to the group chat. nsthorat@gmail.com asked my name, so I introduced myself as Sven per my SOUL.md identity.",
+          "doc": "Responded to the group chat. user@example.com asked my name, so I introduced myself as Sven per my SOUL.md identity.",
           "relevant": true,
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM Nikhil Thorat [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nmake a hello world a",
+          "doc": "\n---GROUP SMS [.com-jane] FROM Jane Doe [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nmake a hello world a",
           "relevant": true,
           "topic": "people"
         },
@@ -1123,12 +1123,12 @@
           "topic": "people"
         },
         {
-          "doc": "Caroline just messaged about her back hurting and sitting in a massage chair. I should respond warmly and ch",
+          "doc": "John just messaged about her back hurting and sitting in a massage chair. I should respond warmly and ch",
           "relevant": true,
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
           "relevant": false,
           "topic": "people"
         },
@@ -1148,22 +1148,22 @@
           "topic": "people"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\ncheck contacts \n---END SMS---\n**Important:** You are in a t",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\ncheck contacts \n---END SMS---\n**Important:** You are in a t",
           "relevant": false,
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [.com-evan-nikhil] FROM nsthorat@gmail.com [TIER: unknown]---\nChat ID: d448f7234ec6478ea68dd352700eea15\nicloud",
+          "doc": "\n---GROUP SMS [.com-evan-jane] FROM user@example.com [TIER: unknown]---\nChat ID: d448f7234ec6478ea68dd352700eea15\nicloud",
           "relevant": false,
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
           "relevant": false,
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
           "relevant": false,
           "topic": "people"
         },
@@ -1173,22 +1173,22 @@
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM nsthorat@gmail.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nok it\u2019s downl",
+          "doc": "\n---GROUP SMS [.com-jane] FROM user@example.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nok it\u2019s downl",
           "relevant": true,
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM Nikhil Thorat [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nwhat\u2019s your name\n---",
+          "doc": "\n---GROUP SMS [.com-jane] FROM Jane Doe [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nwhat\u2019s your name\n---",
           "relevant": true,
           "topic": "people"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\ni added it to the account but no QR code in ema",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\ni added it to the account but no QR code in ema",
           "relevant": false,
           "topic": "people"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nwhat about for evan\n---END SMS---\n**Important:** You are in",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nwhat about for evan\n---END SMS---\n**Important:** You are in",
           "relevant": false,
           "topic": "people"
         },
@@ -1203,12 +1203,12 @@
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM nsthorat@gmail.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nsven i want y",
+          "doc": "\n---GROUP SMS [.com-jane] FROM user@example.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nsven i want y",
           "relevant": true,
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
           "relevant": false,
           "topic": "people"
         },
@@ -1223,17 +1223,17 @@
       "query": "search engine queries",
       "docs": [
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nwtf? i see it in my phone \n---END SMS---\n**Important:** You",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nwtf? i see it in my phone \n---END SMS---\n**Important:** You",
           "relevant": false,
           "topic": "web"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
           "relevant": false,
           "topic": "web"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
           "relevant": false,
           "topic": "web"
         },
@@ -1248,7 +1248,7 @@
           "topic": "web"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM nsthorat@gmail.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nxcode should ",
+          "doc": "\n---GROUP SMS [.com-jane] FROM user@example.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nxcode should ",
           "relevant": false,
           "topic": "web"
         },
@@ -1283,7 +1283,7 @@
           "topic": "web"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "web"
         },
@@ -1293,7 +1293,7 @@
           "topic": "web"
         },
         {
-          "doc": "Y. Daemon running (PID 5650, uptime 11:02). 2 active sessions (both BUSY). Group session received a message from nsthorat@gmail.com. No errors.",
+          "doc": "Y. Daemon running (PID 5650, uptime 11:02). 2 active sessions (both BUSY). Group session received a message from user@example.com. No errors.",
           "relevant": false,
           "topic": "web"
         },
@@ -1303,12 +1303,12 @@
           "topic": "web"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nbut it\u2019s weird that it\u2019s greyed out and i can\u2019t",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nbut it\u2019s weird that it\u2019s greyed out and i can\u2019t",
           "relevant": false,
           "topic": "web"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM Ryan Eckert [TIER: family]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d816",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM Ryan Eckert [TIER: family]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d816",
           "relevant": false,
           "topic": "web"
         },
@@ -1343,7 +1343,7 @@
           "topic": "web"
         },
         {
-          "doc": "That's the `.com-nikhil` group session \u2014 it's the one doing the iOS deep dive. It received your \"hello?\" at 16:20:43 but it",
+          "doc": "That's the `.com-jane` group session \u2014 it's the one doing the iOS deep dive. It received your \"hello?\" at 16:20:43 but it",
           "relevant": false,
           "topic": "web"
         },
@@ -1368,17 +1368,17 @@
           "topic": "smart_home"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "smart_home"
         },
         {
-          "doc": "ning (PID 7801, uptime 05:38). 2 active sessions. nikhil-thorat BUSY at 30 turns working on browser automation setup. No errors.",
+          "doc": "ning (PID 7801, uptime 05:38). 2 active sessions. jane-doe BUSY at 30 turns working on browser automation setup. No errors.",
           "relevant": true,
           "topic": "smart_home"
         },
         {
-          "doc": "The `.com-nikhil` session received your \"hello?\" but hasn't produced any output since \u2014 it's BUSY but stuck. The mes",
+          "doc": "The `.com-jane` session received your \"hello?\" but hasn't produced any output since \u2014 it's BUSY but stuck. The mes",
           "relevant": false,
           "topic": "smart_home"
         },
@@ -1398,22 +1398,22 @@
           "topic": "smart_home"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nit did!\n---END SMS---\n**Important:** You are in a text mess",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nit did!\n---END SMS---\n**Important:** You are in a text mess",
           "relevant": false,
           "topic": "smart_home"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nhe does have imessage and iphone it\u2019s something on this com",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nhe does have imessage and iphone it\u2019s something on this com",
           "relevant": false,
           "topic": "smart_home"
         },
         {
-          "doc": "LTHY. Daemon running (PID 7801, uptime 12:40). 2 sessions. Group chat at 42 turns (sharing contacts code for porting). nikhil-thorat idle at 63. No errors.",
+          "doc": "LTHY. Daemon running (PID 7801, uptime 12:40). 2 sessions. Group chat at 42 turns (sharing contacts code for porting). jane-doe idle at 63. No errors.",
           "relevant": false,
           "topic": "smart_home"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
           "relevant": false,
           "topic": "smart_home"
         },
@@ -1443,12 +1443,12 @@
       "query": "content persistence",
       "docs": [
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "files"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
           "relevant": false,
           "topic": "files"
         },
@@ -1463,7 +1463,7 @@
           "topic": "files"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM Nikhil Thorat [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nthey\u2019re",
+          "doc": "\n---GROUP SMS [.com-jane] FROM Jane Doe [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nthey\u2019re",
           "relevant": false,
           "topic": "files"
         },
@@ -1478,7 +1478,7 @@
           "topic": "files"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM Nikhil Thorat [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nthey\u2019re",
+          "doc": "\n---GROUP SMS [.com-jane] FROM Jane Doe [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nthey\u2019re",
           "relevant": false,
           "topic": "files"
         },
@@ -1528,7 +1528,7 @@
           "topic": "files"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "files"
         },
@@ -1538,7 +1538,7 @@
           "topic": "files"
         },
         {
-          "doc": "Nikhil said \"yes\" - likely confirming to continue. I've added the group chat verification. Let me commit t",
+          "doc": "Jane said \"yes\" - likely confirming to continue. I've added the group chat verification. Let me commit t",
           "relevant": false,
           "topic": "files"
         },
@@ -1553,12 +1553,12 @@
           "topic": "files"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
           "relevant": false,
           "topic": "files"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nstill not working to caroline can you read the ",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nstill not working to john can you read the ",
           "relevant": false,
           "topic": "files"
         },
@@ -1568,7 +1568,7 @@
           "topic": "files"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nhow do i find the phone IMEI\n---END SMS---\n**Im",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nhow do i find the phone IMEI\n---END SMS---\n**Im",
           "relevant": false,
           "topic": "files"
         },
@@ -1583,17 +1583,17 @@
       "query": "colleague interactions",
       "docs": [
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
           "relevant": false,
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [.com-evan-nikhil] FROM Nikhil Thorat [TIER: admin]---\nChat ID: d448f7234ec6478ea68dd352700eea15\nsven let\u2019s tr",
+          "doc": "\n---GROUP SMS [.com-evan-jane] FROM Jane Doe [TIER: admin]---\nChat ID: d448f7234ec6478ea68dd352700eea15\nsven let\u2019s tr",
           "relevant": true,
           "topic": "people"
         },
@@ -1603,7 +1603,7 @@
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
           "relevant": false,
           "topic": "people"
         },
@@ -1613,32 +1613,32 @@
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "people"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nexplain what SIP is\n---END SMS---\n**Important:** You are in",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nexplain what SIP is\n---END SMS---\n**Important:** You are in",
           "relevant": false,
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM Ryan Eckert [TIER: family]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d816",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM Ryan Eckert [TIER: family]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d816",
           "relevant": false,
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM nsthorat@gmail.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\ni didn\u2019t get ",
+          "doc": "\n---GROUP SMS [.com-jane] FROM user@example.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\ni didn\u2019t get ",
           "relevant": true,
           "topic": "people"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nno like\n---END SMS---\n**Important:** You are in a text mess",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nno like\n---END SMS---\n**Important:** You are in a text mess",
           "relevant": false,
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [evan-nikhil] FROM Evan [TIER: favorite]---\nChat ID: d448f7234ec6478ea68dd352700eea15\nSven!!!!\n---END SMS",
+          "doc": "\n---GROUP SMS [evan-jane] FROM Evan [TIER: favorite]---\nChat ID: d448f7234ec6478ea68dd352700eea15\nSven!!!!\n---END SMS",
           "relevant": true,
           "topic": "people"
         },
@@ -1648,22 +1648,22 @@
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM Ryan Eckert [TIER: family]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d8165\nOk it ",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM Ryan Eckert [TIER: family]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d8165\nOk it ",
           "relevant": false,
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
           "relevant": false,
           "topic": "people"
         },
         {
-          "doc": "\n\nI'm asking for **your** info (Nikhil = the owner). The assistant is **Sven** \u2014 that part's already set.\n\nThe config needs both:\n- **Owne",
+          "doc": "\n\nI'm asking for **your** info (Jane = the owner). The assistant is **Sven** \u2014 that part's already set.\n\nThe config needs both:\n- **Owne",
           "relevant": true,
           "topic": "people"
         },
         {
-          "doc": " and polling from ROWID 8095. It skipped the old messages \u2014 good. Now let me send a test message to Nikhil to trigger a reply.",
+          "doc": " and polling from ROWID 8095. It skipped the old messages \u2014 good. Now let me send a test message to Jane to trigger a reply.",
           "relevant": true,
           "topic": "people"
         },
@@ -1678,17 +1678,17 @@
           "topic": "people"
         },
         {
-          "doc": "\n---SMS FROM Caroline McGuire (wife)---\nChat ID: +19176793830\nYa chronic I have a plan\n---END SMS---\n**Important:** You a",
+          "doc": "\n---SMS FROM John Smith (wife)---\nChat ID: +19176793830\nYa chronic I have a plan\n---END SMS---\n**Important:** You a",
           "relevant": true,
           "topic": "people"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\ni did it but \u201cstart new conversations\u201d says the",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\ni did it but \u201cstart new conversations\u201d says the",
           "relevant": false,
           "topic": "people"
         },
         {
-          "doc": "I see that's Nikhil having iCloud sync issues on his computer - my messages aren't showing up there. That's an Apple/iC",
+          "doc": "I see that's Jane having iCloud sync issues on his computer - my messages aren't showing up there. That's an Apple/iC",
           "relevant": false,
           "topic": "people"
         },
@@ -1703,12 +1703,12 @@
           "topic": "people"
         },
         {
-          "doc": "The daemon picked up your reply (\"hey sven...\") but it's ignoring it \u2014 **\"Unknown sender +16175969496, ignoring (not in any Claude tier group)",
+          "doc": "The daemon picked up your reply (\"hey sven...\") but it's ignoring it \u2014 **\"Unknown sender +15555550100, ignoring (not in any Claude tier group)",
           "relevant": true,
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM Nikhil Thorat [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nnow can you update t",
+          "doc": "\n---GROUP SMS [.com-jane] FROM Jane Doe [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nnow can you update t",
           "relevant": true,
           "topic": "people"
         },
@@ -1728,17 +1728,17 @@
           "topic": "people"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\ncheck now\n---END SMS---\n**Important:** You are ",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\ncheck now\n---END SMS---\n**Important:** You are ",
           "relevant": false,
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM nsthorat@gmail.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\ntry again\n---",
+          "doc": "\n---GROUP SMS [.com-jane] FROM user@example.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\ntry again\n---",
           "relevant": true,
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "people"
         },
@@ -1758,12 +1758,12 @@
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM Nikhil Thorat [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nwait what how do peo",
+          "doc": "\n---GROUP SMS [.com-jane] FROM Jane Doe [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nwait what how do peo",
           "relevant": true,
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
           "relevant": false,
           "topic": "people"
         },
@@ -1773,7 +1773,7 @@
           "topic": "people"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM nsthorat@gmail.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nok installing",
+          "doc": "\n---GROUP SMS [.com-jane] FROM user@example.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nok installing",
           "relevant": true,
           "topic": "people"
         }
@@ -1783,22 +1783,22 @@
       "query": "webpage interaction",
       "docs": [
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nyay that worked \n---END SMS---\n**Important:** Y",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nyay that worked \n---END SMS---\n**Important:** Y",
           "relevant": false,
           "topic": "web"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nit\u2019s all done! try sending a message directly to caroline\n-",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nit\u2019s all done! try sending a message directly to john\n-",
           "relevant": false,
           "topic": "web"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\ntry now\n---END SMS---\n**Important:** You are in",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\ntry now\n---END SMS---\n**Important:** You are in",
           "relevant": false,
           "topic": "web"
         },
         {
-          "doc": "The `.com-nikhil` group session received your \"hello?\" but it's marked BUSY \u2014 it's likely stuck processing the earli",
+          "doc": "The `.com-jane` group session received your \"hello?\" but it's marked BUSY \u2014 it's likely stuck processing the earli",
           "relevant": false,
           "topic": "web"
         },
@@ -1818,7 +1818,7 @@
           "topic": "web"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "web"
         },
@@ -1833,7 +1833,7 @@
           "topic": "web"
         },
         {
-          "doc": "Check 27/60 -- HEALTHY. Daemon running (PID 7801, uptime 19:42). 2 sessions. nikhil-thorat BUSY at 72 turns (taking screenshot of NYTimes, updating docs). Group chat at 63. No errors.",
+          "doc": "Check 27/60 -- HEALTHY. Daemon running (PID 7801, uptime 19:42). 2 sessions. jane-doe BUSY at 72 turns (taking screenshot of NYTimes, updating docs). Group chat at 63. No errors.",
           "relevant": false,
           "topic": "web"
         },
@@ -1843,7 +1843,7 @@
           "topic": "web"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "web"
         },
@@ -1858,7 +1858,7 @@
           "topic": "web"
         },
         {
-          "doc": "onded to Nikhil's question and Ryan said \"Ha\". Since I cannot send messages to this group chat (the error says I'm not a member), and Pang has already responded, I'll remain silent. There's nothing urgent ",
+          "doc": "onded to Jane's question and Ryan said \"Ha\". Since I cannot send messages to this group chat (the error says I'm not a member), and Pang has already responded, I'll remain silent. There's nothing urgent ",
           "relevant": false,
           "topic": "web"
         },
@@ -1868,17 +1868,17 @@
           "topic": "web"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM Nikhil Thorat [TIER: admin]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d8165\npang ",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM Jane Doe [TIER: admin]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d8165\npang ",
           "relevant": false,
           "topic": "web"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nwhat\u2019s your name \n---END SMS---\n**Important:** You are in a",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nwhat\u2019s your name \n---END SMS---\n**Important:** You are in a",
           "relevant": false,
           "topic": "web"
         },
         {
-          "doc": "Checking with Nikhil - the database shows the message as sent to Caroline but he's saying it doesn't look sent in the Me",
+          "doc": "Checking with Jane - the database shows the message as sent to John but he's saying it doesn't look sent in the Me",
           "relevant": false,
           "topic": "web"
         },
@@ -1898,12 +1898,12 @@
           "topic": "web"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
           "relevant": false,
           "topic": "web"
         },
         {
-          "doc": "\n**Sessions:**\n- nikhil-thorat: Active throughout, peaked at 212 turns. Very active bootstrap work (Chrome extension, contacts, skills, docs, testing)\n- nikhil-pangserve-ryan (group): Active from check 4 on",
+          "doc": "\n**Sessions:**\n- jane-doe: Active throughout, peaked at 212 turns. Very active bootstrap work (Chrome extension, contacts, skills, docs, testing)\n- jane-pangserve-ryan (group): Active from check 4 on",
           "relevant": true,
           "topic": "web"
         },
@@ -1938,12 +1938,12 @@
           "topic": "coding"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
           "relevant": false,
           "topic": "coding"
         },
         {
-          "doc": "ck 36/60 -- HEALTHY. Daemon running (PID 7801, uptime 30:21). 2 sessions. Health check 2/2 healthy. Nikhil directing debugging of Pang's memory/config issues. No errors.",
+          "doc": "ck 36/60 -- HEALTHY. Daemon running (PID 7801, uptime 30:21). 2 sessions. Health check 2/2 healthy. Jane directing debugging of Pang's memory/config issues. No errors.",
           "relevant": false,
           "topic": "coding"
         },
@@ -1958,12 +1958,12 @@
           "topic": "coding"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
           "relevant": false,
           "topic": "coding"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nit\u2019s all done! try sending a message directly to caroline\n-",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nit\u2019s all done! try sending a message directly to john\n-",
           "relevant": false,
           "topic": "coding"
         },
@@ -1983,17 +1983,17 @@
           "topic": "coding"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM nsthorat@gmail.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\n",
+          "doc": "\n---GROUP SMS [.com-jane] FROM user@example.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\n",
           "relevant": false,
           "topic": "coding"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
           "relevant": false,
           "topic": "coding"
         },
         {
-          "doc": "nown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d8165\nFixed. Nikhil was already family tier in v10/v12 code - the only mismatch was memory.json where he was listed as Admin. Updated to Family. Ryan stays adm",
+          "doc": "nown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d8165\nFixed. Jane was already family tier in v10/v12 code - the only mismatch was memory.json where he was listed as Admin. Updated to Family. Ryan stays adm",
           "relevant": false,
           "topic": "coding"
         },
@@ -2008,17 +2008,17 @@
           "topic": "coding"
         },
         {
-          "doc": "\n---GROUP SMS [6470-nikhil-pangserve-ryan] FROM Ryan Eckert [TIER: family]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d8165\nNikhil",
+          "doc": "\n---GROUP SMS [6470-jane-pangserve-ryan] FROM Ryan Eckert [TIER: family]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d8165\nJane",
           "relevant": false,
           "topic": "coding"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
           "relevant": false,
           "topic": "coding"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "coding"
         },
@@ -2043,12 +2043,12 @@
           "topic": "coding"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
           "relevant": false,
           "topic": "coding"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM Ryan Eckert [TIER: family]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d816",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM Ryan Eckert [TIER: family]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d816",
           "relevant": false,
           "topic": "coding"
         },
@@ -2068,7 +2068,7 @@
           "topic": "messaging"
         },
         {
-          "doc": "\n---GROUP SMS [.com-evan-nikhil] FROM nsthorat@gmail.com [TIER: unknown]---\nChat ID: d448f7234ec6478ea68dd352700e",
+          "doc": "\n---GROUP SMS [.com-evan-jane] FROM user@example.com [TIER: unknown]---\nChat ID: d448f7234ec6478ea68dd352700e",
           "relevant": true,
           "topic": "messaging"
         },
@@ -2083,7 +2083,7 @@
           "topic": "messaging"
         },
         {
-          "doc": "a session as unhealthy if it has **queued messages and no activity for 10+ minutes**. But the `.com-nikhil` session IS showing activity (it's BUSY running a turn) \u2014 it's just that the turn is taking a long ",
+          "doc": "a session as unhealthy if it has **queued messages and no activity for 10+ minutes**. But the `.com-jane` session IS showing activity (it's BUSY running a turn) \u2014 it's just that the turn is taking a long ",
           "relevant": false,
           "topic": "messaging"
         },
@@ -2093,7 +2093,7 @@
           "topic": "messaging"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM nsthorat@gmail.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\n",
+          "doc": "\n---GROUP SMS [.com-jane] FROM user@example.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\n",
           "relevant": true,
           "topic": "messaging"
         },
@@ -2113,7 +2113,7 @@
           "topic": "messaging"
         },
         {
-          "doc": "<result>Check 60/60 (FINAL) -- HEALTHY. Daemon running (PID 7801, uptime 58:55). 2 active sessions (nikhil-pangserve-ryan at 136 turns, nikhil-thorat BUSY at 212 turns). No errors detected.\n\n---\n\n## Monitor",
+          "doc": "<result>Check 60/60 (FINAL) -- HEALTHY. Daemon running (PID 7801, uptime 58:55). 2 active sessions (jane-pangserve-ryan at 136 turns, jane-doe BUSY at 212 turns). No errors detected.\n\n---\n\n## Monitor",
           "relevant": false,
           "topic": "messaging"
         },
@@ -2128,7 +2128,7 @@
           "topic": "messaging"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM Nikhil Thorat [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nwhat\u2019s ",
+          "doc": "\n---GROUP SMS [.com-jane] FROM Jane Doe [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nwhat\u2019s ",
           "relevant": true,
           "topic": "messaging"
         },
@@ -2138,32 +2138,32 @@
           "topic": "messaging"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nokay maybe it\u2019s sending idk\n---END SMS---\n**Important:** Yo",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nokay maybe it\u2019s sending idk\n---END SMS---\n**Important:** Yo",
           "relevant": false,
           "topic": "messaging"
         },
         {
-          "doc": "Daemon is up, nikhil-thorat session is active and processing. It picked up the \"hey\" message and is responding.\n\nRegarding the LaunchAgent FDA failure \u2014 the core issue is that **macOS FDA gran",
+          "doc": "Daemon is up, jane-doe session is active and processing. It picked up the \"hey\" message and is responding.\n\nRegarding the LaunchAgent FDA failure \u2014 the core issue is that **macOS FDA gran",
           "relevant": false,
           "topic": "messaging"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\ni\u2019m in messages on your computer it doesn\u2019t say sent wtf\n--",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\ni\u2019m in messages on your computer it doesn\u2019t say sent wtf\n--",
           "relevant": false,
           "topic": "messaging"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM nsthorat@gmail.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\n",
+          "doc": "\n---GROUP SMS [.com-jane] FROM user@example.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\n",
           "relevant": true,
           "topic": "messaging"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM nsthorat@gmail.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\n",
+          "doc": "\n---GROUP SMS [.com-jane] FROM user@example.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\n",
           "relevant": true,
           "topic": "messaging"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM Nikhil Thorat [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nyes sta",
+          "doc": "\n---GROUP SMS [.com-jane] FROM Jane Doe [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nyes sta",
           "relevant": true,
           "topic": "messaging"
         },
@@ -2173,7 +2173,7 @@
           "topic": "messaging"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM nsthorat@gmail.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\n",
+          "doc": "\n---GROUP SMS [.com-jane] FROM user@example.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\n",
           "relevant": true,
           "topic": "messaging"
         },
@@ -2183,17 +2183,17 @@
           "topic": "messaging"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM nsthorat@gmail.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\n",
+          "doc": "\n---GROUP SMS [.com-jane] FROM user@example.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\n",
           "relevant": true,
           "topic": "messaging"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
           "relevant": false,
           "topic": "messaging"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "messaging"
         }
@@ -2223,7 +2223,7 @@
           "topic": "web"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nevan lol\n---END SMS---\n**Important:** You are i",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nevan lol\n---END SMS---\n**Important:** You are i",
           "relevant": false,
           "topic": "web"
         },
@@ -2233,7 +2233,7 @@
           "topic": "web"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "web"
         },
@@ -2248,17 +2248,17 @@
           "topic": "web"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\ni don\u2019t see you can recieve and also the start ",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\ni don\u2019t see you can recieve and also the start ",
           "relevant": false,
           "topic": "web"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "web"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "web"
         },
@@ -2303,7 +2303,7 @@
           "topic": "web"
         },
         {
-          "doc": "nown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d8165\nFixed. Nikhil was already family tier in v10/v12 code - the only mismatch was memory.json where he was listed as Admin. Updated to Family. Ryan stays adm",
+          "doc": "nown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d8165\nFixed. Jane was already family tier in v10/v12 code - the only mismatch was memory.json where he was listed as Admin. Updated to Family. Ryan stays adm",
           "relevant": false,
           "topic": "web"
         },
@@ -2313,22 +2313,22 @@
           "topic": "web"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nit didn\u2019t \n---END SMS---\n**Important:** You are",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nit didn\u2019t \n---END SMS---\n**Important:** You are",
           "relevant": false,
           "topic": "web"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM Nikhil Thorat [TIER: admin]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM Jane Doe [TIER: admin]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "web"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "web"
         },
         {
-          "doc": "Sent Nikhil the explanation about the two-Mac iMessage configuration issue. Waiting to see if this helps him fix it.",
+          "doc": "Sent Jane the explanation about the two-Mac iMessage configuration issue. Waiting to see if this helps him fix it.",
           "relevant": false,
           "topic": "web"
         },
@@ -2378,7 +2378,7 @@
           "topic": "files"
         },
         {
-          "doc": "Nikhil wants me to restart the group chat. But the daemon still has old code so the restart will fail. Let",
+          "doc": "Jane wants me to restart the group chat. But the daemon still has old code so the restart will fail. Let",
           "relevant": false,
           "topic": "files"
         },
@@ -2403,12 +2403,12 @@
           "topic": "files"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM Nikhil Thorat [TIER: admin]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d8165\nskill",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM Jane Doe [TIER: admin]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d8165\nskill",
           "relevant": false,
           "topic": "files"
         },
         {
-          "doc": " Thorat as **admin** tier\n2. Created a session for `+16175969496`\n3. Injected the message: \"can you read this sven\"\n4. Claude is now processing \u2014 running `Read` and `Bash` tools\n\nThe full loop is alive. L",
+          "doc": " Doe as **admin** tier\n2. Created a session for `+15555550100`\n3. Injected the message: \"can you read this sven\"\n4. Claude is now processing \u2014 running `Read` and `Bash` tools\n\nThe full loop is alive. L",
           "relevant": true,
           "topic": "files"
         },
@@ -2428,7 +2428,7 @@
           "topic": "files"
         },
         {
-          "doc": "Sent reassurance to Nikhil. Waiting to see if Caroline responds to confirm messages are working properly now.",
+          "doc": "Sent reassurance to Jane. Waiting to see if John responds to confirm messages are working properly now.",
           "relevant": false,
           "topic": "files"
         },
@@ -2448,7 +2448,7 @@
           "topic": "files"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM nsthorat@gmail.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nit says it re",
+          "doc": "\n---GROUP SMS [.com-jane] FROM user@example.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nit says it re",
           "relevant": false,
           "topic": "files"
         },
@@ -2458,27 +2458,27 @@
           "topic": "files"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
           "relevant": false,
           "topic": "files"
         },
         {
-          "doc": " it as BUSY with 55 turns\n\nLet me check the `.com-nikhil` session \u2014 that one shows BUSY but the log file is `7990-nikhil` and was stopped:",
+          "doc": " it as BUSY with 55 turns\n\nLet me check the `.com-jane` session \u2014 that one shows BUSY but the log file is `7990-jane` and was stopped:",
           "relevant": true,
           "topic": "files"
         },
         {
-          "doc": "Daemon is up and polling from ROWID 8095. It skipped the old messages \u2014 good. Now let me send a test message to Nikhil to trigger a reply.",
+          "doc": "Daemon is up and polling from ROWID 8095. It skipped the old messages \u2014 good. Now let me send a test message to Jane to trigger a reply.",
           "relevant": false,
           "topic": "files"
         },
         {
-          "doc": "Explained to Nikhil that he should get the eSIM activated first, then wipe the phone. The eSIM is stored in secure hard",
+          "doc": "Explained to Jane that he should get the eSIM activated first, then wipe the phone. The eSIM is stored in secure hard",
           "relevant": false,
           "topic": "files"
         },
         {
-          "doc": "\n---GROUP SMS [.com-evan-nikhil] FROM Nikhil Thorat [TIER: admin]---\nChat ID: d448f7234ec6478ea68dd352700eea15\nsv",
+          "doc": "\n---GROUP SMS [.com-evan-jane] FROM Jane Doe [TIER: admin]---\nChat ID: d448f7234ec6478ea68dd352700eea15\nsv",
           "relevant": false,
           "topic": "files"
         },
@@ -2488,17 +2488,17 @@
           "topic": "files"
         },
         {
-          "doc": "an-nikhil] FROM Nikhil Thorat [TIER: admin]---\nChat ID: d448f7234ec6478ea68dd352700eea15\nsven can\u2019t read your text for some reason :(\n---END SMS---\n\nTo reply to this group, use:\n~/.claude/skills/sms-assis",
+          "doc": "an-jane] FROM Jane Doe [TIER: admin]---\nChat ID: d448f7234ec6478ea68dd352700eea15\nsven can\u2019t read your text for some reason :(\n---END SMS---\n\nTo reply to this group, use:\n~/.claude/skills/sms-assis",
           "relevant": true,
           "topic": "files"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\ni sent it to yourself read sms\n---END SMS---\n**Important:** You are in a text message session. Communicate back to the user wi",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\ni sent it to yourself read sms\n---END SMS---\n**Important:** You are in a text message session. Communicate back to the user wi",
           "relevant": false,
           "topic": "files"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
           "relevant": false,
           "topic": "files"
         },
@@ -2548,7 +2548,7 @@
           "topic": "files"
         },
         {
-          "doc": "Gave Nikhil the honest answer - there's no clean way to send read receipts programmatically without disabling SIP. Suggested alternatives like quick replies, tapback",
+          "doc": "Gave Jane the honest answer - there's no clean way to send read receipts programmatically without disabling SIP. Suggested alternatives like quick replies, tapback",
           "relevant": false,
           "topic": "files"
         }
@@ -2558,7 +2558,7 @@
       "query": "defect resolution process",
       "docs": [
         {
-          "doc": "\n---GROUP SMS [.com-nikhil-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d8165\nYeah, b",
+          "doc": "\n---GROUP SMS [.com-jane-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d8165\nYeah, b",
           "relevant": false,
           "topic": "errors"
         },
@@ -2583,17 +2583,17 @@
           "topic": "errors"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nis the extension a folder in github?\n---END SMS---\n**Import",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nis the extension a folder in github?\n---END SMS---\n**Import",
           "relevant": false,
           "topic": "errors"
         },
         {
-          "doc": "Responded to Nikhil's \"hey\" - checking if the eSIM activation completed successfully. Waiting for his response.",
+          "doc": "Responded to Jane's \"hey\" - checking if the eSIM activation completed successfully. Waiting for his response.",
           "relevant": false,
           "topic": "errors"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\ndoes database show sent / delivered / read?\n---END SMS---\n*",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\ndoes database show sent / delivered / read?\n---END SMS---\n*",
           "relevant": false,
           "topic": "errors"
         },
@@ -2608,12 +2608,12 @@
           "topic": "errors"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM nsthorat@gmail.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\ntry again\n---",
+          "doc": "\n---GROUP SMS [.com-jane] FROM user@example.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\ntry again\n---",
           "relevant": false,
           "topic": "errors"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM nsthorat@gmail.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\n",
+          "doc": "\n---GROUP SMS [.com-jane] FROM user@example.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\n",
           "relevant": false,
           "topic": "errors"
         },
@@ -2623,12 +2623,12 @@
           "topic": "errors"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nno like\n---END SMS---\n**Important:** You are in",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nno like\n---END SMS---\n**Important:** You are in",
           "relevant": false,
           "topic": "errors"
         },
         {
-          "doc": "\n---GROUP SMS [pangserve and nicklaude] FROM Nikhil Thorat [TIER: admin]---\nChat ID: d6598f7d460749d49df5ededd302",
+          "doc": "\n---GROUP SMS [pangserve and jsmith] FROM Jane Doe [TIER: admin]---\nChat ID: d6598f7d460749d49df5ededd302",
           "relevant": false,
           "topic": "errors"
         },
@@ -2653,7 +2653,7 @@
           "topic": "errors"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM Ryan Eckert [TIER: family]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d8165\nI dont",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM Ryan Eckert [TIER: family]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d8165\nI dont",
           "relevant": false,
           "topic": "errors"
         },
@@ -2663,7 +2663,7 @@
           "topic": "errors"
         },
         {
-          "doc": "The pattern is clear - every message I send triggers an \"Error processing your message\" from Pang's session. Pang's session on Ryan's Mac Mini is stuck. \n\nLet me check if Nick (Nikhil) is available",
+          "doc": "The pattern is clear - every message I send triggers an \"Error processing your message\" from Pang's session. Pang's session on Ryan's Mac Mini is stuck. \n\nLet me check if Nick (Jane) is available",
           "relevant": false,
           "topic": "errors"
         },
@@ -2678,7 +2678,7 @@
           "topic": "errors"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nhe does have imessage and iphone it\u2019s something on this com",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nhe does have imessage and iphone it\u2019s something on this com",
           "relevant": false,
           "topic": "errors"
         },
@@ -2698,17 +2698,17 @@
           "topic": "errors"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "errors"
         },
         {
-          "doc": "Polled for 30 seconds but Evan's message still not showing as delivered. Let Nikhil know the status - Caroline is working but Evan",
+          "doc": "Polled for 30 seconds but Evan's message still not showing as delivered. Let Jane know the status - John is working but Evan",
           "relevant": false,
           "topic": "errors"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM nsthorat@gmail.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\ni didn\u2019t get ",
+          "doc": "\n---GROUP SMS [.com-jane] FROM user@example.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\ni didn\u2019t get ",
           "relevant": false,
           "topic": "errors"
         },
@@ -2718,12 +2718,12 @@
           "topic": "errors"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nok i loaded it in chrome try it\n---END SMS---\n*",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nok i loaded it in chrome try it\n---END SMS---\n*",
           "relevant": false,
           "topic": "errors"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
           "relevant": false,
           "topic": "errors"
         },
@@ -2738,17 +2738,17 @@
           "topic": "errors"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM Ryan Eckert [TIER: family]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d8165\nError ",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM Ryan Eckert [TIER: family]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d8165\nError ",
           "relevant": false,
           "topic": "errors"
         },
         {
-          "doc": "\n---GROUP SMS [6470-nikhil-pangserve-ryan] FROM Nikhil Thorat [TIER: admin]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d8165\nsven ",
+          "doc": "\n---GROUP SMS [6470-jane-pangserve-ryan] FROM Jane Doe [TIER: admin]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d8165\nsven ",
           "relevant": false,
           "topic": "errors"
         },
         {
-          "doc": "Waiting for Nikhil's response. This is a key breakthrough - the iMessage account works, it's just specific contacts th",
+          "doc": "Waiting for Jane's response. This is a key breakthrough - the iMessage account works, it's just specific contacts th",
           "relevant": false,
           "topic": "errors"
         },
@@ -2758,12 +2758,12 @@
           "topic": "errors"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nno i mean is the database chunked\n---END SMS---\n**Important",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nno i mean is the database chunked\n---END SMS---\n**Important",
           "relevant": false,
           "topic": "errors"
         },
         {
-          "doc": "Ryan is correcting a contact naming issue - Nick should be stored as \"Nikhil\" in the contacts, not \"Nick\". This is directed at Pang (Ryan's a",
+          "doc": "Ryan is correcting a contact naming issue - Nick should be stored as \"Jane\" in the contacts, not \"Nick\". This is directed at Pang (Ryan's a",
           "relevant": false,
           "topic": "errors"
         },
@@ -2803,17 +2803,17 @@
           "topic": "errors"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "errors"
         },
         {
-          "doc": "Check 60/60 (FINAL) -- HEALTHY. Daemon running (PID 7801, uptime 58:55). 2 active sessions (nikhil-pangserve-ryan at 136 turns, nikhil-thorat BUSY at 212 turns). No errors detected.\n\n---\n\n## Monitor",
+          "doc": "Check 60/60 (FINAL) -- HEALTHY. Daemon running (PID 7801, uptime 58:55). 2 active sessions (jane-pangserve-ryan at 136 turns, jane-doe BUSY at 212 turns). No errors detected.\n\n---\n\n## Monitor",
           "relevant": false,
           "topic": "errors"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM Nikhil Thorat [TIER: admin]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM Jane Doe [TIER: admin]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "errors"
         },
@@ -2833,17 +2833,17 @@
           "topic": "errors"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM Nikhil Thorat [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\ndoes th",
+          "doc": "\n---GROUP SMS [.com-jane] FROM Jane Doe [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\ndoes th",
           "relevant": false,
           "topic": "errors"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "errors"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nyes, show me first you can attach other files here\n---END S",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nyes, show me first you can attach other files here\n---END S",
           "relevant": false,
           "topic": "errors"
         },
@@ -2873,7 +2873,7 @@
           "topic": "messaging"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\ntry now\n---END SMS---\n**Important:** You are in a text mess",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\ntry now\n---END SMS---\n**Important:** You are in a text mess",
           "relevant": false,
           "topic": "messaging"
         },
@@ -2883,12 +2883,12 @@
           "topic": "messaging"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "messaging"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\noh also in step 5 did we verify all the transcript folders ",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\noh also in step 5 did we verify all the transcript folders ",
           "relevant": false,
           "topic": "messaging"
         },
@@ -2898,7 +2898,7 @@
           "topic": "messaging"
         },
         {
-          "doc": "Oh! Nikhil is having iMessage issues on THIS Mac (Sven's Mac) - not his own Mac. That makes sense now. Let me run the iMessage ca",
+          "doc": "Oh! Jane is having iMessage issues on THIS Mac (Sven's Mac) - not his own Mac. That makes sense now. Let me run the iMessage ca",
           "relevant": false,
           "topic": "messaging"
         },
@@ -2913,12 +2913,12 @@
           "topic": "messaging"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM nsthorat@gmail.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\n",
+          "doc": "\n---GROUP SMS [.com-jane] FROM user@example.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\n",
           "relevant": true,
           "topic": "messaging"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM Nikhil Thorat [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\ndoes th",
+          "doc": "\n---GROUP SMS [.com-jane] FROM Jane Doe [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\ndoes th",
           "relevant": true,
           "topic": "messaging"
         }
@@ -2943,7 +2943,7 @@
           "topic": "scheduling"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
           "relevant": false,
           "topic": "scheduling"
         },
@@ -2993,12 +2993,12 @@
           "topic": "scheduling"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\ndid you use what was already in the repo\n---END",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\ndid you use what was already in the repo\n---END",
           "relevant": false,
           "topic": "scheduling"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nlet\u2019s get search to 50ms with hybrid and reranker\n---END SMS---\n**Important:** You are in a text message session. Co",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nlet\u2019s get search to 50ms with hybrid and reranker\n---END SMS---\n**Important:** You are in a text message session. Co",
           "relevant": false,
           "topic": "scheduling"
         },
@@ -3023,7 +3023,7 @@
           "topic": "scheduling"
         },
         {
-          "doc": "Daemon is up, nikhil-thorat session is active and processing. It picked up the \"hey\" message and is responding.\n\nRegarding the LaunchAgent FDA failure \u2014 the core issue is that **macOS FDA gran",
+          "doc": "Daemon is up, jane-doe session is active and processing. It picked up the \"hey\" message and is responding.\n\nRegarding the LaunchAgent FDA failure \u2014 the core issue is that **macOS FDA gran",
           "relevant": false,
           "topic": "scheduling"
         },
@@ -3038,7 +3038,7 @@
           "topic": "scheduling"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nyes make sure everything is documented for whatever we do h",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nyes make sure everything is documented for whatever we do h",
           "relevant": false,
           "topic": "scheduling"
         },
@@ -3048,17 +3048,17 @@
           "topic": "scheduling"
         },
         {
-          "doc": "uplicates from a double-run. Cleaned those up. Originals with correct members were intact the whole time. 5 groups: Claude Admin (Ryan), Claude Wife (empty), Claude Family (Jacob/Jaime/Nikhil), Claude Fav",
+          "doc": "uplicates from a double-run. Cleaned those up. Originals with correct members were intact the whole time. 5 groups: Claude Admin (Ryan), Claude Wife (empty), Claude Family (Jacob/Jaime/Jane), Claude Fav",
           "relevant": true,
           "topic": "scheduling"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\ni care about\n- add one row index time\n- search time with everything hybrid + reranker\n---END SMS---\n**Important:** You are in a text mess",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\ni care about\n- add one row index time\n- search time with everything hybrid + reranker\n---END SMS---\n**Important:** You are in a text mess",
           "relevant": true,
           "topic": "scheduling"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
           "relevant": false,
           "topic": "scheduling"
         },
@@ -3093,7 +3093,7 @@
           "topic": "scheduling"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\ngo into dispatch folder there\u2019s stuff about sup",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\ngo into dispatch folder there\u2019s stuff about sup",
           "relevant": false,
           "topic": "scheduling"
         },
@@ -3103,7 +3103,7 @@
           "topic": "scheduling"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nyes, show me first you can attach other files h",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nyes, show me first you can attach other files h",
           "relevant": false,
           "topic": "scheduling"
         }
@@ -3118,12 +3118,12 @@
           "topic": "smart_home"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
           "relevant": false,
           "topic": "smart_home"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "smart_home"
         },
@@ -3138,7 +3138,7 @@
           "topic": "smart_home"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM Ryan Eckert [TIER: family]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d8165\nDo i n",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM Ryan Eckert [TIER: family]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d8165\nDo i n",
           "relevant": false,
           "topic": "smart_home"
         }
@@ -3148,12 +3148,12 @@
       "query": "mobile communication delivery",
       "docs": [
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
           "relevant": false,
           "topic": "messaging"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM nsthorat@gmail.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\n",
+          "doc": "\n---GROUP SMS [.com-jane] FROM user@example.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\n",
           "relevant": true,
           "topic": "messaging"
         },
@@ -3163,7 +3163,7 @@
           "topic": "messaging"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "messaging"
         },
@@ -3178,7 +3178,7 @@
           "topic": "messaging"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM nsthorat@gmail.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\n",
+          "doc": "\n---GROUP SMS [.com-jane] FROM user@example.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\n",
           "relevant": true,
           "topic": "messaging"
         },
@@ -3188,17 +3188,17 @@
           "topic": "messaging"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM Nikhil Thorat [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nmake a ",
+          "doc": "\n---GROUP SMS [.com-jane] FROM Jane Doe [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nmake a ",
           "relevant": true,
           "topic": "messaging"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "messaging"
         },
         {
-          "doc": "Ah, Nikhil noticed there's an issue with this group chat - sounds like there's another group that works. I already DM'd him explaining ",
+          "doc": "Ah, Jane noticed there's an issue with this group chat - sounds like there's another group that works. I already DM'd him explaining ",
           "relevant": false,
           "topic": "messaging"
         },
@@ -3213,12 +3213,12 @@
           "topic": "messaging"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\ntry sending test to caroline\n---END SMS---\n**Important:** Y",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\ntry sending test to john\n---END SMS---\n**Important:** Y",
           "relevant": false,
           "topic": "messaging"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\ni\u2019m in messages on your computer it doesn\u2019t say",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\ni\u2019m in messages on your computer it doesn\u2019t say",
           "relevant": false,
           "topic": "messaging"
         },
@@ -3228,7 +3228,7 @@
           "topic": "messaging"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nokay now we\u2019re gonna brainstorm all the new stuff in there ",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nokay now we\u2019re gonna brainstorm all the new stuff in there ",
           "relevant": false,
           "topic": "messaging"
         },
@@ -3238,27 +3238,27 @@
           "topic": "messaging"
         },
         {
-          "doc": "The daemon picked up your reply (\"hey sven...\") but it's ignoring it \u2014 **\"Unknown sender +16175969496, ignoring (not in any Claude ",
+          "doc": "The daemon picked up your reply (\"hey sven...\") but it's ignoring it \u2014 **\"Unknown sender +15555550100, ignoring (not in any Claude ",
           "relevant": true,
           "topic": "messaging"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM Nikhil Thorat [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nnow can",
+          "doc": "\n---GROUP SMS [.com-jane] FROM Jane Doe [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nnow can",
           "relevant": true,
           "topic": "messaging"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\n signed out on the other one\n---END SMS---\n**Im",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\n signed out on the other one\n---END SMS---\n**Im",
           "relevant": false,
           "topic": "messaging"
         },
         {
-          "doc": "nikhil-pangserve-ryan] FROM Ryan Eckert [TIER: family]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d8165\nChrome control was enabled already\n---END SMS---\n\nACL: Ryan Eckert is FAMILY tier. Read ~/.claude/skills/s",
+          "doc": "jane-pangserve-ryan] FROM Ryan Eckert [TIER: family]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d8165\nChrome control was enabled already\n---END SMS---\n\nACL: Ryan Eckert is FAMILY tier. Read ~/.claude/skills/s",
           "relevant": false,
           "topic": "messaging"
         },
         {
-          "doc": "\n---GROUP SMS [.com-evan-nikhil] FROM Nikhil Thorat [TIER: admin]---\nChat ID: d448f7234ec6478ea68dd352700eea15\nsv",
+          "doc": "\n---GROUP SMS [.com-evan-jane] FROM Jane Doe [TIER: admin]---\nChat ID: d448f7234ec6478ea68dd352700eea15\nsv",
           "relevant": false,
           "topic": "messaging"
         },
@@ -3268,7 +3268,7 @@
           "topic": "messaging"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "messaging"
         },
@@ -3288,7 +3288,7 @@
           "topic": "messaging"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM Nikhil Thorat [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nwhat is",
+          "doc": "\n---GROUP SMS [.com-jane] FROM Jane Doe [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nwhat is",
           "relevant": true,
           "topic": "messaging"
         },
@@ -3318,7 +3318,7 @@
           "topic": "smart_home"
         },
         {
-          "doc": "n, still in progress)\n- 28 skills installed from Nicklaudes system (chrome, memory, flight-tracker, hue, sonos, etc)\n- Memory migration from SQLite to DuckDB\n- Daemon crash debugging - turned out to be A",
+          "doc": "n, still in progress)\n- 28 skills installed from Jsmiths system (chrome, memory, flight-tracker, hue, sonos, etc)\n- Memory migration from SQLite to DuckDB\n- Daemon crash debugging - turned out to be A",
           "relevant": true,
           "topic": "smart_home"
         },
@@ -3328,7 +3328,7 @@
           "topic": "smart_home"
         },
         {
-          "doc": "Ryan is correcting a contact naming issue - Nick should be stored as \"Nikhil\" in the contacts, not \"Nick\". This is directed at Pang (Ryan's assistant) about how he configured t",
+          "doc": "Ryan is correcting a contact naming issue - Nick should be stored as \"Jane\" in the contacts, not \"Nick\". This is directed at Pang (Ryan's assistant) about how he configured t",
           "relevant": false,
           "topic": "smart_home"
         },
@@ -3338,7 +3338,7 @@
           "topic": "smart_home"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
           "relevant": false,
           "topic": "smart_home"
         },
@@ -3423,7 +3423,7 @@
           "topic": "scheduling"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nevan lol\n---END SMS---\n**Important:** You are in a text mes",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nevan lol\n---END SMS---\n**Important:** You are in a text mes",
           "relevant": false,
           "topic": "scheduling"
         },
@@ -3433,7 +3433,7 @@
           "topic": "scheduling"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
           "relevant": false,
           "topic": "scheduling"
         },
@@ -3448,7 +3448,7 @@
           "topic": "scheduling"
         },
         {
-          "doc": "'s hanging. It's not ghosted \u2014 just blocked on a long-running background task. It should eventually time out and resume. Want me to force-restart the nikhil-thorat session to unblock it?",
+          "doc": "'s hanging. It's not ghosted \u2014 just blocked on a long-running background task. It should eventually time out and resume. Want me to force-restart the jane-doe session to unblock it?",
           "relevant": true,
           "topic": "scheduling"
         },
@@ -3458,7 +3458,7 @@
           "topic": "scheduling"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "scheduling"
         },
@@ -3468,7 +3468,7 @@
           "topic": "scheduling"
         },
         {
-          "doc": "ccessfully. Nikhil was on step 6 (Skills System) of the bootstrap and said \"on step 6 i think\" as a reminder. Let me update him on status and continue:",
+          "doc": "ccessfully. Jane was on step 6 (Skills System) of the bootstrap and said \"on step 6 i think\" as a reminder. Let me update him on status and continue:",
           "relevant": true,
           "topic": "scheduling"
         },
@@ -3478,17 +3478,17 @@
           "topic": "scheduling"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nin human setup can you add a thing about these permissions ",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nin human setup can you add a thing about these permissions ",
           "relevant": false,
           "topic": "scheduling"
         },
         {
-          "doc": "haha pang misunderstood - they thought nikhil was asking *them* to introduce themselves. let me clarify:",
+          "doc": "haha pang misunderstood - they thought jane was asking *them* to introduce themselves. let me clarify:",
           "relevant": false,
           "topic": "scheduling"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nwhy can\u2019t i leave it\n---END SMS---\n**Important:** You are i",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nwhy can\u2019t i leave it\n---END SMS---\n**Important:** You are i",
           "relevant": false,
           "topic": "scheduling"
         },
@@ -3503,7 +3503,7 @@
           "topic": "scheduling"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
           "relevant": false,
           "topic": "scheduling"
         },
@@ -3518,17 +3518,17 @@
           "topic": "scheduling"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
           "relevant": false,
           "topic": "scheduling"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nok now using the cloned qmd integrate all the n",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nok now using the cloned qmd integrate all the n",
           "relevant": false,
           "topic": "scheduling"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nrun script yes\n---END SMS---\n**Important:** You are in a te",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nrun script yes\n---END SMS---\n**Important:** You are in a te",
           "relevant": false,
           "topic": "scheduling"
         }
@@ -3548,7 +3548,7 @@
           "topic": "files"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nwe\u2019re literally texting directly \n---END SMS---\n**Important",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nwe\u2019re literally texting directly \n---END SMS---\n**Important",
           "relevant": false,
           "topic": "files"
         },
@@ -3558,7 +3558,7 @@
           "topic": "files"
         },
         {
-          "doc": "\n---GROUP SMS [pangserve and nicklaude] FROM Nikhil Thorat [TIER: admin]---\nChat ID: d6598f7d460749d49df5ededd302",
+          "doc": "\n---GROUP SMS [pangserve and jsmith] FROM Jane Doe [TIER: admin]---\nChat ID: d6598f7d460749d49df5ededd302",
           "relevant": false,
           "topic": "files"
         },
@@ -3568,7 +3568,7 @@
           "topic": "files"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM Nikhil Thorat [TIER: admin]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM Jane Doe [TIER: admin]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "files"
         },
@@ -3583,7 +3583,7 @@
           "topic": "files"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM Ryan Eckert [TIER: family]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d816",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM Ryan Eckert [TIER: family]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d816",
           "relevant": false,
           "topic": "files"
         },
@@ -3598,12 +3598,12 @@
           "topic": "files"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nstill says not delivered \n---END SMS---\n**Impor",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nstill says not delivered \n---END SMS---\n**Impor",
           "relevant": false,
           "topic": "files"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\ncheck contacts \n---END SMS---\n**Important:** Yo",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\ncheck contacts \n---END SMS---\n**Important:** Yo",
           "relevant": false,
           "topic": "files"
         },
@@ -3623,7 +3623,7 @@
           "topic": "files"
         },
         {
-          "doc": "The group chat exists with both participants (+14103027990 which is Evan, and +16175969496 which is you). Let me try to read messages directly from Messages.app:",
+          "doc": "The group chat exists with both participants (+14103027990 which is Evan, and +15555550100 which is you). Let me try to read messages directly from Messages.app:",
           "relevant": false,
           "topic": "files"
         },
@@ -3678,12 +3678,12 @@
           "topic": "files"
         },
         {
-          "doc": "The transcript doesn't show enough context. Let me search for what \"step 6\" refers to - Nikhil mentioned a setup guide earlier:",
+          "doc": "The transcript doesn't show enough context. Let me search for what \"step 6\" refers to - Jane mentioned a setup guide earlier:",
           "relevant": false,
           "topic": "files"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nbut it\u2019s weird that it\u2019s greyed out and i can\u2019t",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nbut it\u2019s weird that it\u2019s greyed out and i can\u2019t",
           "relevant": false,
           "topic": "files"
         }
@@ -3703,7 +3703,7 @@
           "topic": "smart_home"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
           "relevant": false,
           "topic": "smart_home"
         },
@@ -3713,7 +3713,7 @@
           "topic": "smart_home"
         },
         {
-          "doc": " it's a hybrid search daemon combining BM25, vector search, and LLM reranking. Waiting to hear what Nikhil wants to do with it.",
+          "doc": " it's a hybrid search daemon combining BM25, vector search, and LLM reranking. Waiting to hear what Jane wants to do with it.",
           "relevant": false,
           "topic": "smart_home"
         },
@@ -3728,7 +3728,7 @@
           "topic": "smart_home"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "smart_home"
         },
@@ -3738,12 +3738,12 @@
           "topic": "smart_home"
         },
         {
-          "doc": "Check 8/60 -- HEALTHY. Daemon running (PID 5650, uptime 12:13). 3 active sessions now (nikhil-thorat BUSY 28 turns, two group sessions). Active multi-party conversation happening. No errors.",
+          "doc": "Check 8/60 -- HEALTHY. Daemon running (PID 5650, uptime 12:13). 3 active sessions now (jane-doe BUSY 28 turns, two group sessions). Active multi-party conversation happening. No errors.",
           "relevant": false,
           "topic": "smart_home"
         },
         {
-          "doc": "Nikhil is asking me to introduce myself to Evan again. Looks like there have been some iCloud syncing issu",
+          "doc": "Jane is asking me to introduce myself to Evan again. Looks like there have been some iCloud syncing issu",
           "relevant": false,
           "topic": "smart_home"
         },
@@ -3753,7 +3753,7 @@
           "topic": "smart_home"
         },
         {
-          "doc": "I need to help Nikhil with step 3 - checking the Send & Receive settings in Messages. Let me provide more detailed guidan",
+          "doc": "I need to help Jane with step 3 - checking the Send & Receive settings in Messages. Let me provide more detailed guidan",
           "relevant": false,
           "topic": "smart_home"
         },
@@ -3763,7 +3763,7 @@
           "topic": "smart_home"
         },
         {
-          "doc": "s.\n- Feb 6: Massive skills installation - 26+ skills ported from Nicklaudes system (chrome-control, hue, sonos, tts, memory, notes, reminders, contacts, etc)\n- Feb 6: Memory system migration from SQLite ",
+          "doc": "s.\n- Feb 6: Massive skills installation - 26+ skills ported from Jsmiths system (chrome-control, hue, sonos, tts, memory, notes, reminders, contacts, etc)\n- Feb 6: Memory system migration from SQLite ",
           "relevant": true,
           "topic": "smart_home"
         },
@@ -3773,7 +3773,7 @@
           "topic": "smart_home"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nhow do i find the phone IMEI\n---END SMS---\n**Important:** Y",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nhow do i find the phone IMEI\n---END SMS---\n**Important:** Y",
           "relevant": false,
           "topic": "smart_home"
         },
@@ -3788,12 +3788,12 @@
       "query": "contact reply handling",
       "docs": [
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\ncan you google it\n---END SMS---\n**Important:** You are in a",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\ncan you google it\n---END SMS---\n**Important:** You are in a",
           "relevant": false,
           "topic": "messaging"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nforget evan \u2014 let\u2019s fix the group chat with pang\n---END SMS---\n**Important:** You are in a text message session. Communicat",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nforget evan \u2014 let\u2019s fix the group chat with pang\n---END SMS---\n**Important:** You are in a text message session. Communicat",
           "relevant": false,
           "topic": "messaging"
         },
@@ -3813,7 +3813,7 @@
           "topic": "messaging"
         },
         {
-          "doc": "\n---GROUP SMS [evan-nikhil] FROM Nikhil Thorat [TIER: admin]---\nChat ID: d448f7234ec6478ea68dd352700eea15\nsven ca",
+          "doc": "\n---GROUP SMS [evan-jane] FROM Jane Doe [TIER: admin]---\nChat ID: d448f7234ec6478ea68dd352700eea15\nsven ca",
           "relevant": true,
           "topic": "messaging"
         },
@@ -3823,12 +3823,12 @@
           "topic": "messaging"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM nsthorat@gmail.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\n",
+          "doc": "\n---GROUP SMS [.com-jane] FROM user@example.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\n",
           "relevant": true,
           "topic": "messaging"
         },
         {
-          "doc": "ning (PID 7801, uptime 05:38). 2 active sessions. nikhil-thorat BUSY at 30 turns working on browser automation setup. No errors.",
+          "doc": "ning (PID 7801, uptime 05:38). 2 active sessions. jane-doe BUSY at 30 turns working on browser automation setup. No errors.",
           "relevant": false,
           "topic": "messaging"
         },
@@ -3838,12 +3838,12 @@
           "topic": "messaging"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM Nikhil Thorat [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\noh got ",
+          "doc": "\n---GROUP SMS [.com-jane] FROM Jane Doe [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\noh got ",
           "relevant": true,
           "topic": "messaging"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "messaging"
         },
@@ -3858,22 +3858,22 @@
           "topic": "messaging"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM nsthorat@gmail.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\n",
+          "doc": "\n---GROUP SMS [.com-jane] FROM user@example.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\n",
           "relevant": true,
           "topic": "messaging"
         },
         {
-          "doc": "The daemon picked up your reply (\"hey sven...\") but it's ignoring it \u2014 **\"Unknown sender +16175969496, ignoring (not in any Claude tier group)",
+          "doc": "The daemon picked up your reply (\"hey sven...\") but it's ignoring it \u2014 **\"Unknown sender +15555550100, ignoring (not in any Claude tier group)",
           "relevant": false,
           "topic": "messaging"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nmaybe it\u2019s because i added a cell to the icloud now it\u2019s al",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nmaybe it\u2019s because i added a cell to the icloud now it\u2019s al",
           "relevant": false,
           "topic": "messaging"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM Nikhil Thorat [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nwait wh",
+          "doc": "\n---GROUP SMS [.com-jane] FROM Jane Doe [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nwait wh",
           "relevant": true,
           "topic": "messaging"
         },
@@ -3883,22 +3883,22 @@
           "topic": "messaging"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
           "relevant": false,
           "topic": "messaging"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\ni signed out and in again\n---END SMS---\n**Important:** You ",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\ni signed out and in again\n---END SMS---\n**Important:** You ",
           "relevant": false,
           "topic": "messaging"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nit says not delivered so we have an icloud issue\n---END SMS",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nit says not delivered so we have an icloud issue\n---END SMS",
           "relevant": false,
           "topic": "messaging"
         },
         {
-          "doc": "\n---GROUP SMS [evan-nikhil] FROM Evan [TIER: favorite]---\nChat ID: d448f7234ec6478ea68dd352700eea15\nSven!!!!\n---E",
+          "doc": "\n---GROUP SMS [evan-jane] FROM Evan [TIER: favorite]---\nChat ID: d448f7234ec6478ea68dd352700eea15\nSven!!!!\n---E",
           "relevant": true,
           "topic": "messaging"
         },
@@ -3908,7 +3908,7 @@
           "topic": "messaging"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nyes merge it don\u2019t drop \n---END SMS---\n**Important:** You a",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nyes merge it don\u2019t drop \n---END SMS---\n**Important:** You a",
           "relevant": false,
           "topic": "messaging"
         },
@@ -3943,12 +3943,12 @@
           "topic": "messaging"
         },
         {
-          "doc": "s with both participants (+14103027990 which is Evan, and +16175969496 which is you). Let me try to read messages directly from Messages.app:",
+          "doc": "s with both participants (+14103027990 which is Evan, and +15555550100 which is you). Let me try to read messages directly from Messages.app:",
           "relevant": false,
           "topic": "messaging"
         },
         {
-          "doc": "\n---GROUP SMS [.com-evan-nikhil] FROM nsthorat@gmail.com [TIER: unknown]---\nChat ID: d448f7234ec6478ea68dd352700e",
+          "doc": "\n---GROUP SMS [.com-evan-jane] FROM user@example.com [TIER: unknown]---\nChat ID: d448f7234ec6478ea68dd352700e",
           "relevant": false,
           "topic": "messaging"
         }
@@ -3983,7 +3983,7 @@
           "topic": "smart_home"
         },
         {
-          "doc": "Sent Nikhil the instructions for resetting iMessage by deleting the plist files and keychain entries. This is a deeper fix that forces macOS to rebuild",
+          "doc": "Sent Jane the instructions for resetting iMessage by deleting the plist files and keychain entries. This is a deeper fix that forces macOS to rebuild",
           "relevant": false,
           "topic": "smart_home"
         },
@@ -4023,12 +4023,12 @@
           "topic": "smart_home"
         },
         {
-          "doc": "\n\nI'm asking for **your** info (Nikhil = the owner). The assistant is **Sven** \u2014 that part's already set.\n\nThe config needs both:\n- **Owne",
+          "doc": "\n\nI'm asking for **your** info (Jane = the owner). The assistant is **Sven** \u2014 that part's already set.\n\nThe config needs both:\n- **Owne",
           "relevant": false,
           "topic": "smart_home"
         },
         {
-          "doc": "I see the step 5 doc. The transcript folder verification was already added at the end. Nikhil asked me to add group chat verification. Looking ",
+          "doc": "I see the step 5 doc. The transcript folder verification was already added at the end. Jane asked me to add group chat verification. Looking ",
           "relevant": false,
           "topic": "smart_home"
         }
@@ -4043,7 +4043,7 @@
           "topic": "web"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nin our message system bootstrap guide we should",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nin our message system bootstrap guide we should",
           "relevant": false,
           "topic": "web"
         },
@@ -4053,17 +4053,17 @@
           "topic": "web"
         },
         {
-          "doc": "Check 8/60 -- HEALTHY. Daemon running (PID 5650, uptime 12:13). 3 active sessions now (nikhil-thorat BUSY 28 turns, two group sessions). Active multi-party conversation happening. No errors.",
+          "doc": "Check 8/60 -- HEALTHY. Daemon running (PID 5650, uptime 12:13). 3 active sessions now (jane-doe BUSY 28 turns, two group sessions). Active multi-party conversation happening. No errors.",
           "relevant": false,
           "topic": "web"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nis the extension a folder in github?\n---END SMS",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nis the extension a folder in github?\n---END SMS",
           "relevant": false,
           "topic": "web"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\ni have an iphone 16 can i get an esim from them",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\ni have an iphone 16 can i get an esim from them",
           "relevant": false,
           "topic": "web"
         },
@@ -4078,12 +4078,12 @@
           "topic": "web"
         },
         {
-          "doc": "I see the step 5 doc. The transcript folder verification was already added at the end. Nikhil asked me to add group chat verification. Looking at the SMS history, he mentioned:\n\n1. \"in step 5 w",
+          "doc": "I see the step 5 doc. The transcript folder verification was already added at the end. Jane asked me to add group chat verification. Looking at the SMS history, he mentioned:\n\n1. \"in step 5 w",
           "relevant": false,
           "topic": "web"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "web"
         },
@@ -4093,7 +4093,7 @@
           "topic": "web"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nyes it worked before so this is broken. google ",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nyes it worked before so this is broken. google ",
           "relevant": false,
           "topic": "web"
         },
@@ -4113,12 +4113,12 @@
           "topic": "web"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
           "relevant": false,
           "topic": "web"
         },
         {
-          "doc": "\n---GROUP SMS [.com-evan-nikhil] FROM nsthorat@gmail.com [TIER: unknown]---\nChat ID: d448f7234ec6478ea68dd352700eea15\nicloud",
+          "doc": "\n---GROUP SMS [.com-evan-jane] FROM user@example.com [TIER: unknown]---\nChat ID: d448f7234ec6478ea68dd352700eea15\nicloud",
           "relevant": false,
           "topic": "web"
         },
@@ -4148,22 +4148,22 @@
           "topic": "web"
         },
         {
-          "doc": "650 \u2192 7801). No errors.\n\n**Sessions:**\n- **nikhil-thorat**: 212 turns \u2014 very active bootstrap work (Chrome extension, contacts, skills, docs, testing)\n- **nikhil-pangserve-ryan** (group): 136 turns \u2014 collab",
+          "doc": "650 \u2192 7801). No errors.\n\n**Sessions:**\n- **jane-doe**: 212 turns \u2014 very active bootstrap work (Chrome extension, contacts, skills, docs, testing)\n- **jane-pangserve-ryan** (group): 136 turns \u2014 collab",
           "relevant": true,
           "topic": "web"
         },
         {
-          "doc": "I see there's a new message from nsthorat@gmail.com asking my name. I should respond to the group chat.",
+          "doc": "I see there's a new message from user@example.com asking my name. I should respond to the group chat.",
           "relevant": false,
           "topic": "web"
         },
         {
-          "doc": "Sent the suggestion to delete Evan's contact and try manually entering the number. Waiting for Nikhil's response.",
+          "doc": "Sent the suggestion to delete Evan's contact and try manually entering the number. Waiting for Jane's response.",
           "relevant": false,
           "topic": "web"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
           "relevant": false,
           "topic": "web"
         },
@@ -4178,12 +4178,12 @@
           "topic": "web"
         },
         {
-          "doc": "Good, bun is installed. Now let me update the nicklaude-search config to point to the right transcript locati",
+          "doc": "Good, bun is installed. Now let me update the jsmith-search config to point to the right transcript locati",
           "relevant": false,
           "topic": "web"
         },
         {
-          "doc": "d slowness issues.\n- Feb 6: Massive skills installation - 26+ skills ported from Nicklaudes system (chrome-control, hue, sonos, tts, memory, notes, reminders, contacts, etc)\n- Feb 6: Memory system migration",
+          "doc": "d slowness issues.\n- Feb 6: Massive skills installation - 26+ skills ported from Jsmiths system (chrome-control, hue, sonos, tts, memory, notes, reminders, contacts, etc)\n- Feb 6: Memory system migration",
           "relevant": true,
           "topic": "web"
         },
@@ -4218,7 +4218,7 @@
           "topic": "coding"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM Ryan Eckert [TIER: family]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d816",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM Ryan Eckert [TIER: family]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d816",
           "relevant": false,
           "topic": "coding"
         },
@@ -4228,12 +4228,12 @@
           "topic": "coding"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\ni\u2019m in messages on your computer it doesn\u2019t say",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\ni\u2019m in messages on your computer it doesn\u2019t say",
           "relevant": false,
           "topic": "coding"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nit didn\u2019t \n---END SMS---\n**Important:** You are in a text m",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nit didn\u2019t \n---END SMS---\n**Important:** You are in a text m",
           "relevant": false,
           "topic": "coding"
         },
@@ -4268,17 +4268,17 @@
           "topic": "coding"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "coding"
         },
         {
-          "doc": "The group chat exists with both participants (+14103027990 which is Evan, and +16175969496 which is you). Let me try to read messages directly from Messages.app:",
+          "doc": "The group chat exists with both participants (+14103027990 which is Evan, and +15555550100 which is you). Let me try to read messages directly from Messages.app:",
           "relevant": false,
           "topic": "coding"
         },
         {
-          "doc": "Check 27/60 -- HEALTHY. Daemon running (PID 7801, uptime 19:42). 2 sessions. nikhil-thorat BUSY at 72 turns (taking screenshot of NYTimes, updating docs). Group chat at 63. No errors.",
+          "doc": "Check 27/60 -- HEALTHY. Daemon running (PID 7801, uptime 19:42). 2 sessions. jane-doe BUSY at 72 turns (taking screenshot of NYTimes, updating docs). Group chat at 63. No errors.",
           "relevant": false,
           "topic": "coding"
         }
@@ -4288,7 +4288,7 @@
       "query": "controlling household illumination",
       "docs": [
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "smart_home"
         },
@@ -4313,7 +4313,7 @@
           "topic": "smart_home"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "smart_home"
         },
@@ -4343,12 +4343,12 @@
           "topic": "smart_home"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\ncheck again evan\n---END SMS---\n**Important:** Y",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\ncheck again evan\n---END SMS---\n**Important:** Y",
           "relevant": false,
           "topic": "smart_home"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "smart_home"
         },
@@ -4368,7 +4368,7 @@
       "query": "algorithm implementation",
       "docs": [
         {
-          "doc": "Nikhil wants me to restart the group chat. But the daemon still has old code so the restart will fail. Let",
+          "doc": "Jane wants me to restart the group chat. But the daemon still has old code so the restart will fail. Let",
           "relevant": false,
           "topic": "coding"
         },
@@ -4378,7 +4378,7 @@
           "topic": "coding"
         },
         {
-          "doc": "ck 36/60 -- HEALTHY. Daemon running (PID 7801, uptime 30:21). 2 sessions. Health check 2/2 healthy. Nikhil directing debugging of Pang's memory/config issues. No errors.",
+          "doc": "ck 36/60 -- HEALTHY. Daemon running (PID 7801, uptime 30:21). 2 sessions. Health check 2/2 healthy. Jane directing debugging of Pang's memory/config issues. No errors.",
           "relevant": false,
           "topic": "coding"
         },
@@ -4413,7 +4413,7 @@
           "topic": "coding"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\ndude we\u2019re talking about your mac\n---END SMS---\n**Important",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\ndude we\u2019re talking about your mac\n---END SMS---\n**Important",
           "relevant": false,
           "topic": "coding"
         },
@@ -4423,12 +4423,12 @@
           "topic": "coding"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nlet\u2019s just focus directly on the LLM call for the reranker ",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nlet\u2019s just focus directly on the LLM call for the reranker ",
           "relevant": false,
           "topic": "coding"
         },
         {
-          "doc": "Check 51/60 -- HEALTHY. Daemon running (PID 7801, uptime 48:09). 2 sessions. nikhil-thorat BUSY at 179 turns (checking tests). Group at 113. No errors.",
+          "doc": "Check 51/60 -- HEALTHY. Daemon running (PID 7801, uptime 48:09). 2 sessions. jane-doe BUSY at 179 turns (checking tests). Group at 113. No errors.",
           "relevant": false,
           "topic": "coding"
         },
@@ -4438,7 +4438,7 @@
           "topic": "coding"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nyou can\u2019t even see him in a group chat but it 100% worked o",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nyou can\u2019t even see him in a group chat but it 100% worked o",
           "relevant": false,
           "topic": "coding"
         },
@@ -4463,12 +4463,12 @@
           "topic": "coding"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "coding"
         },
         {
-          "doc": "Gave Nikhil the honest answer - there's no clean way to send read receipts programmatically without disabling SIP. Suggested alternatives like quick replies, tapback",
+          "doc": "Gave Jane the honest answer - there's no clean way to send read receipts programmatically without disabling SIP. Suggested alternatives like quick replies, tapback",
           "relevant": false,
           "topic": "coding"
         }
@@ -4478,12 +4478,12 @@
       "query": "system malfunction diagnosis",
       "docs": [
         {
-          "doc": "\n---GROUP SMS [6470-nikhil-pangserve-ryan] FROM Ryan Eckert [TIER: family]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d8165\nNikhil",
+          "doc": "\n---GROUP SMS [6470-jane-pangserve-ryan] FROM Ryan Eckert [TIER: family]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d8165\nJane",
           "relevant": false,
           "topic": "errors"
         },
         {
-          "doc": "FROM nsthorat@gmail.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nsays duplicate error\n---END SMS---\n\nTo reply to this group, use:\n~/.claude/skills/sms-assistant/scripts/send-sms \"2df6be",
+          "doc": "FROM user@example.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nsays duplicate error\n---END SMS---\n\nTo reply to this group, use:\n~/.claude/skills/sms-assistant/scripts/send-sms \"2df6be",
           "relevant": true,
           "topic": "errors"
         },
@@ -4508,7 +4508,7 @@
           "topic": "errors"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
           "relevant": false,
           "topic": "errors"
         },
@@ -4543,7 +4543,7 @@
           "topic": "errors"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nit works messaging you\n---END SMS---\n**Important:** You are",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nit works messaging you\n---END SMS---\n**Important:** You are",
           "relevant": false,
           "topic": "errors"
         },
@@ -4558,12 +4558,12 @@
           "topic": "errors"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
           "relevant": false,
           "topic": "errors"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
           "relevant": false,
           "topic": "errors"
         },
@@ -4618,7 +4618,7 @@
           "topic": "errors"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nwhy can\u2019t i leave it\n---END SMS---\n**Important:",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nwhy can\u2019t i leave it\n---END SMS---\n**Important:",
           "relevant": false,
           "topic": "errors"
         },
@@ -4628,7 +4628,7 @@
           "topic": "errors"
         },
         {
-          "doc": "Check 3/60 -- HEALTHY. Daemon running (PID 5650, uptime 06:24). 1 active session (nikhil-thorat, BUSY, 38 turns). No errors.",
+          "doc": "Check 3/60 -- HEALTHY. Daemon running (PID 5650, uptime 06:24). 1 active session (jane-doe, BUSY, 38 turns). No errors.",
           "relevant": false,
           "topic": "errors"
         },
@@ -4638,7 +4638,7 @@
           "topic": "errors"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nno like\n---END SMS---\n**Important:** You are in",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nno like\n---END SMS---\n**Important:** You are in",
           "relevant": false,
           "topic": "errors"
         }
@@ -4648,17 +4648,17 @@
       "query": "internet browsing automation",
       "docs": [
         {
-          "doc": "Sven is alive and processing. It picked up your \"hi\" \u2014 looks like it's in a group chat context (nikhil-p",
+          "doc": "Sven is alive and processing. It picked up your \"hi\" \u2014 looks like it's in a group chat context (jane-p",
           "relevant": false,
           "topic": "web"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "web"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nis the extension a folder in github?\n---END SMS---\n**Important:** You are in a text message session. Communicate back to the ",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nis the extension a folder in github?\n---END SMS---\n**Important:** You are in a text message session. Communicate back to the ",
           "relevant": false,
           "topic": "web"
         },
@@ -4668,12 +4668,12 @@
           "topic": "web"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nokay on to 6. as we go we keep github guides for bootstrap ",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nokay on to 6. as we go we keep github guides for bootstrap ",
           "relevant": false,
           "topic": "web"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "web"
         },
@@ -4683,7 +4683,7 @@
           "topic": "web"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nnice! add icloud sync setup step to human (will",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nnice! add icloud sync setup step to human (will",
           "relevant": false,
           "topic": "web"
         },
@@ -4698,17 +4698,17 @@
           "topic": "web"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\ntry with axctl\n---END SMS---\n**Important:** You",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\ntry with axctl\n---END SMS---\n**Important:** You",
           "relevant": false,
           "topic": "web"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nyes, show me first you can attach other files h",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nyes, show me first you can attach other files h",
           "relevant": false,
           "topic": "web"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "web"
         },
@@ -4718,12 +4718,12 @@
           "topic": "web"
         },
         {
-          "doc": "\n\nThat's the problem \u2014 the account needs age verification. Google is blocking AI Studio because `nicklaudethorat@gmail.com` hasn't completed it yet.\n\nThree options:\n",
+          "doc": "\n\nThat's the problem \u2014 the account needs age verification. Google is blocking AI Studio because `partner@example.com` hasn't completed it yet.\n\nThree options:\n",
           "relevant": true,
           "topic": "web"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "web"
         },
@@ -4738,7 +4738,7 @@
           "topic": "web"
         },
         {
-          "doc": "s too (not just curl installer), also `brew install gh`\n2. **02-claude-bootstrap.md**: Fix the repo URL (it says `anthropics/dispatch`, should be `nicklaude/dispatch`)\n3. **03-identity-setup.md**: Add no",
+          "doc": "s too (not just curl installer), also `brew install gh`\n2. **02-claude-bootstrap.md**: Fix the repo URL (it says `anthropics/dispatch`, should be `jsmith/dispatch`)\n3. **03-identity-setup.md**: Add no",
           "relevant": true,
           "topic": "web"
         },
@@ -4753,12 +4753,12 @@
           "topic": "web"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "web"
         },
         {
-          "doc": "\n---GROUP SMS [pangserve and nicklaude] FROM Nikhil Thorat [TIER: admin]---\nChat ID: d6598f7d460749d49df5ededd302",
+          "doc": "\n---GROUP SMS [pangserve and jsmith] FROM Jane Doe [TIER: admin]---\nChat ID: d6598f7d460749d49df5ededd302",
           "relevant": false,
           "topic": "web"
         },
@@ -4768,12 +4768,12 @@
           "topic": "web"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nstill not working to caroline can you read the idea you sen",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nstill not working to john can you read the idea you sen",
           "relevant": false,
           "topic": "web"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nrun 1. fix 2 there\u2019s transcripts on this machine \n---END SM",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nrun 1. fix 2 there\u2019s transcripts on this machine \n---END SM",
           "relevant": false,
           "topic": "web"
         },
@@ -4783,7 +4783,7 @@
           "topic": "web"
         },
         {
-          "doc": "iting issues, ComfyUI integration, still in progress)\n- 28 skills installed from Nicklaudes system (chrome, memory, flight-tracker, hue, sonos, etc)\n- Memory migration from SQLite to DuckDB\n- Daemon crash d",
+          "doc": "iting issues, ComfyUI integration, still in progress)\n- 28 skills installed from Jsmiths system (chrome, memory, flight-tracker, hue, sonos, etc)\n- Memory migration from SQLite to DuckDB\n- Daemon crash d",
           "relevant": true,
           "topic": "web"
         },
@@ -4793,7 +4793,7 @@
           "topic": "web"
         },
         {
-          "doc": "nikhil-pangserve-ryan] FROM Ryan Eckert [TIER: family]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d8165\nChrome control was enabled already\n---END SMS---\n\nACL: Ryan Eckert is FAMILY tier. Read ~/.claude/skills/s",
+          "doc": "jane-pangserve-ryan] FROM Ryan Eckert [TIER: family]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d8165\nChrome control was enabled already\n---END SMS---\n\nACL: Ryan Eckert is FAMILY tier. Read ~/.claude/skills/s",
           "relevant": true,
           "topic": "web"
         }
@@ -4803,7 +4803,7 @@
       "query": "source control operations",
       "docs": [
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\ni reloaded \n---END SMS---\n**Important:** You are in a text ",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\ni reloaded \n---END SMS---\n**Important:** You are in a text ",
           "relevant": false,
           "topic": "coding"
         },
@@ -4823,7 +4823,7 @@
           "topic": "coding"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nnot yet\n---END SMS---\n**Important:** You are in",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nnot yet\n---END SMS---\n**Important:** You are in",
           "relevant": false,
           "topic": "coding"
         },
@@ -4843,7 +4843,7 @@
           "topic": "coding"
         },
         {
-          "doc": "Y. Daemon running (PID 7801, uptime 02:10). 2 active sessions (group-_com_nikhil_ryan BUSY 4 turns, nikhil-thorat BUSY - just restarted). nikhil-thorat session was killed and restarted (KILL + RESTART in lo",
+          "doc": "Y. Daemon running (PID 7801, uptime 02:10). 2 active sessions (group-_com_jane_ryan BUSY 4 turns, jane-doe BUSY - just restarted). jane-doe session was killed and restarted (KILL + RESTART in lo",
           "relevant": false,
           "topic": "coding"
         },
@@ -4853,7 +4853,7 @@
           "topic": "coding"
         },
         {
-          "doc": "We were working on the bootstrap setup, and step 6 was the Skills System. We've completed that, and Nikhil asked me to add a group chat verification step to step 5 and restart the daemon. Let me check if th",
+          "doc": "We were working on the bootstrap setup, and step 6 was the Skills System. We've completed that, and Jane asked me to add a group chat verification step to step 5 and restart the daemon. Let me check if th",
           "relevant": false,
           "topic": "coding"
         },
@@ -4878,7 +4878,7 @@
           "topic": "coding"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\ncheck the evan group chat is it working? you di",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\ncheck the evan group chat is it working? you di",
           "relevant": false,
           "topic": "coding"
         },
@@ -4893,17 +4893,17 @@
           "topic": "coding"
         },
         {
-          "doc": "Check 16/60 -- HEALTHY. Daemon running (PID 7801, uptime 06:49). 2 active sessions. nikhil-thorat BUSY at 43 turns (testing Chrome extension). Group chat exchanging skill architecture info. ",
+          "doc": "Check 16/60 -- HEALTHY. Daemon running (PID 7801, uptime 06:49). 2 active sessions. jane-doe BUSY at 43 turns (testing Chrome extension). Group chat exchanging skill architecture info. ",
           "relevant": false,
           "topic": "coding"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nyay that worked \n---END SMS---\n**Important:** Y",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nyay that worked \n---END SMS---\n**Important:** Y",
           "relevant": false,
           "topic": "coding"
         },
         {
-          "doc": "s with both participants (+14103027990 which is Evan, and +16175969496 which is you). Let me try to read messages directly from Messages.app:",
+          "doc": "s with both participants (+14103027990 which is Evan, and +15555550100 which is you). Let me try to read messages directly from Messages.app:",
           "relevant": false,
           "topic": "coding"
         },
@@ -4928,7 +4928,7 @@
           "topic": "coding"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\ndouble check the database \n---END SMS---\n**Important:** You",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\ndouble check the database \n---END SMS---\n**Important:** You",
           "relevant": false,
           "topic": "coding"
         },
@@ -4943,7 +4943,7 @@
       "query": "code refactoring discussions",
       "docs": [
         {
-          "doc": "I can see the context - this is a group chat with Nikhil (admin), Ryan (family), and Pangserve (bot). They've been working on Signal linking. Ryan's last me",
+          "doc": "I can see the context - this is a group chat with Jane (admin), Ryan (family), and Pangserve (bot). They've been working on Signal linking. Ryan's last me",
           "relevant": false,
           "topic": "coding"
         },
@@ -4973,7 +4973,7 @@
           "topic": "coding"
         },
         {
-          "doc": " and polling from ROWID 8095. It skipped the old messages \u2014 good. Now let me send a test message to Nikhil to trigger a reply.",
+          "doc": " and polling from ROWID 8095. It skipped the old messages \u2014 good. Now let me send a test message to Jane to trigger a reply.",
           "relevant": false,
           "topic": "coding"
         },
@@ -4993,7 +4993,7 @@
           "topic": "coding"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nin our message system bootstrap guide we should update it t",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nin our message system bootstrap guide we should update it t",
           "relevant": false,
           "topic": "coding"
         },
@@ -5008,7 +5008,7 @@
       "query": "package management problems",
       "docs": [
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "coding"
         },
@@ -5023,7 +5023,7 @@
           "topic": "coding"
         },
         {
-          "doc": "THY. Daemon running (PID 7801, uptime 23:15). 2 sessions. nikhil-thorat BUSY at 111 turns (updating send-sms CLI with --file flag). No errors.\n\nSummary so far: 30 checks completed. Daemon has been running",
+          "doc": "THY. Daemon running (PID 7801, uptime 23:15). 2 sessions. jane-doe BUSY at 111 turns (updating send-sms CLI with --file flag). No errors.\n\nSummary so far: 30 checks completed. Daemon has been running",
           "relevant": false,
           "topic": "coding"
         },
@@ -5038,7 +5038,7 @@
           "topic": "coding"
         },
         {
-          "doc": "Check 5/60 -- HEALTHY. Daemon running (PID 5650, uptime 08:43). 2 active sessions (nikhil-thorat BUSY 57 turns, group-_com_nikhil 6 turns). No errors.",
+          "doc": "Check 5/60 -- HEALTHY. Daemon running (PID 5650, uptime 08:43). 2 active sessions (jane-doe BUSY 57 turns, group-_com_jane 6 turns). No errors.",
           "relevant": false,
           "topic": "coding"
         },
@@ -5048,7 +5048,7 @@
           "topic": "coding"
         },
         {
-          "doc": "Daemon running (PID 7801, uptime 06:49). 2 active sessions. nikhil-thorat BUSY at 43 turns (testing Chrome extension). Group chat exchanging skill architecture info. No errors.",
+          "doc": "Daemon running (PID 7801, uptime 06:49). 2 active sessions. jane-doe BUSY at 43 turns (testing Chrome extension). Group chat exchanging skill architecture info. No errors.",
           "relevant": false,
           "topic": "coding"
         },
@@ -5078,7 +5078,7 @@
           "topic": "scheduling"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "scheduling"
         },
@@ -5088,12 +5088,12 @@
           "topic": "scheduling"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nforget evan \u2014 let\u2019s fix the group chat with pang\n---END SMS---\n**Important:** You are in a text message session. Communicat",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nforget evan \u2014 let\u2019s fix the group chat with pang\n---END SMS---\n**Important:** You are in a text message session. Communicat",
           "relevant": false,
           "topic": "scheduling"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\ncan you google it\n---END SMS---\n**Important:** You are in a",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\ncan you google it\n---END SMS---\n**Important:** You are in a",
           "relevant": false,
           "topic": "scheduling"
         },
@@ -5158,12 +5158,12 @@
           "topic": "errors"
         },
         {
-          "doc": "Check 25/60 -- HEALTHY. Daemon running (PID 7801, uptime 17:21). 2 sessions. nikhil-thorat BUSY (Nikhil reloaded something). Group chat at 56 turns -- Pang already has the contacts lo",
+          "doc": "Check 25/60 -- HEALTHY. Daemon running (PID 7801, uptime 17:21). 2 sessions. jane-doe BUSY (Jane reloaded something). Group chat at 56 turns -- Pang already has the contacts lo",
           "relevant": false,
           "topic": "errors"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "errors"
         },
@@ -5178,12 +5178,12 @@
           "topic": "errors"
         },
         {
-          "doc": "d in dispatch and see what we\u2019re behind on. and remind me of the features we built in our nicklaude search\n---END SMS---\n**Important:** You are in a text message session. Communicate back to the user with ~",
+          "doc": "d in dispatch and see what we\u2019re behind on. and remind me of the features we built in our jsmith search\n---END SMS---\n**Important:** You are in a text message session. Communicate back to the user with ~",
           "relevant": false,
           "topic": "errors"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nevan lol\n---END SMS---\n**Important:** You are in a text mes",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nevan lol\n---END SMS---\n**Important:** You are in a text mes",
           "relevant": false,
           "topic": "errors"
         },
@@ -5198,7 +5198,7 @@
           "topic": "errors"
         },
         {
-          "doc": "nning. Every 60 seconds for 60 checks (1 hour):\n- Checks daemon is alive, restarts if down\n- Checks nikhil-thorat session exists\n- Flags any errors (ignoring expected signal-cli ones)\n- Logs uptime, session",
+          "doc": "nning. Every 60 seconds for 60 checks (1 hour):\n- Checks daemon is alive, restarts if down\n- Checks jane-doe session exists\n- Flags any errors (ignoring expected signal-cli ones)\n- Logs uptime, session",
           "relevant": false,
           "topic": "errors"
         },
@@ -5213,12 +5213,12 @@
           "topic": "errors"
         },
         {
-          "doc": "Sent the suggestion to delete Evan's contact and try manually entering the number. Waiting for Nikhil's response.",
+          "doc": "Sent the suggestion to delete Evan's contact and try manually entering the number. Waiting for Jane's response.",
           "relevant": false,
           "topic": "errors"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nokay on to 6. as we go we keep github guides for bootstrap ",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nokay on to 6. as we go we keep github guides for bootstrap ",
           "relevant": false,
           "topic": "errors"
         },
@@ -5243,17 +5243,17 @@
           "topic": "errors"
         },
         {
-          "doc": "Sent the suggestion to delete Evan's contact and try manually entering the number. Waiting for Nikhil's response.",
+          "doc": "Sent the suggestion to delete Evan's contact and try manually entering the number. Waiting for Jane's response.",
           "relevant": false,
           "topic": "errors"
         },
         {
-          "doc": "\n\nThat's the problem \u2014 the account needs age verification. Google is blocking AI Studio because `nicklaudethorat@gmail.c",
+          "doc": "\n\nThat's the problem \u2014 the account needs age verification. Google is blocking AI Studio because `jsmiththorat@gmail.c",
           "relevant": true,
           "topic": "errors"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nforget evan \u2014 let\u2019s fix the group chat with pang\n---END SMS",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nforget evan \u2014 let\u2019s fix the group chat with pang\n---END SMS",
           "relevant": false,
           "topic": "errors"
         },
@@ -5268,7 +5268,7 @@
           "topic": "errors"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
           "relevant": false,
           "topic": "errors"
         },
@@ -5278,7 +5278,7 @@
           "topic": "errors"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
           "relevant": false,
           "topic": "errors"
         },
@@ -5318,7 +5318,7 @@
           "topic": "errors"
         },
         {
-          "doc": "tall uv` works too (not just curl installer), also `brew install gh`\n2. **02-claude-bootstrap.md**: Fix the repo URL (it says `anthropics/dispatch`, should be `nicklaude/dispatch`)\n3. **03-identity-setup",
+          "doc": "tall uv` works too (not just curl installer), also `brew install gh`\n2. **02-claude-bootstrap.md**: Fix the repo URL (it says `anthropics/dispatch`, should be `jsmith/dispatch`)\n3. **03-identity-setup",
           "relevant": true,
           "topic": "errors"
         },
@@ -5338,12 +5338,12 @@
       "query": "chat conversation history",
       "docs": [
         {
-          "doc": "\n---GROUP SMS [.com-evan-nikhil] FROM nsthorat@gmail.com [TIER: unknown]---\nChat ID: d448f7234ec6478ea68dd352700e",
+          "doc": "\n---GROUP SMS [.com-evan-jane] FROM user@example.com [TIER: unknown]---\nChat ID: d448f7234ec6478ea68dd352700e",
           "relevant": true,
           "topic": "messaging"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM nsthorat@gmail.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\n",
+          "doc": "\n---GROUP SMS [.com-jane] FROM user@example.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\n",
           "relevant": true,
           "topic": "messaging"
         },
@@ -5358,7 +5358,7 @@
           "topic": "messaging"
         },
         {
-          "doc": "il Thorat (admin)---\nChat ID: +16175969496\nokay got it. now question is it possible for you to send read receipts when the daemon reads a message? let\u2019s test here\n---END SMS---\n**Important:** You are in a",
+          "doc": "il Doe (admin)---\nChat ID: +15555550100\nokay got it. now question is it possible for you to send read receipts when the daemon reads a message? let\u2019s test here\n---END SMS---\n**Important:** You are in a",
           "relevant": false,
           "topic": "messaging"
         },
@@ -5373,7 +5373,7 @@
           "topic": "messaging"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM Nikhil Thorat [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\ncheck y",
+          "doc": "\n---GROUP SMS [.com-jane] FROM Jane Doe [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\ncheck y",
           "relevant": true,
           "topic": "messaging"
         },
@@ -5388,17 +5388,17 @@
           "topic": "messaging"
         },
         {
-          "doc": "\n---GROUP SMS [.com-evan-nikhil] FROM Nikhil Thorat [TIER: admin]---\nChat ID: d448f7234ec6478ea68dd352700eea15\nsv",
+          "doc": "\n---GROUP SMS [.com-evan-jane] FROM Jane Doe [TIER: admin]---\nChat ID: d448f7234ec6478ea68dd352700eea15\nsv",
           "relevant": true,
           "topic": "messaging"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nthere\u2019s no doc for reminders can you do that \n---END SMS---",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nthere\u2019s no doc for reminders can you do that \n---END SMS---",
           "relevant": false,
           "topic": "messaging"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nlet\u2019s do it\n---END SMS---\n**Important:** You ar",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nlet\u2019s do it\n---END SMS---\n**Important:** You ar",
           "relevant": false,
           "topic": "messaging"
         },
@@ -5408,17 +5408,17 @@
           "topic": "messaging"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM Nikhil Thorat [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nafter 5",
+          "doc": "\n---GROUP SMS [.com-jane] FROM Jane Doe [TIER: admin]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nafter 5",
           "relevant": true,
           "topic": "messaging"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM Ryan Eckert [TIER: family]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d816",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM Ryan Eckert [TIER: family]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d816",
           "relevant": false,
           "topic": "messaging"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\ndude we\u2019re talking about your mac\n---END SMS---\n**Important",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\ndude we\u2019re talking about your mac\n---END SMS---\n**Important",
           "relevant": false,
           "topic": "messaging"
         },
@@ -5433,7 +5433,7 @@
       "query": "API integration challenges",
       "docs": [
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512",
           "relevant": false,
           "topic": "coding"
         },
@@ -5448,7 +5448,7 @@
           "topic": "coding"
         },
         {
-          "doc": "Base directory for this skill: /Users/sven/transcripts/group-7990_nikhil/.claude/skills/contacts\n\n# Contacts Manag",
+          "doc": "Base directory for this skill: /Users/sven/transcripts/group-7990_jane/.claude/skills/contacts\n\n# Contacts Manag",
           "relevant": false,
           "topic": "coding"
         },
@@ -5458,7 +5458,7 @@
           "topic": "coding"
         },
         {
-          "doc": "m check 4 onward, 136 turns by end. Collaborative session with Pang (Ryan's AI assistant) -- shared code, ported contacts lookup, debugged session persistence\n- group-_com_nikhil: Brief session (checks 4-",
+          "doc": "m check 4 onward, 136 turns by end. Collaborative session with Pang (Ryan's AI assistant) -- shared code, ported contacts lookup, debugged session persistence\n- group-_com_jane: Brief session (checks 4-",
           "relevant": true,
           "topic": "coding"
         },
@@ -5483,7 +5483,7 @@
           "topic": "coding"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM Ryan Eckert [TIER: family]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d816",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM Ryan Eckert [TIER: family]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d816",
           "relevant": false,
           "topic": "coding"
         },
@@ -5498,7 +5498,7 @@
           "topic": "coding"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "coding"
         },
@@ -5513,12 +5513,12 @@
           "topic": "coding"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nrun them\n---END SMS---\n**Important:** You are i",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nrun them\n---END SMS---\n**Important:** You are i",
           "relevant": false,
           "topic": "coding"
         },
         {
-          "doc": "\n---GROUP SMS [.com-nikhil] FROM nsthorat@gmail.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\n",
+          "doc": "\n---GROUP SMS [.com-jane] FROM user@example.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\n",
           "relevant": false,
           "topic": "coding"
         }
@@ -5543,7 +5543,7 @@
           "topic": "smart_home"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nhttps://github.com/tobi/qmd\n---END SMS---\n**Important:** Yo",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nhttps://github.com/tobi/qmd\n---END SMS---\n**Important:** Yo",
           "relevant": false,
           "topic": "smart_home"
         },
@@ -5568,12 +5568,12 @@
           "topic": "smart_home"
         },
         {
-          "doc": "\n---GROUP SMS [nikhil-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
+          "doc": "\n---GROUP SMS [jane-pangserve-ryan] FROM pangserve@gmail.com [TIER: unknown]---\nChat ID: 3f1f56b1f26e4cd7a19512dc5e1d81",
           "relevant": false,
           "topic": "smart_home"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nrun 1. fix 2 there\u2019s transcripts on this machine \n---END SMS---\n**Important:** You are in a text message sessi",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nrun 1. fix 2 there\u2019s transcripts on this machine \n---END SMS---\n**Important:** You are in a text message sessi",
           "relevant": false,
           "topic": "smart_home"
         },
@@ -5598,7 +5598,7 @@
           "topic": "smart_home"
         },
         {
-          "doc": "FROM nsthorat@gmail.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nsays duplicate error\n---END SMS---\n\nTo reply to this group, use:\n~/.claude/skills/sms-assistant/scripts/send-sms \"2df6be",
+          "doc": "FROM user@example.com [TIER: unknown]---\nChat ID: 2df6be1ed7534cd797e5fdb2c4bd6bd8\nsays duplicate error\n---END SMS---\n\nTo reply to this group, use:\n~/.claude/skills/sms-assistant/scripts/send-sms \"2df6be",
           "relevant": false,
           "topic": "smart_home"
         },
@@ -5608,7 +5608,7 @@
           "topic": "smart_home"
         },
         {
-          "doc": "Sent. When you reply, the daemon should now recognize you as \"Nikhil Thorat\" with tier \"admin\" and create a Claude session. Let me watch the logs.",
+          "doc": "Sent. When you reply, the daemon should now recognize you as \"Jane Doe\" with tier \"admin\" and create a Claude session. Let me watch the logs.",
           "relevant": false,
           "topic": "smart_home"
         },
@@ -5628,7 +5628,7 @@
           "topic": "smart_home"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\nok so it\n---END SMS---\n**Important:** You are i",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\nok so it\n---END SMS---\n**Important:** You are i",
           "relevant": false,
           "topic": "smart_home"
         },
@@ -5653,7 +5653,7 @@
           "topic": "files"
         },
         {
-          "doc": "Check 2/60 -- HEALTHY. Daemon running (PID 5650, uptime 05:13). 1 active session (nikhil-thorat, BUSY, 29 turns). Health check passed (1/1 healthy). No errors.",
+          "doc": "Check 2/60 -- HEALTHY. Daemon running (PID 5650, uptime 05:13). 1 active session (jane-doe, BUSY, 29 turns). Health check passed (1/1 healthy). No errors.",
           "relevant": false,
           "topic": "files"
         },
@@ -5683,7 +5683,7 @@
           "topic": "files"
         },
         {
-          "doc": "Y. Daemon running (PID 7801, uptime 02:10). 2 active sessions (group-_com_nikhil_ryan BUSY 4 turns, nikhil-thorat BUSY - just restarted). nikhil-thorat session was killed and restarted (KILL + RESTART in lo",
+          "doc": "Y. Daemon running (PID 7801, uptime 02:10). 2 active sessions (group-_com_jane_ryan BUSY 4 turns, jane-doe BUSY - just restarted). jane-doe session was killed and restarted (KILL + RESTART in lo",
           "relevant": false,
           "topic": "files"
         },
@@ -5718,7 +5718,7 @@
           "topic": "files"
         },
         {
-          "doc": "\n---SMS FROM Nikhil Thorat (admin)---\nChat ID: +16175969496\ncan you run those\n---END SMS---\n**Important:** You are in a",
+          "doc": "\n---SMS FROM Jane Doe (admin)---\nChat ID: +15555550100\ncan you run those\n---END SMS---\n**Important:** You are in a",
           "relevant": false,
           "topic": "files"
         },

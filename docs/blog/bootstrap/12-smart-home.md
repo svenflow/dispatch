@@ -6,7 +6,7 @@ Give Claude control over your smart home - lights (Hue, Lutron), speakers (Sonos
 
 ## Philips Hue
 
-**GitHub:** [`skills/hue/`](https://github.com/nicklaude/dispatch/tree/main/skills/hue)
+**GitHub:** [`skills/hue/`](https://github.com/jsmith/dispatch/tree/main/skills/hue)
 
 ### Setup
 
@@ -18,7 +18,7 @@ Give Claude control over your smart home - lights (Hue, Lutron), speakers (Sonos
 3. Save credentials:
    ```bash
    mkdir -p ~/.hue
-   echo '{"ip": "10.10.10.23", "token": "your-token"}' > ~/.hue/home.json
+   echo '{"ip": "10.0.0.10", "token": "your-token"}' > ~/.hue/home.json
    ```
 
 ### Usage
@@ -49,7 +49,7 @@ uv run $HUE on "Desk Lamp" --bridge office
 
 ## Lutron Caseta
 
-**GitHub:** [`skills/lutron/`](https://github.com/nicklaude/dispatch/tree/main/skills/lutron)
+**GitHub:** [`skills/lutron/`](https://github.com/jsmith/dispatch/tree/main/skills/lutron)
 
 ### Setup
 
@@ -88,7 +88,7 @@ uv run $LUTRON room "Living Room" off    # All lights in room
 
 ## Sonos
 
-**GitHub:** [`skills/sonos/`](https://github.com/nicklaude/dispatch/tree/main/skills/sonos)
+**GitHub:** [`skills/sonos/`](https://github.com/jsmith/dispatch/tree/main/skills/sonos)
 
 ### Setup
 

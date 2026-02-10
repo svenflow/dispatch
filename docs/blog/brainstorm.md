@@ -3,7 +3,7 @@
 ## Core Thesis
 "What would a human do on a computer?" - Building an AI assistant by giving Claude full access to a Mac and using human-native tools (Reminders.app, Contacts.app, Messages.app) instead of programmatic APIs.
 
-## Alternative Names for "Nicklaude"
+## Alternative Names for "Jsmith"
 - **Clawdbook** - Claude + MacBook
 - **MacClaude** - Mac + Claude
 - **ClaudeOS** - Claude as an operating system layer
@@ -154,7 +154,7 @@
    - General: stateless, max 300 tokens (HaikuHandler - NOTE: not yet wired up)
 
 2. **Chrome profile isolation**
-   - Claude's profile (nicklaude): full autonomy
+   - Claude's profile (jsmith): full autonomy
    - Owner's profile: read-only default
    - Payment consent required
    - Downloads isolated by profile

@@ -15,7 +15,7 @@ import { createEmbedFunction, createRerankFunction, warmupModels, checkModelsAva
 
 async function main(): Promise<void> {
   console.log("=".repeat(60));
-  console.log("nicklaude-search daemon starting...");
+  console.log("jsmith-search daemon starting...");
   console.log("=".repeat(60));
 
   // Ensure cache directory exists
