@@ -7,6 +7,41 @@ description: Parse screenshots and interact with UI elements. Use for screen aut
 
 Parse screenshots into structured UI elements and interact with them. Works with macOS native apps, Chrome browser, and iOS Simulator.
 
+## Prerequisites
+
+This skill requires OmniParser to be installed locally:
+
+### 1. Clone OmniParser
+
+```bash
+git clone https://github.com/microsoft/OmniParser.git ~/code/OmniParser
+```
+
+### 2. Download Model Weights (~2GB)
+
+```bash
+# Install huggingface CLI if needed
+uv pip install huggingface_hub
+
+# Download weights
+cd ~/code/OmniParser
+for f in icon_detect/{train_args.yaml,model.pt,model.yaml} icon_caption/{config.json,generation_config.json,model.safetensors}; do
+  huggingface-cli download microsoft/OmniParser-v2.0 "$f" --local-dir weights
+done
+mv weights/icon_caption weights/icon_caption_florence
+```
+
+### 3. Verify Setup
+
+```bash
+ls ~/code/OmniParser/weights/
+# Should show: icon_caption_florence  icon_detect
+```
+
+**Note:** The server uses ~2GB RAM when running. It auto-shuts down after 10 minutes idle.
+
+---
+
 ## parse-image CLI
 
 The core tool for screen parsing. Uses OmniParser (YOLOv8 + Florence-2) to detect text and icons.
