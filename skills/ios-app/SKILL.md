@@ -12,19 +12,41 @@ allowed-tools:
 
 # iOS App Development Skill
 
-Build, test, and deploy iOS apps from the command line. All iOS projects live in `~/code/ios-apps/`.
+Build, test, and deploy iOS apps from the command line.
+
+**Project locations:**
+- **Sven app**: `~/dispatch/apps/sven-ios/` (consolidated into dispatch repo)
+- **Other apps**: `~/code/ios-apps/`
 
 ## Development Workflow (MUST FOLLOW)
 
-**CRITICAL: Always test in simulator and get user approval BEFORE deploying to TestFlight.**
+**CRITICAL: Always test in simulator and get user approval BEFORE deploying to device.**
 
-### The Golden Rule: Simulator First, TestFlight Last
+### The Golden Rule: Simulator First, Device/TestFlight Last
 
 1. **Build for Simulator** - fast iteration, no signing required
 2. **Test all CUJs manually** - walk through every critical user journey
 3. **Screenshot each CUJ** - capture evidence of working features
 4. **Send screenshots to user** - get explicit approval before proceeding
-5. **Only then deploy to TestFlight** - after user confirms everything works
+5. **Deploy to device** - prefer direct deploy (see below), fall back to TestFlight
+
+### Deployment Priority: Direct Device Deploy > TestFlight
+
+**When deploying to Nikhil's device:**
+1. **FIRST: Try direct device deploy via Xcode** - instant (~30 seconds), no TestFlight processing
+2. **FALLBACK: Use TestFlight** - only if direct deploy fails (not on wifi, device unavailable)
+
+Direct device deploy is 10x faster than TestFlight (30s vs 10-30 min processing).
+
+**Decision tree:**
+```
+Is Nikhil available on same WiFi network?
+├── YES → Direct device deploy (preferred)
+│   └── Check with: xcrun devicectl list devices
+│   └── Deploy with: xcrun devicectl device install app --device "Nikhil iPhone 16" <app_path>
+└── NO → TestFlight
+    └── When: Nikhil is away, device sleeping, or sharing with multiple testers
+```
 
 ### Why This Matters
 
@@ -95,6 +117,17 @@ xcrun simctl io booted screenshot /tmp/cuj-main-screen.png
 
 ## Project Structure
 
+**Sven app (in dispatch repo):**
+```
+~/dispatch/apps/sven-ios/
+├── Sven.xcodeproj/
+├── Sven/
+│   ├── SvenApp.swift
+│   └── ...
+└── build/
+```
+
+**Other apps:**
 ```
 ~/code/ios-apps/
 ├── AppName/
@@ -211,6 +244,98 @@ xcrun simctl uninstall booted com.dispatch.AppName
 xcrun simctl get_app_container booted com.dispatch.AppName
 ```
 
+## Direct Device Deployment (PREFERRED)
+
+**Deploy directly to physical devices via Xcode - instant, no TestFlight wait.**
+
+**⚠️ ALWAYS try this first when Nikhil is available.** It's 10-30x faster than TestFlight.
+
+### Prerequisites (One-Time Setup)
+
+1. **Pair device via USB:** Connect phone with cable, tap "Trust This Computer" on phone
+2. **Enable Developer Mode:** Settings → Privacy & Security → Developer Mode → ON (restart required)
+3. **Same wifi network:** Mac and phone must be on same network for wireless deploy
+
+After USB pairing once, future deploys can be wireless.
+
+**Known paired devices:**
+- "Nikhil iPhone 16" - Nikhil's iPhone (paired 2026-02-09)
+
+### Check Device Availability
+
+```bash
+# List all connected devices (USB and wireless)
+xcrun devicectl list devices
+
+# Look for your device name and connection state
+# "available" = ready to deploy
+# "unavailable" = not on network or asleep
+```
+
+### Deploy to Device
+
+```bash
+# Build and run on physical device
+xcodebuild \
+  -project ~/code/ios-apps/AppName/AppName.xcodeproj \
+  -scheme AppName \
+  -destination 'platform=iOS,name=Device Name' \
+  -allowProvisioningUpdates \
+  build
+
+# Find the built .app
+APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData -name "AppName.app" -path "*/Debug-iphoneos/*" 2>/dev/null | head -1)
+
+# Install on device
+xcrun devicectl device install app --device "Device Name" "$APP_PATH"
+```
+
+**Or use xcodebuild with `-destination` for build + install in one step:**
+
+```bash
+xcodebuild \
+  -project ~/code/ios-apps/AppName/AppName.xcodeproj \
+  -scheme AppName \
+  -destination 'platform=iOS,name=Device Name' \
+  -allowProvisioningUpdates \
+  build
+```
+
+### Device Names
+
+Find exact device name with `xcrun devicectl list devices`. Example names:
+- "Nikhil iPhone 16" - Nikhil's iPhone
+- "iPhone 16 Pro Max" - generic name if renamed
+
+### Quick Deploy Command
+
+For rapid iteration, use this one-liner after building:
+
+```bash
+# Build for device
+xcodebuild \
+  -project ~/code/ios-apps/AppName/AppName.xcodeproj \
+  -scheme AppName \
+  -destination 'platform=iOS,name=Nikhil iPhone 16' \
+  -allowProvisioningUpdates \
+  build
+
+# Find and install
+APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData -name "AppName.app" -path "*/Debug-iphoneos/*" 2>/dev/null | head -1)
+xcrun devicectl device install app --device "Nikhil iPhone 16" "$APP_PATH"
+```
+
+### When to Use TestFlight Instead
+
+Use TestFlight only when:
+- Device not on same wifi network (Nikhil is away)
+- Device unavailable/sleeping and user can't wake it
+- Need to distribute to multiple testers (not just Nikhil)
+- Need build to persist (device deploys expire after ~7 days)
+- Sharing with external beta testers
+
+**Default to direct deploy** for Nikhil when he's available and on the same network.
+
 ## TestFlight Deployment Workflow
 
 ### Step 1: Find Your Team ID
@@ -280,9 +405,40 @@ xcrun altool --upload-app \
 
 ### Step 5: App Store Connect Setup
 
-**⚠️ IMPORTANT: Apple Login Requires Manual Intervention**
+**Apple Login CAN Be Automated** using the chrome-control skill's iframe commands.
 
-Apple's login form uses a cross-origin iframe (`idmsa.apple.com`) that cannot be automated via Chrome extension. If the session expires, you MUST ask the user to log in manually. The Chrome extension's `key` and `type` commands cannot reach inside Apple's auth iframe.
+The login form uses a cross-origin iframe (`idmsa.apple.com`), but the Chrome extension has special commands (`iframe-click` and `insert-text`) that can interact with it. Credentials are stored in `~/.claude/secrets.env`.
+
+#### Automated Apple Login Flow
+
+```bash
+# 1. Navigate to App Store Connect
+chrome navigate <tab_id> "https://appstoreconnect.apple.com"
+sleep 3
+
+# 2. Click email field and enter email (from secrets.env)
+chrome iframe-click <tab_id> 'input[type="text"]'
+chrome insert-text <tab_id> 'nicklaudethorat@gmail.com'
+
+# 3. Click Continue
+chrome iframe-click <tab_id> 'button#sign-in'
+sleep 3
+
+# 4. Click "Continue with Password"
+chrome iframe-click <tab_id> 'text:Continue with Password'
+sleep 2
+
+# 5. Enter password (auto-focused after step 4)
+chrome insert-text <tab_id> 'YOUR_PASSWORD_HERE'
+
+# 6. Click Sign In
+chrome iframe-click <tab_id> 'button#sign-in'
+sleep 4
+
+# Done - should now be logged in!
+```
+
+**Note:** The `iframe-click` and `insert-text` commands use `Page.createIsolatedWorld` with `grantUniversalAccess:true` to bypass cross-origin restrictions. See the chrome-control skill for full documentation.
 
 Once logged in, you can automate everything else in App Store Connect.
 
@@ -411,8 +567,10 @@ Even if testers are already in Users and Access from other apps, you must:
 This is a common gotcha: testers in Users and Access can test ANY app they're added to, but they must be explicitly added to each app's testing group.
 
 **Pre-configured internal testers (already in Users and Access):**
-- user@example.com (Jane) - Admin
-- partner@example.com (Sven) - Account Holder
+- nsthorat@gmail.com (Nikhil Thorat) - Admin
+- sammcgrail@gmail.com (Sam McGrail) - Admin
+- nicklaudethorat@gmail.com (Nicklaude Thorat) - Account Holder, Admin
+- rneck79@gmail.com (Ryan/Pang Lunis) - Developer
 
 For new apps, create a testing group and add these users to it - they're already set up in Users and Access.
 
@@ -420,14 +578,18 @@ For new apps, create a testing group and add these users to it - they're already
 
 ⚠️ **Common failure mode:** User added to Internal Testing group but never receives invite → They weren't added to Users and Access first!
 
-1. **First add them to Users and Access:**
-   - Go to Users and Access > People > "+" button
+⚠️ **API Limitation:** The App Store Connect API does NOT support adding users to Users and Access. You MUST use Chrome automation for step 1.
+
+1. **First add them to Users and Access (Chrome automation required):**
+   - Navigate to https://appstoreconnect.apple.com/access/users
+   - Click the blue "+" button (find it by searching for SVG elements ~25x25px near top-left)
    - Fill in First Name, Last Name, Email
    - Select role (Developer is good for testers - NOT Admin)
    - Click Next, select apps, click Invite
    - **IMPORTANT:** They must accept the email invitation BEFORE they appear in TestFlight
-2. **Then add them to the Internal Testing group:**
-   - Go to TestFlight > Internal Testing group > Testers tab > "+" or Add Testers
+2. **Then add them to the Internal Testing group (can use API or Chrome):**
+   - Via API: `asc groups add-tester "Group Name" email@example.com --app "App Name"`
+   - Via Chrome: Go to TestFlight > Internal Testing group > Testers tab > "+" or Add Testers
    - They will now appear in the list of available testers
    - Select them and click Add
 3. They receive TestFlight invite via email automatically
@@ -855,7 +1017,7 @@ The project file needs:
 3. PBXResourcesBuildPhase in the target's build phases
 4. Assets.xcassets in the HelloWorld group's children
 
-See the HelloWorld project at `~/code/ios-apps/HelloWorld/` for a working example.
+See the Sven project at `~/dispatch/apps/sven-ios/` for a working example.
 
 ### Generate Custom Icons with Gemini (nano-banana skill)
 
