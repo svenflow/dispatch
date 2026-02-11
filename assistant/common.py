@@ -197,12 +197,18 @@ def wrap_sms(
   # Add 🎤 prefix for Sven app messages
   display_prompt = f"🎤 {prompt}" if sven_app else prompt
 
+  # Determine the reply command based on backend
+  if source == "sven-app":
+    reply_cmd = f'~/.claude/skills/sven-app/scripts/reply-sven "{chat_id}"'
+  else:
+    reply_cmd = '~/.claude/skills/sms-assistant/scripts/reply'
+
   return f"""
 ---{backend.label} FROM {contact_name} ({tier})---
 Chat ID: {chat_id}{reply_context}
 {display_prompt}
 ---END {backend.label}---
-**Important:** You are in a text message session. Communicate back with: ~/.claude/skills/sms-assistant/scripts/reply "message"
+**Important:** You are in a text message session. Communicate back with: {reply_cmd} "message"
 """
 
 

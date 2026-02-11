@@ -1,17 +1,116 @@
-#!/usr/bin/env bash
-# Send a message via Signal using the daemon socket
-# Usage: send-signal <phone> <message>
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
+"""
+send-signal - Send a Signal message to an individual contact
 
-set -e
+Usage:
+    send-signal <phone> <message>
 
-SOCKET="/tmp/signal-cli.sock"
-PHONE="${1:?Usage: send-signal <phone> <message>}"
-MESSAGE="${2:?Usage: send-signal <phone> <message>}"
+Example:
+    send-signal "+16175551234" "Hello!"
 
-# Strip backslash-escaped exclamation marks (Claude often does this incorrectly)
-MESSAGE="${MESSAGE//\\!/!}"
+Stores outgoing messages in ~/Library/Application Support/signal-cli/messages.db
+"""
 
-# Build JSON-RPC request with proper escaping via jq
-jq -cn --arg phone "$PHONE" --arg msg "$MESSAGE" \
-  '{"jsonrpc":"2.0","method":"send","id":1,"params":{"recipient":[$phone],"message":$msg}}' \
-  | nc -U "$SOCKET"
+import json
+import socket
+import sys
+import os
+from datetime import datetime
+from pathlib import Path
+
+SOCKET_PATH = "/tmp/signal-cli.sock"
+
+
+def send_via_socket(request: dict) -> dict:
+    """Send a JSON-RPC request via the signal-cli socket."""
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        sock.connect(SOCKET_PATH)
+        sock.sendall((json.dumps(request) + "\n").encode())
+
+        # Read response
+        response = b""
+        while True:
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            response += chunk
+            # Check if we got a complete JSON response
+            try:
+                return json.loads(response.decode())
+            except json.JSONDecodeError:
+                continue
+    finally:
+        sock.close()
+
+    return json.loads(response.decode()) if response else {}
+
+
+def store_outgoing_message(phone: str, message: str) -> bool:
+    """Store outgoing message in the database."""
+    try:
+        # Import from same directory
+        script_dir = Path(__file__).parent
+        sys.path.insert(0, str(script_dir))
+        from signal_db import SignalDB
+
+        db = SignalDB()
+        timestamp = int(datetime.now().timestamp() * 1000)
+
+        db.store_message(
+            timestamp=timestamp,
+            chat_id=phone,
+            sender="me",
+            text=message,
+            is_from_me=True,
+        )
+        return True
+    except Exception as e:
+        print(f"Warning: Failed to store message in DB: {e}", file=sys.stderr)
+        return False
+
+
+def main():
+    if len(sys.argv) < 3:
+        print("Usage: send-signal <phone> <message>", file=sys.stderr)
+        sys.exit(1)
+
+    phone = sys.argv[1]
+    message = sys.argv[2]
+
+    # Strip backslash-escaped exclamation marks (Claude often does this incorrectly)
+    message = message.replace("\\!", "!")
+
+    # Build JSON-RPC request
+    request = {
+        "jsonrpc": "2.0",
+        "method": "send",
+        "id": 1,
+        "params": {
+            "recipient": [phone],
+            "message": message
+        }
+    }
+
+    response = send_via_socket(request)
+
+    # Print response for debugging
+    print(json.dumps(response))
+
+    # Check for success
+    if "error" in response:
+        print(f"ERROR: {response['error'].get('message', 'Unknown error')}", file=sys.stderr)
+        sys.exit(1)
+
+    # Only store in database if send succeeded
+    store_outgoing_message(phone, message)
+
+    sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()

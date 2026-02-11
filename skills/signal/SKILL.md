@@ -36,7 +36,14 @@ tail -f /tmp/signal-cli.log
 ## Send Group Message
 
 ```bash
+# Text only
 ~/.claude/skills/signal/scripts/send-signal-group "base64-group-id" "Hello group!"
+
+# With file attachment
+~/.claude/skills/signal/scripts/send-signal-group "base64-group-id" "Check this out" --file /path/to/file.pdf
+
+# File only (no message)
+~/.claude/skills/signal/scripts/send-signal-group "base64-group-id" --file /path/to/image.png
 ```
 
 Group IDs are base64-encoded. Get them from signal-cli or the daemon logs.

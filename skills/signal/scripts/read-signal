@@ -1,0 +1,124 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
+"""
+read-signal - Read Signal message history from local database
+
+Usage:
+    read-signal --chat +16175551234              # Individual chat by phone
+    read-signal --chat xMuT...=                  # Group chat by group ID
+    read-signal --chat +16175551234 --limit 50   # Last 50 messages
+    read-signal --chat +16175551234 --since "2026-01-23 17:00:00"
+
+Messages are stored in ~/Library/Application Support/signal-cli/messages.db
+"""
+
+import argparse
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+# Add script directory to path for imports
+script_dir = Path(__file__).parent
+sys.path.insert(0, str(script_dir))
+
+from signal_db import SignalDB
+
+LOOKUP_SCRIPT = Path.home() / ".claude/skills/contacts/scripts/lookup_phone.scpt"
+
+# Cache for contact lookups (phone -> (name, tier))
+_contact_cache = {}
+
+
+def lookup_contact(phone: str) -> tuple:
+    """Look up contact name and tier by phone number. Results are cached."""
+    if not phone or not LOOKUP_SCRIPT.exists():
+        return None, None
+
+    # Check cache first
+    if phone in _contact_cache:
+        return _contact_cache[phone]
+
+    try:
+        result = subprocess.run(
+            ["osascript", str(LOOKUP_SCRIPT), phone],
+            capture_output=True, text=True, timeout=5
+        )
+        output = result.stdout.strip()
+        if output.startswith("FOUND|"):
+            parts = output.split("|")
+            # FOUND|Name|Phone|Tier
+            if len(parts) >= 4:
+                _contact_cache[phone] = (parts[1], parts[3])
+                return parts[1], parts[3]
+    except Exception:
+        pass
+
+    _contact_cache[phone] = (None, None)
+    return None, None
+
+
+def is_phone_number(identifier: str) -> bool:
+    """Check if identifier looks like a phone number."""
+    return identifier.startswith("+") or identifier.replace("-", "").replace(" ", "").isdigit()
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Read Signal message history",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  read-signal --chat +16175551234           # Individual chat by phone
+  read-signal --chat xMuT...=               # Group chat by group ID
+  read-signal --chat +16175551234 --limit 50
+  read-signal --chat +16175551234 --since "2026-01-23 17:00:00"
+"""
+    )
+    parser.add_argument("--chat", required=True, help="Chat identifier (phone number or group ID) - REQUIRED")
+    parser.add_argument("--since", help="Start time (YYYY-MM-DD HH:MM:SS)")
+    parser.add_argument("--until", help="End time (YYYY-MM-DD HH:MM:SS)")
+    parser.add_argument("--limit", type=int, default=20, help="Max messages to return (default: 20)")
+    args = parser.parse_args()
+
+    # Print header with chat info
+    if is_phone_number(args.chat):
+        contact_name, tier = lookup_contact(args.chat)
+        if contact_name:
+            print(f"# Signal Chat: {contact_name} | Tier: {tier} | ID: {args.chat}")
+        else:
+            print(f"# Signal Chat: {args.chat} (not in contacts)")
+    else:
+        print(f"# Signal Group Chat: {args.chat}")
+    print()
+
+    # Read from database
+    db = SignalDB()
+    messages = db.read_messages(
+        chat_id=args.chat,
+        limit=args.limit,
+        since=args.since,
+        until=args.until,
+    )
+
+    if not messages:
+        print("(no messages found)")
+        return
+
+    for msg in messages:
+        # Format sender - resolve phone to name if possible
+        sender = msg["phone"]
+        if sender != "me" and is_phone_number(sender):
+            name, _ = lookup_contact(sender)
+            if name:
+                sender = name
+
+        text = msg["text"].replace('\n', ' ') if msg["text"] else "(no text)"
+        print(f"{msg['timestamp']} | {sender} | {msg['direction']} | {text}")
+
+
+if __name__ == "__main__":
+    main()

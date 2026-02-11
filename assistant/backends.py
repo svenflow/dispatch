@@ -40,7 +40,7 @@ BACKENDS: dict[str, BackendConfig] = {
         registry_prefix="signal:",
         send_cmd='~/.claude/skills/signal/scripts/send-signal "{chat_id}"',
         send_group_cmd='~/.claude/skills/signal/scripts/send-signal-group "{chat_id}"',
-        history_cmd="",
+        history_cmd='~/.claude/skills/signal/scripts/read-signal --chat "{chat_id}" --limit {limit}',
     ),
     "test": BackendConfig(
         name="test",
@@ -50,6 +50,15 @@ BACKENDS: dict[str, BackendConfig] = {
         send_cmd='~/dispatch/tools/test-send "{chat_id}"',
         send_group_cmd='~/dispatch/tools/test-send "{chat_id}"',
         history_cmd='~/dispatch/tools/test-read --chat "{chat_id}" --limit {limit}',
+    ),
+    "sven-app": BackendConfig(
+        name="sven-app",
+        label="SVEN_APP",
+        session_suffix="-sven-app",
+        registry_prefix="sven-app:",
+        send_cmd='~/.claude/skills/sven-app/scripts/reply-sven "{chat_id}"',
+        send_group_cmd='~/.claude/skills/sven-app/scripts/reply-sven "{chat_id}"',
+        history_cmd="",
     ),
 }
 
