@@ -1,0 +1,351 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "requests>=2.31",
+# ]
+# ///
+"""
+parse-image - Parse screenshots into structured UI elements.
+
+Uses a lazy-started OmniParser server for fast subsequent calls.
+First call: ~12s (server boot + inference)
+Subsequent calls: ~3-4s (inference only)
+
+Usage:
+    parse-image <image>                    # Text output
+    parse-image <image> --json             # JSON output
+    parse-image <image> --output out.png   # Save annotated image
+    parse-image --status                   # Check server status
+    parse-image --stop                     # Stop the server
+"""
+
+import argparse
+import base64
+import json
+import os
+import signal
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+SERVER_PORT = 8765
+SERVER_HOST = "127.0.0.1"
+SERVER_URL = f"http://{SERVER_HOST}:{SERVER_PORT}"
+PID_FILE = "/tmp/omniparser-server.pid"
+LOG_FILE = "/tmp/omniparser-server.log"
+LOCK_FILE = "/tmp/omniparser-server.lock"
+SERVER_SCRIPT = Path(__file__).parent.parent / "server" / "omniparser_server.py"
+STARTUP_TIMEOUT = 120  # seconds
+
+
+def log(msg: str, verbose: bool = False):
+    """Print log message if verbose."""
+    if verbose:
+        print(f"[parse-image] {msg}", file=sys.stderr)
+
+
+def is_server_running() -> bool:
+    """Check if server is running and responsive."""
+    import requests
+    try:
+        r = requests.get(f"{SERVER_URL}/health", timeout=2)
+        return r.status_code == 200 and r.json().get("status") == "ready"
+    except:
+        return False
+
+
+def is_server_loading() -> bool:
+    """Check if server is loading (started but not ready)."""
+    import requests
+    try:
+        r = requests.get(f"{SERVER_URL}/health", timeout=2)
+        return r.status_code == 200 and r.json().get("status") == "loading"
+    except:
+        return False
+
+
+def get_server_status() -> dict:
+    """Get server status."""
+    import requests
+    try:
+        r = requests.get(f"{SERVER_URL}/health", timeout=2)
+        return r.json()
+    except Exception as e:
+        return {"status": "not_running", "error": str(e)}
+
+
+def is_pid_alive(pid: int) -> bool:
+    """Check if a process with given PID is running."""
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def cleanup_stale_pid():
+    """Remove stale PID file if process is dead."""
+    if os.path.exists(PID_FILE):
+        try:
+            with open(PID_FILE) as f:
+                pid = int(f.read().strip())
+            if not is_pid_alive(pid):
+                os.remove(PID_FILE)
+                log(f"Removed stale PID file (PID {pid} not running)")
+        except:
+            pass
+
+
+def acquire_lock() -> bool:
+    """Acquire startup lock to prevent race conditions."""
+    import fcntl
+    try:
+        lock_fd = open(LOCK_FILE, "w")
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return lock_fd
+    except (IOError, OSError):
+        return None
+
+
+def release_lock(lock_fd):
+    """Release startup lock."""
+    import fcntl
+    if lock_fd:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        lock_fd.close()
+
+
+def start_server(verbose: bool = False) -> bool:
+    """Start the OmniParser server in background."""
+    cleanup_stale_pid()
+
+    # Try to acquire lock
+    lock_fd = acquire_lock()
+    if not lock_fd:
+        log("Another process is starting the server, waiting...", verbose)
+        # Wait for other process to finish starting
+        for _ in range(STARTUP_TIMEOUT * 2):
+            time.sleep(0.5)
+            if is_server_running():
+                return True
+        return False
+
+    try:
+        # Double-check server isn't running
+        if is_server_running():
+            return True
+
+        log(f"Starting server from {SERVER_SCRIPT}...", verbose)
+
+        # Start server with nohup
+        with open(LOG_FILE, "w") as log_f:
+            subprocess.Popen(
+                ["uv", "run", str(SERVER_SCRIPT), "--port", str(SERVER_PORT)],
+                stdout=log_f,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+
+        # Wait for server to be ready
+        log("Waiting for server to be ready...", verbose)
+        start_time = time.time()
+        check_count = 0
+
+        while time.time() - start_time < STARTUP_TIMEOUT:
+            check_count += 1
+            if is_server_running():
+                elapsed = time.time() - start_time
+                log(f"Server ready in {elapsed:.1f}s", verbose)
+                return True
+            elif is_server_loading():
+                log(f"Server loading... (check {check_count})", verbose)
+            time.sleep(0.5)
+
+        # Timeout - check logs for error
+        print(f"Error: Server failed to start in {STARTUP_TIMEOUT}s", file=sys.stderr)
+        print(f"Check logs: {LOG_FILE}", file=sys.stderr)
+        return False
+
+    finally:
+        release_lock(lock_fd)
+
+
+def stop_server(verbose: bool = False) -> bool:
+    """Stop the OmniParser server."""
+    import requests
+
+    # Try graceful shutdown first
+    try:
+        log("Requesting graceful shutdown...", verbose)
+        requests.post(f"{SERVER_URL}/shutdown", timeout=5)
+        time.sleep(1)
+        if not is_server_running():
+            log("Server stopped gracefully", verbose)
+            return True
+    except:
+        pass
+
+    # Try SIGTERM via PID file
+    if os.path.exists(PID_FILE):
+        try:
+            with open(PID_FILE) as f:
+                pid = int(f.read().strip())
+            log(f"Sending SIGTERM to PID {pid}...", verbose)
+            os.kill(pid, signal.SIGTERM)
+            time.sleep(2)
+            if not is_pid_alive(pid):
+                log("Server stopped via SIGTERM", verbose)
+                return True
+            # Force kill
+            log(f"Sending SIGKILL to PID {pid}...", verbose)
+            os.kill(pid, signal.SIGKILL)
+            time.sleep(1)
+            return not is_pid_alive(pid)
+        except Exception as e:
+            log(f"Error stopping server: {e}", verbose)
+
+    cleanup_stale_pid()
+    return True
+
+
+def parse_image(image_path: str, no_caption: bool = False, verbose: bool = False) -> dict:
+    """Parse an image using the server."""
+    import requests
+
+    # Ensure server is running
+    if not is_server_running():
+        log("Server not running, starting...", verbose)
+        if not start_server(verbose):
+            return {"error": "Failed to start server"}
+
+    # Read and encode image
+    with open(image_path, "rb") as f:
+        image_data = f.read()
+
+    # Send request
+    log(f"Sending image ({len(image_data)} bytes)...", verbose)
+    start_time = time.time()
+
+    files = {"image": ("image.png", image_data, "image/png")}
+    data = {"no_caption": "true" if no_caption else "false"}
+
+    r = requests.post(f"{SERVER_URL}/parse", files=files, data=data, timeout=300)
+
+    elapsed = time.time() - start_time
+    log(f"Response received in {elapsed:.1f}s", verbose)
+
+    if r.status_code != 200:
+        return {"error": f"Server error: {r.text}"}
+
+    return r.json()
+
+
+def format_text_output(result: dict) -> str:
+    """Format result as human-readable text."""
+    if "error" in result:
+        return f"Error: {result['error']}"
+
+    lines = []
+    for elem in result.get("elements", []):
+        elem_type = "Text Box" if elem["type"] == "text" else "Icon Box"
+        content = elem["content"] or "(no caption)"
+        bbox = elem["bbox"]
+        center = elem["center_pixels"]
+        lines.append(f"{elem_type} {elem['id']}: {content}")
+        lines.append(f"  bbox: [{bbox[0]:.3f}, {bbox[1]:.3f}, {bbox[2]:.3f}, {bbox[3]:.3f}]")
+        lines.append(f"  center_pixels: [{center[0]}, {center[1]}]")
+
+    # Summary
+    lines.append("")
+    lines.append(f"Total elements: {result.get('element_count', len(result.get('elements', [])))}")
+    lines.append(f"Inference time: {result.get('inference_time_ms', 0)}ms")
+
+    return "\n".join(lines)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Parse screenshots into structured UI elements.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+    parse-image screenshot.png                    # Text output
+    parse-image screenshot.png --json             # JSON output
+    parse-image screenshot.png --output ann.png   # Save annotated image
+    parse-image --status                          # Check server status
+    parse-image --stop                            # Stop the server
+        """
+    )
+    parser.add_argument("image", nargs="?", help="Path to image file")
+    parser.add_argument("--json", action="store_true", help="Output as JSON")
+    parser.add_argument("--output", "-o", help="Save annotated image to path")
+    parser.add_argument("--no-caption", action="store_true", help="Skip icon captioning (faster)")
+    parser.add_argument("--status", action="store_true", help="Check server status")
+    parser.add_argument("--stop", action="store_true", help="Stop the server")
+    parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
+
+    args = parser.parse_args()
+
+    # Handle status command
+    if args.status:
+        status = get_server_status()
+        if args.json:
+            print(json.dumps(status, indent=2))
+        else:
+            print(f"Status: {status.get('status', 'unknown')}")
+            if status.get("status") == "ready":
+                print(f"Requests served: {status.get('requests_served', 0)}")
+                print(f"Start time: {status.get('start_time', 'unknown')}")
+                print(f"Device: {status.get('device', 'unknown')}")
+        return 0
+
+    # Handle stop command
+    if args.stop:
+        if stop_server(args.verbose):
+            print("Server stopped")
+            return 0
+        else:
+            print("Failed to stop server", file=sys.stderr)
+            return 1
+
+    # Require image for parse
+    if not args.image:
+        parser.print_help()
+        return 1
+
+    # Validate image exists
+    if not os.path.exists(args.image):
+        print(f"Error: Image not found: {args.image}", file=sys.stderr)
+        return 1
+
+    # Parse image
+    result = parse_image(args.image, no_caption=args.no_caption, verbose=args.verbose)
+
+    if "error" in result:
+        print(f"Error: {result['error']}", file=sys.stderr)
+        return 1
+
+    # Save annotated image if requested
+    if args.output:
+        annotated_b64 = result.get("annotated_image")
+        if annotated_b64:
+            with open(args.output, "wb") as f:
+                f.write(base64.b64decode(annotated_b64))
+            log(f"Annotated image saved to {args.output}", args.verbose)
+
+    # Output result
+    if args.json:
+        # Remove base64 image from JSON output if saving to file
+        if args.output:
+            result.pop("annotated_image", None)
+        print(json.dumps(result, indent=2))
+    else:
+        print(format_text_output(result))
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
