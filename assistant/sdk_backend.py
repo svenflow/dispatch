@@ -319,9 +319,13 @@ class SDKBackend:
         msg_body = format_message_body(text, attachments, audio_transcription)
 
         # Prefix chat_id for registry storage (e.g. signal:+1234567890)
+        # But don't add prefix if chat_id already has it
         from assistant.backends import get_backend
         backend = get_backend(source)
-        registry_chat_id = f"{backend.registry_prefix}{chat_id}" if backend.registry_prefix else chat_id
+        if backend.registry_prefix and not chat_id.startswith(backend.registry_prefix):
+            registry_chat_id = f"{backend.registry_prefix}{chat_id}"
+        else:
+            registry_chat_id = chat_id
         normalized = normalize_chat_id(registry_chat_id)
 
         # Only hold the lock for session creation check + creation.

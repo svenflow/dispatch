@@ -60,8 +60,24 @@ from assistant.common import (
 )
 from assistant.sdk_backend import SDKBackend, SessionRegistry
 
+# Import SignalDB for message persistence (lazy import to avoid startup errors)
+_signal_db = None
+def get_signal_db():
+    """Lazy-load SignalDB to avoid import errors if signal skill not set up."""
+    global _signal_db
+    if _signal_db is None:
+        try:
+            sys.path.insert(0, str(Path.home() / ".claude/skills/signal/scripts"))
+            from signal_db import SignalDB  # type: ignore[import-not-found]
+            _signal_db = SignalDB()
+        except Exception as e:
+            logging.getLogger(__name__).warning(f"Failed to load SignalDB: {e}")
+            return None
+    return _signal_db
+
 # Paths
 STATE_FILE = STATE_DIR / "last_rowid.txt"
+CONSOLIDATION_STATE_FILE = STATE_DIR / "last_consolidation_date.txt"
 
 # Search daemon config - lives in dispatch/services/memory-search
 SEARCH_DAEMON_DIR = ASSISTANT_DIR / "services" / "memory-search"
@@ -559,6 +575,23 @@ class SignalListener(threading.Thread):
 
             log.info(f"SignalListener: queued message from {source_number}: {body[:50]}...")
             self.message_queue.put(msg)
+
+            # Store in database for history
+            try:
+                db = get_signal_db()
+                if db and not db.message_exists(timestamp, msg["chat_identifier"], source_number):
+                    db.store_message(
+                        timestamp=timestamp,
+                        chat_id=msg["chat_identifier"],
+                        sender=source_number,
+                        text=body,
+                        is_from_me=False,
+                        attachments=msg["attachments"] if msg["attachments"] else None,
+                        group_name=group_info.get("groupName"),
+                    )
+                    log.debug(f"SignalListener: stored message in DB")
+            except Exception as e:
+                log.warning(f"SignalListener: failed to store message in DB: {e}")
 
         except json.JSONDecodeError as e:
             log.debug(f"SignalListener: invalid JSON: {e}")
@@ -1583,23 +1616,31 @@ You have 15 minutes. Work efficiently.
         Calls the consolidation prototype which extracts personal facts
         from conversations and writes them to Contacts.app notes.
         See ~/dispatch/prototypes/memory-consolidation/PLAN.md for details.
+
+        Uses asyncio subprocess to avoid blocking the event loop (which would
+        make the daemon unresponsive to IPC and trigger false watchdog alerts).
         """
-        import subprocess
         consolidate_script = HOME / "dispatch/prototypes/memory-consolidation/consolidate.py"
 
         log.info("Running nightly memory consolidation to Contacts.app...")
         try:
-            result = subprocess.run(
-                ["uv", "run", str(consolidate_script), "--all"],
-                capture_output=True,
-                text=True,
-                timeout=3600  # 1 hour max
+            proc = await asyncio.create_subprocess_exec(
+                "uv", "run", str(consolidate_script), "--all",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
-            log.info(f"Consolidation complete: {result.stdout[-500:] if result.stdout else 'no output'}")
-            if result.returncode != 0:
-                log.error(f"Consolidation errors: {result.stderr[-500:] if result.stderr else 'none'}")
-        except subprocess.TimeoutExpired:
-            log.error("Consolidation timed out after 1 hour")
+            try:
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=3600)
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+                log.error("Consolidation timed out after 1 hour")
+                return
+            stdout_str = stdout.decode() if stdout else ""
+            stderr_str = stderr.decode() if stderr else ""
+            log.info(f"Consolidation complete: {stdout_str[-500:] if stdout_str else 'no output'}")
+            if proc.returncode != 0:
+                log.error(f"Consolidation errors: {stderr_str[-500:] if stderr_str else 'none'}")
         except Exception as e:
             log.error(f"Consolidation failed: {e}")
 
@@ -1652,7 +1693,14 @@ You have 15 minutes. Work efficiently.
         REMINDER_CHECK_INTERVAL = 5  # Check reminders every 5 seconds
 
         # Track last consolidation run (nightly memory processing)
+        # Persist to file so daemon restarts don't cause double-runs
         last_consolidation_date = None
+        if CONSOLIDATION_STATE_FILE.exists():
+            try:
+                date_str = CONSOLIDATION_STATE_FILE.read_text().strip()
+                last_consolidation_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+            except (ValueError, OSError):
+                pass  # Invalid file, will run consolidation
         CONSOLIDATION_HOUR = 2  # Run at 2am
 
         self._shutdown_flag = False
@@ -1777,6 +1825,8 @@ You have 15 minutes. Work efficiently.
                     lifecycle_log.info(f"CONSOLIDATION | START | date={today}")
                     await self._run_nightly_consolidation()
                     last_consolidation_date = today
+                    # Persist to file so daemon restarts don't cause double-runs
+                    CONSOLIDATION_STATE_FILE.write_text(today.strftime("%Y-%m-%d"))
                     lifecycle_log.info(f"CONSOLIDATION | COMPLETE | date={today}")
 
                 await asyncio.sleep(POLL_INTERVAL)

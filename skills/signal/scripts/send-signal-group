@@ -1,19 +1,160 @@
-#!/usr/bin/env bash
-# Send a message to a Signal group using the daemon socket
-# Usage: send-signal-group <group_id> <message>
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
+"""
+send-signal-group - Send Signal messages to groups
 
-set -e
+Usage:
+    send-signal-group <group_id> "message"              # Send text
+    send-signal-group <group_id> --file /path/to.pdf    # Send file
+    send-signal-group <group_id> "caption" --file /path/to.pdf  # Send both
 
-SOCKET="/tmp/signal-cli.sock"
-GROUP_ID="${1:?Usage: send-signal-group <group_id> <message>}"
-MESSAGE="${2:?Usage: send-signal-group <group_id> <message>}"
+Group ID:
+    Base64-encoded group ID from signal-cli
 
-# Strip backslash-escaped exclamation marks (Claude often does this incorrectly)
-MESSAGE="${MESSAGE//\\!/!}"
+Examples:
+    send-signal-group "xMuT...=" "Hello group!"
+    send-signal-group "xMuT...=" --file /tmp/photo.png
+    send-signal-group "xMuT...=" "Check out this PDF" --file /tmp/doc.pdf
 
-# Build JSON-RPC request with proper escaping via jq and account parameter
-REQUEST=$(jq -c -n --arg gid "$GROUP_ID" --arg msg "$MESSAGE" \
-  '{"jsonrpc":"2.0","method":"send","id":1,"params":{"groupId":$gid,"message":$msg}}')
+Stores outgoing messages in ~/Library/Application Support/signal-cli/messages.db
+"""
 
-# Send via socket and get response
-printf '%s\n' "$REQUEST" | nc -U "$SOCKET"
+import json
+import socket
+import sys
+import os
+import argparse
+from datetime import datetime
+from pathlib import Path
+
+
+def send_via_socket(request: dict) -> dict:
+    """Send a JSON-RPC request via the signal-cli socket."""
+    sock_path = "/tmp/signal-cli.sock"
+
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        sock.connect(sock_path)
+        sock.sendall((json.dumps(request) + "\n").encode())
+
+        # Read response
+        response = b""
+        while True:
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            response += chunk
+            # Check if we got a complete JSON response
+            try:
+                return json.loads(response.decode())
+            except json.JSONDecodeError:
+                continue
+    finally:
+        sock.close()
+
+    return json.loads(response.decode()) if response else {}
+
+
+def send_group_message(group_id: str, message: str = None, attachment: str = None) -> bool:
+    """Send a message and/or attachment to a Signal group."""
+    params = {"groupId": group_id}
+
+    if message:
+        params["message"] = message
+    else:
+        # Signal requires a message, send empty if none provided
+        params["message"] = ""
+
+    if attachment:
+        params["attachments"] = [attachment]
+
+    request = {
+        "jsonrpc": "2.0",
+        "method": "send",
+        "id": 1,
+        "params": params
+    }
+
+    response = send_via_socket(request)
+
+    # Print response for debugging
+    print(json.dumps(response))
+
+    # Check for success
+    if "error" in response:
+        print(f"ERROR: {response['error'].get('message', 'Unknown error')}", file=sys.stderr)
+        return False
+
+    if "result" in response:
+        results = response.get("result", {}).get("results", [])
+        all_success = all(r.get("type") == "SUCCESS" for r in results)
+        return all_success
+
+    return False
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Send Signal group message",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  send-signal-group "groupId=" "Hello!"              # Text only
+  send-signal-group "groupId=" --file photo.png      # File only
+  send-signal-group "groupId=" "Caption" --file doc.pdf  # Both
+"""
+    )
+    parser.add_argument("group_id", help="Base64-encoded group ID")
+    parser.add_argument("message", nargs="?", default="", help="Message text (optional if sending file)")
+    parser.add_argument("--file", "-f", dest="attachment", help="Path to file to send")
+    parser.add_argument("--attachment", "-a", dest="attachment", help="Path to file to send (alias for --file)")
+
+    args = parser.parse_args()
+
+    # Validate inputs
+    if not args.message and not args.attachment:
+        parser.error("Must provide either a message or --file/--attachment")
+
+    if args.attachment and not os.path.exists(args.attachment):
+        print(f"ERROR: File not found: {args.attachment}", file=sys.stderr)
+        sys.exit(1)
+
+    # Convert to absolute path for signal-cli
+    attachment_path = None
+    if args.attachment:
+        attachment_path = os.path.abspath(args.attachment)
+
+    # Strip escaped exclamation marks (Claude often does this incorrectly)
+    message = args.message.replace("\\!", "!") if args.message else None
+
+    success = send_group_message(args.group_id, message, attachment_path)
+
+    # Only store outgoing message in database if send succeeded
+    if success and message:
+        try:
+            script_dir = Path(__file__).parent
+            sys.path.insert(0, str(script_dir))
+            from signal_db import SignalDB
+
+            db = SignalDB()
+            timestamp = int(datetime.now().timestamp() * 1000)
+
+            db.store_message(
+                timestamp=timestamp,
+                chat_id=args.group_id,
+                sender="me",
+                text=message,
+                is_from_me=True,
+                group_name=None,  # We don't know the group name from here
+            )
+        except Exception as e:
+            print(f"Warning: Failed to store message in DB: {e}", file=sys.stderr)
+
+    sys.exit(0 if success else 1)
+
+
+if __name__ == "__main__":
+    main()
