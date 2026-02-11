@@ -115,8 +115,19 @@ xcrun simctl io booted screenshot ~/Desktop/sim-test.png
 
 ## Project Structure
 
-All Dispatch iOS apps live in `~/code/ios-apps/`:
+iOS apps live in two locations:
 
+**Sven app (consolidated into dispatch repo):**
+```
+~/dispatch/apps/sven-ios/
+├── Sven.xcodeproj/
+├── Sven/
+│   ├── SvenApp.swift
+│   └── ...
+└── build/
+```
+
+**Other iOS apps:**
 ```
 ~/code/ios-apps/
 ├── AppName/
@@ -128,7 +139,7 @@ All Dispatch iOS apps live in `~/code/ios-apps/`:
 │       └── Assets.xcassets/      # App icons, colors
 ```
 
-**Bundle ID convention:** `com.dispatch.AppName`
+**Bundle ID convention:** `com.sven.AppName`
 
 ## Skill Reference
 
