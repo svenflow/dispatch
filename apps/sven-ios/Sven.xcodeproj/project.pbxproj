@@ -10,7 +10,7 @@
 		A1000001 /* SvenApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002; };
 		A1000003 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000004; };
 		A1000020 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A1000021; };
-		A2000001 /* HelloWorldUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000002; };
+		A2000001 /* SvenUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000002; };
 		A3000001 /* AudioRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000002; };
 		A3000003 /* SvenAPIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000004; };
 		A3000005 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000006; };
@@ -25,17 +25,17 @@
 			containerPortal = A100000D /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = A100000A;
-			remoteInfo = HelloWorld;
+			remoteInfo = Sven;
 		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		A1000002 /* SvenApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SvenApp.swift; sourceTree = "<group>"; };
 		A1000004 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
-		A1000005 /* HelloWorld.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = HelloWorld.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A1000005 /* Sven.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Sven.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A1000021 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		A2000002 /* HelloWorldUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HelloWorldUITests.swift; sourceTree = "<group>"; };
-		A2000004 /* HelloWorldUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = HelloWorldUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A2000002 /* SvenUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SvenUITests.swift; sourceTree = "<group>"; };
+		A2000004 /* SvenUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SvenUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A3000002 /* AudioRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioRecorder.swift; sourceTree = "<group>"; };
 		A3000004 /* SvenAPIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SvenAPIClient.swift; sourceTree = "<group>"; };
 		A3000006 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
@@ -76,16 +76,16 @@
 		A1000007 = {
 			isa = PBXGroup;
 			children = (
-				A1000008 /* HelloWorld */,
-				A2000006 /* HelloWorldUITests */,
+				A1000008 /* Sven */,
+				A2000006 /* SvenUITests */,
 				A1000009 /* Products */,
 			);
 			sourceTree = "<group>";
 		};
-		A1000008 /* HelloWorld */ = {
+		A1000008 /* Sven */ = {
 			isa = PBXGroup;
 			children = (
-				A1000002 /* HelloWorldApp.swift */,
+				A1000002 /* SvenApp.swift */,
 				A1000004 /* ContentView.swift */,
 				A3000002 /* AudioRecorder.swift */,
 				A3000004 /* SvenAPIClient.swift */,
@@ -101,24 +101,24 @@
 		A1000009 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				A1000005 /* HelloWorld.app */,
-				A2000004 /* HelloWorldUITests.xctest */,
+				A1000005 /* Sven.app */,
+				A2000004 /* SvenUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
 		};
-		A2000006 /* HelloWorldUITests */ = {
+		A2000006 /* SvenUITests */ = {
 			isa = PBXGroup;
 			children = (
-				A2000002 /* HelloWorldUITests.swift */,
+				A2000002 /* SvenUITests.swift */,
 			);
-			path = HelloWorldUITests;
+			path = SvenUITests;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		A100000A /* HelloWorld */ = {
+		A100000A /* Sven */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = A100000B;
 			buildPhases = (
@@ -130,12 +130,12 @@
 			);
 			dependencies = (
 			);
-			name = HelloWorld;
-			productName = HelloWorld;
+			name = Sven;
+			productName = Sven;
 			productReference = A1000005;
 			productType = "com.apple.product-type.application";
 		};
-		A2000007 /* HelloWorldUITests */ = {
+		A2000007 /* SvenUITests */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = A2000008;
 			buildPhases = (
@@ -147,8 +147,8 @@
 			dependencies = (
 				A200000A /* PBXTargetDependency */,
 			);
-			name = HelloWorldUITests;
-			productName = HelloWorldUITests;
+			name = SvenUITests;
+			productName = SvenUITests;
 			productReference = A2000004;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
@@ -175,8 +175,8 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				A100000A /* HelloWorld */,
-				A2000007 /* HelloWorldUITests */,
+				A100000A /* Sven */,
+				A2000007 /* SvenUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -201,7 +201,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A2000001 /* HelloWorldUITests.swift in Sources */,
+				A2000001 /* SvenUITests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -210,7 +210,7 @@
 /* Begin PBXTargetDependency section */
 		A200000A /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			target = A100000A /* HelloWorld */;
+			target = A100000A /* Sven */;
 			targetProxy = A2000003 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
@@ -395,7 +395,7 @@
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_TARGET_NAME = HelloWorld;
+				TEST_TARGET_NAME = Sven;
 			};
 			name = Debug;
 		};
@@ -415,14 +415,14 @@
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_TARGET_NAME = HelloWorld;
+				TEST_TARGET_NAME = Sven;
 			};
 			name = Release;
 		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		A100000B /* Build configuration list for PBXNativeTarget "HelloWorld" */ = {
+		A100000B /* Build configuration list for PBXNativeTarget "Sven" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				A100000F /* Debug */,
@@ -431,7 +431,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		A100000E /* Build configuration list for PBXProject "HelloWorld" */ = {
+		A100000E /* Build configuration list for PBXProject "Sven" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				A1000011 /* Debug */,
@@ -440,7 +440,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		A2000008 /* Build configuration list for PBXNativeTarget "HelloWorldUITests" */ = {
+		A2000008 /* Build configuration list for PBXNativeTarget "SvenUITests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				A200000B /* Debug */,
