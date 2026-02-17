@@ -175,6 +175,16 @@ class SDKBackend:
             if chat_id in self.sessions and self.sessions[chat_id].is_alive():
                 return self.sessions[chat_id]
 
+            # Kill zombie session: if session exists but is not alive, its subprocess
+            # may still be running (buffer overflow crash leaves orphan PIDs).
+            # Must kill it before creating a new session to prevent duplicates.
+            if chat_id in self.sessions:
+                old_session = self.sessions.pop(chat_id)
+                lifecycle_log.info(
+                    f"ZOMBIE_CLEANUP | {chat_id} | Killing orphan subprocess before recreate"
+                )
+                await old_session._kill_subprocess()
+
             session_name = get_session_name(chat_id, source=source)
             transcript_dir = ensure_transcript_dir(session_name)
 
@@ -235,6 +245,16 @@ class SDKBackend:
         """
         if chat_id in self.sessions and self.sessions[chat_id].is_alive():
             return self.sessions[chat_id]
+
+        # Kill zombie session: if session exists but is not alive, its subprocess
+        # may still be running (buffer overflow crash leaves orphan PIDs).
+        # Must kill it before creating a new session to prevent duplicates.
+        if chat_id in self.sessions:
+            old_session = self.sessions.pop(chat_id)
+            lifecycle_log.info(
+                f"ZOMBIE_CLEANUP | {chat_id} | Killing orphan subprocess before recreate"
+            )
+            await old_session._kill_subprocess()
 
         session_name = get_session_name(chat_id, source=source)
         transcript_dir = ensure_transcript_dir(session_name)
@@ -374,6 +394,15 @@ class SDKBackend:
             if chat_id in self.sessions and self.sessions[chat_id].is_alive():
                 return self.sessions[chat_id]
 
+            # Kill zombie session: if session exists but is not alive, its subprocess
+            # may still be running (buffer overflow crash leaves orphan PIDs).
+            if chat_id in self.sessions:
+                old_session = self.sessions.pop(chat_id)
+                lifecycle_log.info(
+                    f"ZOMBIE_CLEANUP | {chat_id} | Killing orphan subprocess before recreate"
+                )
+                await old_session._kill_subprocess()
+
             # Resolve participants from chat.db if not provided (only works for iMessage)
             if not participants:
                 from assistant.backends import get_backend
@@ -424,6 +453,15 @@ class SDKBackend:
         """Create a group session without acquiring the lock (caller must hold it)."""
         if chat_id in self.sessions and self.sessions[chat_id].is_alive():
             return self.sessions[chat_id]
+
+        # Kill zombie session: if session exists but is not alive, its subprocess
+        # may still be running (buffer overflow crash leaves orphan PIDs).
+        if chat_id in self.sessions:
+            old_session = self.sessions.pop(chat_id)
+            lifecycle_log.info(
+                f"ZOMBIE_CLEANUP | {chat_id} | Killing orphan subprocess before recreate"
+            )
+            await old_session._kill_subprocess()
 
         # Resolve participants from chat.db if not provided (only works for iMessage)
         if not participants:
@@ -521,6 +559,15 @@ class SDKBackend:
             if bg_id in self.sessions and self.sessions[bg_id].is_alive():
                 return self.sessions[bg_id]
 
+            # Kill zombie session: if session exists but is not alive, its subprocess
+            # may still be running (buffer overflow crash leaves orphan PIDs).
+            if bg_id in self.sessions:
+                old_session = self.sessions.pop(bg_id)
+                lifecycle_log.info(
+                    f"ZOMBIE_CLEANUP | {bg_id} | Killing orphan subprocess before recreate"
+                )
+                await old_session._kill_subprocess()
+
             fg_session_name = get_session_name(chat_id, source=source)
             transcript_dir = ensure_transcript_dir(fg_session_name)
 
@@ -608,6 +655,15 @@ Start now!
         async with self._lock:
             if MASTER_SESSION in self.sessions and self.sessions[MASTER_SESSION].is_alive():
                 return self.sessions[MASTER_SESSION]
+
+            # Kill zombie session: if session exists but is not alive, its subprocess
+            # may still be running (buffer overflow crash leaves orphan PIDs).
+            if MASTER_SESSION in self.sessions:
+                old_session = self.sessions.pop(MASTER_SESSION)
+                lifecycle_log.info(
+                    f"ZOMBIE_CLEANUP | {MASTER_SESSION} | Killing orphan subprocess before recreate"
+                )
+                await old_session._kill_subprocess()
 
             MASTER_TRANSCRIPT_DIR.mkdir(parents=True, exist_ok=True)
             claude_symlink = MASTER_TRANSCRIPT_DIR / ".claude"
@@ -781,6 +837,9 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
         for known unrecoverable error patterns (400 API errors, image limits,
         context overflow, etc.). Returns list of chat_ids that were restarted.
 
+        Also restarts dead sessions (e.g., buffer overflow crashes that set
+        running=False but weren't auto-restarted).
+
         Runs every 60 seconds.
         """
         now = datetime.now()
@@ -796,9 +855,28 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
         for chat_id, session in list(self.sessions.items()):
             if chat_id.endswith("-bg") or chat_id == MASTER_SESSION:
                 continue
-            if not session.is_alive():
-                continue
             if chat_id in self._recently_healed:
+                continue
+
+            # Restart dead sessions (buffer overflow, receiver crash, etc.)
+            if not session.is_alive():
+                session_name = get_session_name(session.chat_id, session.source)
+                lifecycle_log.info(
+                    f"FAST_HEAL | {session_name} | DEAD_SESSION | Restarting"
+                )
+                self._recently_healed[chat_id] = now
+
+                async def _isolated_restart(cid: str):
+                    try:
+                        await self.restart_session(cid)
+                    except Exception as e:
+                        log.error(f"Fast heal restart failed for {cid}: {e}")
+
+                asyncio.create_task(
+                    _isolated_restart(chat_id),
+                    name=f"fast-heal-dead-{chat_id}",
+                )
+                restarted.append(chat_id)
                 continue
 
             # Only scan entries since last check for this session
@@ -1021,19 +1099,21 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
     ) -> str:
         """Build the startup prompt for an individual session.
 
-        Auto-injects SOUL.md, contact notes, and memory summary for faster startup.
+        Auto-injects SOUL.md, contact notes, memory summary, and chat context for faster startup.
         """
         # Fetch all context in parallel (async, non-blocking)
-        soul_content, contact_notes, memory_summary = await asyncio.gather(
+        soul_content, contact_notes, memory_summary, chat_context = await asyncio.gather(
             self._get_soul_content(),
             self._get_contact_notes(contact_name),
             self._get_memory_summary(session_name),
+            self._get_chat_context(session_name),
         )
 
         # Build sections with clear labels
         soul_section = f"\n## My Identity (from SOUL.md)\n\n{soul_content}\n" if soul_content else ""
         notes_section = f"\n## About {contact_name} (from Contacts.app)\n\n{contact_notes}\n" if contact_notes else ""
         memory_section = f"\n## About {contact_name} (from memories)\n\n{memory_summary}\n" if memory_summary else ""
+        context_section = f"\n## Current Conversation Context\n\n{chat_context}\n" if chat_context else ""
 
         # Determine send command and history based on source
         from assistant.backends import get_backend
@@ -1047,7 +1127,7 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
 
         return f"""SESSION START - INDIVIDUAL {backend.label} CHAT: {contact_name} ({tier} tier)
 Chat ID: {chat_id}
-{soul_section}{notes_section}{memory_section}
+{soul_section}{notes_section}{memory_section}{context_section}
 {history_note}
 
 After reading, act based on what you see:
@@ -1102,18 +1182,19 @@ Quick reference:
                 tier = "unknown"
             participant_lines.append(f"- {participant} ({tier})")
 
-        # Fetch ALL context in parallel: SOUL + notes for each + memory for each
-        async_tasks = [self._get_soul_content()]
+        # Fetch ALL context in parallel: SOUL + chat context + notes for each + memory for each
+        async_tasks = [self._get_soul_content(), self._get_chat_context(session_name)]
         async_tasks.extend(self._get_contact_notes(p) for p in participants_list)
         async_tasks.extend(self._get_memory_summary(p) for p in participants_list)
 
         results = await asyncio.gather(*async_tasks) if async_tasks else []
 
-        # Unpack results: first is soul, then N notes, then N memories
+        # Unpack results: soul, chat_context, then N notes, then N memories
         soul_content = results[0] if results else ""
+        chat_context = results[1] if len(results) > 1 else ""
         n_participants = len(participants_list)
-        notes_results = results[1:1+n_participants] if n_participants else []
-        memory_results = results[1+n_participants:] if n_participants else []
+        notes_results = results[2:2+n_participants] if n_participants else []
+        memory_results = results[2+n_participants:] if n_participants else []
 
         # Build sections with clear labels
         soul_section = f"\n## My Identity (from SOUL.md)\n\n{soul_content}\n" if soul_content else ""
@@ -1132,7 +1213,8 @@ Quick reference:
                 participant_context_parts.append(part)
 
         participants_section = "\n".join(participant_lines) if participant_lines else "- (unknown participants)"
-        context_section = "\n".join(participant_context_parts) if participant_context_parts else ""
+        participant_context_section = "\n".join(participant_context_parts) if participant_context_parts else ""
+        chat_context_section = f"\n## Current Conversation Context\n\n{chat_context}\n" if chat_context else ""
 
         shown_name = display_name or chat_id
 
@@ -1150,8 +1232,7 @@ Chat ID: {chat_id}
 Participants:
 {participants_section}
 {soul_section}
-{context_section}
-
+{participant_context_section}{chat_context_section}
 **FIRST**: Check conversation history: {history_cmd}
 
 After reading, act based on what you see - respond to unanswered messages, continue work in progress, or wait silently.
@@ -1298,4 +1379,27 @@ All other system documentation applies normally (see ~/.claude/CLAUDE.md via sym
                 return output
         except Exception as e:
             log.warning(f"Could not load contact notes for {contact_name}: {e}")
+        return ""
+
+    async def _get_chat_context(self, session_name: str) -> str:
+        """Load CONTEXT.md for a chat session (async, non-blocking).
+
+        Returns conversation context (ongoing projects, pending tasks, recent topics)
+        that was extracted by the nightly consolidation job.
+        """
+        try:
+            # session_name format: imessage/_16175969496 or imessage/ab3876ca...
+            parts = session_name.split("/", 1)
+            if len(parts) == 2:
+                backend, chat_id = parts
+                context_file = HOME / "transcripts" / backend / chat_id / "CONTEXT.md"
+                if context_file.exists():
+                    content = await asyncio.get_event_loop().run_in_executor(
+                        None, context_file.read_text
+                    )
+                    # Skip empty or just-header files
+                    if content and "## Ongoing" in content or "## Pending" in content or "## Recent Topics" in content:
+                        return content
+        except Exception as e:
+            log.warning(f"Could not load CONTEXT.md for {session_name}: {e}")
         return ""
