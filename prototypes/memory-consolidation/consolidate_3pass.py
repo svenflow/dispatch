@@ -43,6 +43,29 @@ CONTACTS_CLI = HOME / ".claude/skills/contacts/scripts/contacts"
 READ_SMS_CLI = HOME / ".claude/skills/sms-assistant/scripts/read-sms"
 EXCLUSIONS_FILE = MEMORIES_DIR / "exclusions.txt"
 
+# ============================================================
+# CRITICAL: PROPOSAL LEAK PROTECTION
+# ============================================================
+# Hardcoded protection against leaking Nikhil's proposal to Caroline.
+# This is a safety net - exclusions.txt should catch these too, but
+# this hardcoded check ensures nothing slips through.
+
+PROPOSAL_LEAK_PATTERNS = [
+    "proposal", "propose", "engagement", "ring", "marry",
+    "museum of science", "planetarium", "may 9", "may 9th",
+    "surprise", "secret", "don't tell", "top secret",
+]
+
+def is_proposal_leak_risk(text: str) -> bool:
+    """Check if text contains proposal-related content."""
+    text_lower = text.lower()
+    return any(pattern in text_lower for pattern in PROPOSAL_LEAK_PATTERNS)
+
+def is_caroline(contact_name: str) -> bool:
+    """Check if this contact is Caroline."""
+    name_lower = contact_name.lower() if contact_name else ""
+    return "caroline" in name_lower or "caro" in name_lower
+
 # Format markers
 MANAGED_HEADER = "<!-- CLAUDE-MANAGED:v1 -->"
 LAST_UPDATED_PATTERN = r"\*Last updated: (\d{4}-\d{2}-\d{2} \d{2}:\d{2})\*"
@@ -554,6 +577,18 @@ Verify each quote exists and fact is accurate."""
             print(f"  [EXCLUSIONS] Filtered out {len(excluded_facts)} facts:")
             for fact in excluded_facts:
                 print(f"    ✗ {fact}")
+
+    # CRITICAL: Extra protection for Caroline - never leak proposal info
+    if is_caroline(contact_name):
+        log(f"⚠️ Processing Caroline's facts - applying proposal leak protection")
+        proposal_leaks = [f for f in final_facts if is_proposal_leak_risk(f)]
+        final_facts = [f for f in final_facts if not is_proposal_leak_risk(f)]
+        if proposal_leaks:
+            log(f"⚠️ BLOCKED {len(proposal_leaks)} proposal-related facts for Caroline")
+            if verbose:
+                print(f"  [PROPOSAL PROTECTION] Blocked {len(proposal_leaks)} facts:")
+                for fact in proposal_leaks:
+                    print(f"    ⛔ {fact}")
 
     if not final_facts:
         result["status"] = "skipped"

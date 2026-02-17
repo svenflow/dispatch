@@ -43,6 +43,29 @@ MANAGED_HEADER = "<!-- CLAUDE-MANAGED:v1 -->"
 MAX_CONTEXT_SIZE = 2048  # 2KB max
 STALE_DAYS = 14  # Prune items not mentioned in 14+ days
 
+# ============================================================
+# CRITICAL: PROPOSAL LEAK PROTECTION
+# ============================================================
+# Hardcoded protection against leaking Nikhil's proposal to Caroline.
+# This is a safety net - exclusions.txt should catch these too, but
+# this hardcoded check ensures nothing slips through.
+
+PROPOSAL_LEAK_PATTERNS = [
+    "proposal", "propose", "engagement", "ring", "marry",
+    "museum of science", "planetarium", "may 9", "may 9th",
+    "surprise", "secret", "don't tell", "top secret",
+]
+
+def is_proposal_leak_risk(text: str) -> bool:
+    """Check if text contains proposal-related content."""
+    text_lower = text.lower()
+    return any(pattern in text_lower for pattern in PROPOSAL_LEAK_PATTERNS)
+
+def is_caroline_chat(contact_name: str, chat_id: str) -> bool:
+    """Check if this chat involves Caroline."""
+    name_lower = contact_name.lower() if contact_name else ""
+    return "caroline" in name_lower or "caro" in name_lower
+
 
 # ============================================================
 # PASS A: SUGGESTER
@@ -552,6 +575,16 @@ Verify quotes and merge with existing context."""
 
     # Prune stale items
     final_ongoing = prune_stale_items(final_ongoing)
+
+    # CRITICAL: Filter out proposal-related content if this is Caroline's chat
+    if is_caroline_chat(contact_name, chat_id):
+        log(f"⚠️ Caroline's chat - filtering proposal-related content")
+        for category_list in [final_ongoing, final_pending, final_topics, final_preferences]:
+            original_len = len(category_list)
+            category_list[:] = [item for item in category_list if not is_proposal_leak_risk(item.get("item", ""))]
+            filtered = original_len - len(category_list)
+            if filtered > 0:
+                log(f"⚠️ FILTERED {filtered} proposal-related item(s) from Caroline's context")
 
     if verbose:
         print(f"  [PASS B] Final: {len(final_ongoing)} ongoing, {len(final_pending)} pending, {len(final_topics)} topics, {len(final_preferences)} preferences")
