@@ -403,6 +403,30 @@ def cmd_screenshot(client, args):
     # Copy file
     shutil.copy2(src_path, dest_path)
 
+    # Resize if too large (prevents buffer overflow when Claude reads it)
+    # Target: max 1600px on longest side (keeps ~800KB file size, well under 1MB SDK limit)
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["sips", "-g", "pixelWidth", "-g", "pixelHeight", str(dest_path)],
+            capture_output=True, text=True, timeout=5,
+        )
+        width = height = 0
+        for line in result.stdout.splitlines():
+            if "pixelWidth" in line:
+                width = int(line.split(":")[-1].strip())
+            elif "pixelHeight" in line:
+                height = int(line.split(":")[-1].strip())
+
+        MAX_DIM = 1600
+        if width > MAX_DIM or height > MAX_DIM:
+            subprocess.run(
+                ["sips", "--resampleHeightWidthMax", str(MAX_DIM), str(dest_path)],
+                capture_output=True, timeout=10,
+            )
+    except Exception:
+        pass  # If resize fails, still return the original
+
     # Print the path (this is what the user sees)
     print(dest_path)
 
