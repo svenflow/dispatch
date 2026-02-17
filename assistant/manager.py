@@ -1611,21 +1611,27 @@ You have 15 minutes. Work efficiently.
         lifecycle_log.info("DAEMON | SHUTDOWN | COMPLETE")
 
     async def _run_nightly_consolidation(self):
-        """Run memory consolidation to Contacts.app notes for all contacts.
+        """Run memory consolidation at 2am:
+        1. Person-facts → Contacts.app notes (consolidate_3pass.py)
+        2. Chat context → CONTEXT.md per chat (consolidate_chat.py)
+        3. Inject summary into admin session for review and texting
 
-        Calls the consolidation prototype which extracts personal facts
-        from conversations and writes them to Contacts.app notes.
-        See ~/dispatch/prototypes/memory-consolidation/PLAN.md for details.
-
-        Uses asyncio subprocess to avoid blocking the event loop (which would
-        make the daemon unresponsive to IPC and trigger false watchdog alerts).
+        Uses asyncio subprocess to avoid blocking the event loop.
         """
-        consolidate_script = HOME / "dispatch/prototypes/memory-consolidation/consolidate.py"
+        person_facts_script = HOME / "dispatch/prototypes/memory-consolidation/consolidate_3pass.py"
+        chat_context_script = HOME / "dispatch/prototypes/memory-consolidation/consolidate_chat.py"
 
-        log.info("Running nightly memory consolidation to Contacts.app...")
+        # Track outputs for admin summary
+        person_facts_output = ""
+        person_facts_error = ""
+        chat_context_output = ""
+        chat_context_error = ""
+
+        # 1. Person-facts consolidation
+        log.info("Running nightly person-facts consolidation to Contacts.app...")
         try:
             proc = await asyncio.create_subprocess_exec(
-                "uv", "run", str(consolidate_script), "--all",
+                "uv", "run", str(person_facts_script), "--all",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -1634,15 +1640,102 @@ You have 15 minutes. Work efficiently.
             except asyncio.TimeoutError:
                 proc.kill()
                 await proc.wait()
-                log.error("Consolidation timed out after 1 hour")
-                return
-            stdout_str = stdout.decode() if stdout else ""
-            stderr_str = stderr.decode() if stderr else ""
-            log.info(f"Consolidation complete: {stdout_str[-500:] if stdout_str else 'no output'}")
-            if proc.returncode != 0:
-                log.error(f"Consolidation errors: {stderr_str[-500:] if stderr_str else 'none'}")
+                log.error("Person-facts consolidation timed out after 1 hour")
+                person_facts_error = "TIMEOUT after 1 hour"
+            else:
+                person_facts_output = stdout.decode() if stdout else ""
+                person_facts_error = stderr.decode() if stderr else ""
+                log.info(f"Person-facts consolidation complete: {person_facts_output[-500:] if person_facts_output else 'no output'}")
+                if proc.returncode != 0:
+                    log.error(f"Person-facts errors: {person_facts_error[-500:] if person_facts_error else 'none'}")
         except Exception as e:
-            log.error(f"Consolidation failed: {e}")
+            log.error(f"Person-facts consolidation failed: {e}")
+            person_facts_error = str(e)
+
+        # 2. Chat context consolidation
+        log.info("Running nightly chat context consolidation to CONTEXT.md...")
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "uv", "run", str(chat_context_script), "--all",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            try:
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=3600)
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+                log.error("Chat context consolidation timed out after 1 hour")
+                chat_context_error = "TIMEOUT after 1 hour"
+            else:
+                chat_context_output = stdout.decode() if stdout else ""
+                chat_context_error = stderr.decode() if stderr else ""
+                log.info(f"Chat context consolidation complete: {chat_context_output[-500:] if chat_context_output else 'no output'}")
+                if proc.returncode != 0:
+                    log.error(f"Chat context errors: {chat_context_error[-500:] if chat_context_error else 'none'}")
+        except Exception as e:
+            log.error(f"Chat context consolidation failed: {e}")
+            chat_context_error = str(e)
+
+        # 3. Inject summary into admin session
+        await self._inject_consolidation_summary(
+            person_facts_output, person_facts_error,
+            chat_context_output, chat_context_error
+        )
+
+    async def _inject_consolidation_summary(
+        self,
+        person_facts_output: str,
+        person_facts_error: str,
+        chat_context_output: str,
+        chat_context_error: str,
+    ):
+        """Inject consolidation summary into admin session for review."""
+        from assistant import config
+
+        admin_phone = config.require("owner.phone")
+        admin_name = config.require("owner.name")
+
+        # Build the summary prompt
+        summary_prompt = f"""<admin>
+🌙 2am memory consolidation just completed. Here's what happened:
+
+## Person-Facts Consolidation (→ Contacts.app notes)
+```
+{person_facts_output if person_facts_output else "(no output)"}
+```
+{f"**Errors:** {person_facts_error}" if person_facts_error else ""}
+
+## Chat Context Consolidation (→ CONTEXT.md per chat)
+```
+{chat_context_output if chat_context_output else "(no output)"}
+```
+{f"**Errors:** {chat_context_error}" if chat_context_error else ""}
+
+---
+
+**Your task:**
+1. Review the results above
+2. Explore anything interesting (read new facts, check CONTEXT.md files)
+3. If there were errors, investigate and note what went wrong
+4. Send me a summary text with:
+   - How many contacts/chats were processed
+   - Any notable new facts learned
+   - Any errors that need attention
+
+Keep the text concise - this is a nightly check-in, not a full report.
+</admin>"""
+
+        try:
+            # Inject into admin's foreground session
+            await self.sessions.inject_message(
+                admin_name, admin_phone, summary_prompt, "admin",
+                source="imessage"
+            )
+            log.info(f"Injected consolidation summary into admin session")
+            lifecycle_log.info("CONSOLIDATION | SUMMARY_INJECTED | admin")
+        except Exception as e:
+            log.error(f"Failed to inject consolidation summary: {e}")
 
     async def run(self):
         """Main async loop."""
