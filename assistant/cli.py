@@ -169,32 +169,37 @@ def cmd_stop(args):
 
 
 def cmd_restart(args):
-    """Restart the daemon.
+    """Restart the daemon via launchctl.
 
-    Spawns a detached helper script that stops the old daemon and starts a new one.
-    This is safe to call from within a session — the session's process will die
-    during stop, but the detached helper survives and starts a fresh daemon.
+    Uses launchctl kickstart to get a clean environment from the plist,
+    avoiding CLAUDECODE env var inheritance when called from SDK sessions.
+
+    IMPORTANT: We must stop the daemon ourselves first because launchctl
+    can only kill processes IT started. If the daemon was started via
+    subprocess.Popen (e.g., from cli.py start), launchd doesn't own it
+    and the -k flag does nothing.
     """
-    # Write a self-deleting restart script
-    restart_script = STATE_DIR / "restart.sh"
-    restart_script.write_text(f"""#!/bin/bash
-# Auto-generated restart script - self-deletes after running
-sleep 0.5
-"{ASSISTANT_DIR}/bin/claude-assistant" stop 2>/dev/null
-sleep 1
-"{ASSISTANT_DIR}/bin/claude-assistant" start
-rm -f "{restart_script}"
-""")
-    restart_script.chmod(0o755)
+    import os
 
-    # Launch detached so it survives our death
-    subprocess.Popen(
-        [str(restart_script)],
-        start_new_session=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        stdin=subprocess.DEVNULL,
+    # First, stop any existing daemon (launchctl -k can't kill what it didn't start)
+    if is_running():
+        print("Stopping existing daemon...")
+        cmd_stop(args)
+        # Wait a moment for cleanup
+        time.sleep(0.5)
+
+    # Now use launchctl to start fresh with clean environment
+    uid = os.getuid()
+    result = subprocess.run(
+        ["launchctl", "kickstart", f"gui/{uid}/com.dispatch.claude-assistant"],
+        capture_output=True,
+        text=True,
     )
+    if result.returncode == 0:
+        print("Daemon restarting via launchctl...")
+    else:
+        print(f"launchctl kickstart failed: {result.stderr}")
+        return 1
     print("Restart initiated (detached)")
     return 0
 
@@ -423,6 +428,30 @@ def cmd_restart_sessions(args):
 
     print(f"\nRestarted {count} sessions")
     return 0
+
+
+def cmd_set_model(args):
+    """Set the model for a specific session."""
+    session = args.session
+    model = args.model
+
+    # Validate model
+    valid_models = ["opus", "sonnet", "haiku"]
+    if model not in valid_models:
+        print(f"Error: Invalid model '{model}'. Must be one of: {', '.join(valid_models)}")
+        return 1
+
+    chat_id = _session_name_to_chat_id(session)
+    if not chat_id:
+        return _session_not_found(session)
+
+    resp = _ipc_command({"cmd": "set_model", "chat_id": chat_id, "model": model})
+    if resp.get("ok"):
+        print(f"Set model to '{model}' for session: {session}")
+        print(f"Session restarted to apply new model.")
+    else:
+        print(f"Error: {resp.get('error', 'unknown')}")
+    return 0 if resp.get("ok") else 1
 
 
 def _lookup_contact_tier(contact_name: str) -> Optional[str]:
@@ -795,6 +824,11 @@ def main():
     # restart-sessions
     subparsers.add_parser("restart-sessions", help="Restart all sessions")
 
+    # set-model
+    set_model_parser = subparsers.add_parser("set-model", help="Set model for a session (opus, sonnet, haiku)")
+    set_model_parser.add_argument("session", help="Session name (imessage/_15555550100), chat_id, or contact name")
+    set_model_parser.add_argument("model", help="Model to use: opus, sonnet, or haiku")
+
     # install
     subparsers.add_parser("install", help="Install LaunchAgent for auto-start")
 
@@ -848,6 +882,7 @@ def main():
         "kill-sessions": cmd_kill_sessions,
         "restart-session": cmd_restart_session,
         "restart-sessions": cmd_restart_sessions,
+        "set-model": cmd_set_model,
         "install": cmd_install,
         "uninstall": cmd_uninstall,
         "menubar": cmd_menubar,

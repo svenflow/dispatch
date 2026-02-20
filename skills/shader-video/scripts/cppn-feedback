@@ -1,0 +1,178 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "torch",
+#     "pillow",
+#     "numpy",
+#     "opencv-python",
+# ]
+# ///
+"""
+CPPN Feedback Loop - Use previous frame to influence current frame.
+Creates evolving, organic, unpredictable psychedelic patterns.
+"""
+
+import argparse
+import math
+import subprocess
+import tempfile
+from pathlib import Path
+
+import cv2
+import numpy as np
+import torch
+import torch.nn as nn
+from PIL import Image
+
+
+class SIREN(nn.Module):
+    def __init__(self, hidden_features=256, hidden_layers=8, latent_dim=8, omega_0=30.0):
+        super().__init__()
+        self.latent_dim = latent_dim
+        self.omega_0 = omega_0
+        self.input_layer = nn.Linear(3 + latent_dim, hidden_features)
+        self.hidden_layers = nn.ModuleList([
+            nn.Linear(hidden_features, hidden_features)
+            for _ in range(hidden_layers)
+        ])
+        self.output_layer = nn.Linear(hidden_features, 3)
+
+    def forward(self, coords, latent):
+        if latent.dim() == 1:
+            latent = latent.unsqueeze(0).expand(coords.shape[0], -1)
+        x = torch.cat([coords, latent], dim=-1)
+        x = torch.sin(self.omega_0 * self.input_layer(x))
+        for layer in self.hidden_layers:
+            x = torch.sin(self.omega_0 * layer(x))
+        x = self.output_layer(x)
+        x = torch.sigmoid(x)
+        return x
+
+
+def load_model(model_path):
+    checkpoint = torch.load(model_path, map_location='cpu', weights_only=False)
+    config = checkpoint['config']
+    model = SIREN(
+        hidden_features=config['hidden'],
+        hidden_layers=config['layers'],
+        latent_dim=config['latent_dim']
+    )
+    model.load_state_dict(checkpoint['model_state'])
+    model.eval()
+    return model, checkpoint['base_latent'], config
+
+
+def create_coords(width, height):
+    y = torch.linspace(-1, 1, height)
+    x = torch.linspace(-1, 1, width)
+    yy, xx = torch.meshgrid(y, x, indexing='ij')
+    rr = torch.sqrt(xx**2 + yy**2)
+    return torch.stack([xx, yy, rr], dim=-1).reshape(-1, 3), xx, yy
+
+
+def render_frame(model, coords, latent, width, height):
+    with torch.no_grad():
+        output = model(coords, latent)
+        img = output.reshape(height, width, 3).numpy()
+        return (img * 255).clip(0, 255).astype(np.uint8)
+
+
+def feedback_loop(model_path, output_path, duration=8, fps=30, size=512):
+    """Create feedback loop animation."""
+
+    print(f"Loading model: {model_path}")
+    model, base_latent, config = load_model(model_path)
+
+    width = height = size
+    coords, xx, yy = create_coords(width, height)
+
+    num_frames = duration * fps
+    print(f"Rendering {num_frames} frames with feedback loop...")
+
+    # Start with base CPPN output
+    current_frame = render_frame(model, coords, base_latent, width, height)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        for i in range(num_frames):
+            t = i / fps
+
+            # Create displacement from previous frame's luminance
+            gray = cv2.cvtColor(current_frame, cv2.COLOR_RGB2GRAY).astype(np.float32) / 255.0
+
+            # Displacement based on gradient of previous frame
+            sobel_x = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=5)
+            sobel_y = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=5)
+
+            # Normalize and scale displacement
+            disp_scale = 0.03 * (1 + 0.5 * math.sin(t * 2))
+            dx = torch.from_numpy(sobel_x).reshape(-1) * disp_scale
+            dy = torch.from_numpy(sobel_y).reshape(-1) * disp_scale
+
+            # Warp coordinates based on previous frame
+            warped_coords = coords.clone()
+            warped_coords[:, 0] += dx + 0.02 * math.sin(t * 3)  # Add slow drift
+            warped_coords[:, 1] += dy + 0.02 * math.cos(t * 2.5)
+
+            # Slight zoom toward center
+            zoom = 1.0 + 0.005 * math.sin(t * 1.5)
+            warped_coords[:, 0] *= zoom
+            warped_coords[:, 1] *= zoom
+
+            # Add rotation
+            rot = t * 0.1
+            x_rot = warped_coords[:, 0] * math.cos(rot) - warped_coords[:, 1] * math.sin(rot)
+            y_rot = warped_coords[:, 0] * math.sin(rot) + warped_coords[:, 1] * math.cos(rot)
+            warped_coords[:, 0] = x_rot
+            warped_coords[:, 1] = y_rot
+            warped_coords[:, 2] = torch.sqrt(warped_coords[:, 0]**2 + warped_coords[:, 1]**2)
+
+            # Slight latent variation
+            latent = base_latent + torch.randn_like(base_latent) * 0.02 * math.sin(t)
+
+            # Render new frame
+            new_frame = render_frame(model, warped_coords, latent, width, height)
+
+            # Blend with previous frame for temporal smoothness
+            blend_factor = 0.7
+            current_frame = cv2.addWeighted(new_frame, blend_factor, current_frame, 1 - blend_factor, 0)
+
+            # Slight color drift
+            hsv = cv2.cvtColor(current_frame, cv2.COLOR_RGB2HSV).astype(np.float32)
+            hsv[:, :, 0] = (hsv[:, :, 0] + 0.5) % 180  # Slow hue shift
+            hsv[:, :, 1] = np.clip(hsv[:, :, 1] * 1.01, 0, 255)  # Slight saturation boost
+            current_frame = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2RGB)
+
+            Image.fromarray(current_frame).save(f"{tmpdir}/frame_{i:04d}.png")
+
+            if (i + 1) % fps == 0:
+                print(f"  {i+1}/{num_frames} frames ({(i+1)//fps}s)")
+
+        print("Encoding video...")
+        subprocess.run([
+            'ffmpeg', '-y', '-framerate', str(fps),
+            '-i', f'{tmpdir}/frame_%04d.png',
+            '-c:v', 'libx265', '-preset', 'medium',
+            '-crf', '24', '-tag:v', 'hvc1',
+            '-pix_fmt', 'yuv420p',
+            output_path
+        ], check=True, capture_output=True)
+
+    size_kb = Path(output_path).stat().st_size / 1024
+    print(f"Done! Output: {output_path} ({size_kb:.1f} KB)")
+
+
+def main():
+    parser = argparse.ArgumentParser(description='CPPN Feedback Loop')
+    parser.add_argument('model', help='Trained CPPN model (.pt)')
+    parser.add_argument('output', help='Output video (.mp4)')
+    parser.add_argument('--duration', type=int, default=8)
+    parser.add_argument('--fps', type=int, default=30)
+    parser.add_argument('--size', type=int, default=512)
+
+    args = parser.parse_args()
+    feedback_loop(args.model, args.output, args.duration, args.fps, args.size)
+
+
+if __name__ == '__main__':
+    main()

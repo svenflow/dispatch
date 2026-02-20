@@ -1,0 +1,147 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "opencv-python",
+#     "numpy",
+#     "pillow",
+# ]
+# ///
+"""
+Optical Flow Morphing - Warp between two images using dense optical flow.
+
+Usage:
+    optical-morph <image1> <image2> <output.mp4> [--duration 6] [--fps 30]
+"""
+
+import argparse
+import subprocess
+import tempfile
+from pathlib import Path
+
+import cv2
+import numpy as np
+from PIL import Image
+
+
+def load_and_resize(path, size=512):
+    """Load image and resize to square."""
+    img = cv2.imread(str(path))
+    img = cv2.resize(img, (size, size), interpolation=cv2.INTER_LANCZOS4)
+    return img
+
+
+def compute_optical_flow(img1, img2):
+    """Compute dense optical flow from img1 to img2."""
+    gray1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
+    gray2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
+
+    # Use Farneback dense optical flow
+    flow = cv2.calcOpticalFlowFarneback(
+        gray1, gray2,
+        None,
+        pyr_scale=0.5,
+        levels=5,
+        winsize=15,
+        iterations=5,
+        poly_n=7,
+        poly_sigma=1.5,
+        flags=0
+    )
+    return flow
+
+
+def warp_image(img, flow):
+    """Warp image using flow field."""
+    h, w = flow.shape[:2]
+
+    # Create coordinate grid
+    x, y = np.meshgrid(np.arange(w), np.arange(h))
+
+    # Add flow to coordinates
+    map_x = (x + flow[..., 0]).astype(np.float32)
+    map_y = (y + flow[..., 1]).astype(np.float32)
+
+    # Remap
+    warped = cv2.remap(img, map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
+    return warped
+
+
+def morph_images(img1, img2, flow_forward, flow_backward, t):
+    """
+    Morph between two images at time t (0 to 1).
+    Uses bidirectional flow for better results.
+    """
+    # Warp img1 forward by t
+    warped1 = warp_image(img1, flow_forward * t)
+
+    # Warp img2 backward by (1-t)
+    warped2 = warp_image(img2, flow_backward * (1 - t))
+
+    # Cross-dissolve the warped images
+    blended = cv2.addWeighted(warped1, 1 - t, warped2, t, 0)
+
+    return blended
+
+
+def create_morph_video(img1_path, img2_path, output_path, duration=6, fps=30, size=512):
+    """Create morphing video between two images."""
+
+    print(f"Loading images...")
+    img1 = load_and_resize(img1_path, size)
+    img2 = load_and_resize(img2_path, size)
+
+    print(f"Computing optical flow...")
+    flow_forward = compute_optical_flow(img1, img2)
+    flow_backward = compute_optical_flow(img2, img1)
+
+    num_frames = duration * fps
+    print(f"Rendering {num_frames} frames...")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        for i in range(num_frames):
+            # Ping-pong: 0 -> 1 -> 0
+            t = i / num_frames
+            t_morph = 0.5 - 0.5 * np.cos(2 * np.pi * t)
+
+            # Smoothstep for easing
+            t_morph = t_morph * t_morph * (3 - 2 * t_morph)
+
+            frame = morph_images(img1, img2, flow_forward, flow_backward, t_morph)
+
+            cv2.imwrite(f"{tmpdir}/frame_{i:04d}.png", frame)
+
+            if (i + 1) % fps == 0:
+                print(f"  {i+1}/{num_frames} frames ({(i+1)//fps}s)")
+
+        print("Encoding video...")
+        subprocess.run([
+            'ffmpeg', '-y', '-framerate', str(fps),
+            '-i', f'{tmpdir}/frame_%04d.png',
+            '-c:v', 'libx265', '-preset', 'medium',
+            '-crf', '24', '-tag:v', 'hvc1',
+            '-pix_fmt', 'yuv420p',
+            output_path
+        ], check=True, capture_output=True)
+
+    size_kb = Path(output_path).stat().st_size / 1024
+    print(f"Done! Output: {output_path} ({size_kb:.1f} KB)")
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Optical Flow Image Morphing')
+    parser.add_argument('image1', help='First image')
+    parser.add_argument('image2', help='Second image')
+    parser.add_argument('output', help='Output video (.mp4)')
+    parser.add_argument('--duration', type=int, default=6, help='Duration in seconds')
+    parser.add_argument('--fps', type=int, default=30, help='Frames per second')
+    parser.add_argument('--size', type=int, default=512, help='Output size (square)')
+
+    args = parser.parse_args()
+
+    create_morph_video(args.image1, args.image2, args.output,
+                       args.duration, args.fps, args.size)
+
+
+if __name__ == '__main__':
+    main()

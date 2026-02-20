@@ -11,7 +11,7 @@ import { SearchEngine } from "./search";
 import { Poller } from "./poller";
 import { Server } from "./server";
 import { loadConfig, ensureCacheDir, getDbPath } from "./config";
-import { createEmbedFunction, createRerankFunction, warmupModels, checkModelsAvailable } from "./llm";
+import { createNativeRerankFunction, disposeLLM } from "./llm";
 
 async function main(): Promise<void> {
   console.log("=".repeat(60));
@@ -33,14 +33,12 @@ async function main(): Promise<void> {
   // Initialize search engine
   const searchEngine = new SearchEngine(store);
 
-  // Check for rerank server and set up reranking if available
-  const { isRerankServerAvailable, createRerankFunction } = await import("./llm");
-  const rerankAvailable = await isRerankServerAvailable();
-  if (rerankAvailable) {
-    searchEngine.setRerankFunction(createRerankFunction());
-    console.log("Reranking enabled (using embed-rerank server on port 9000)");
-  } else {
-    console.log("Using FTS-only search (start embed-rerank server for reranking)");
+  // Set up native reranking with qwen3-reranker via node-llama-cpp
+  try {
+    searchEngine.setRerankFunction(createNativeRerankFunction());
+    console.log("Reranking enabled (using native qwen3-reranker via node-llama-cpp)");
+  } catch (error) {
+    console.error("Failed to initialize native reranker, running FTS-only:", error);
   }
 
   // Initialize poller
@@ -96,10 +94,11 @@ async function main(): Promise<void> {
   console.log("=".repeat(60) + "\n");
 
   // Handle shutdown
-  const shutdown = () => {
+  const shutdown = async () => {
     console.log("\nShutting down...");
     poller.stop();
     server.stop();
+    await disposeLLM();
     closeStore();
     process.exit(0);
   };

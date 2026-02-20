@@ -7,6 +7,10 @@ description: Control Sonos speakers - make announcements, play audio, TTS, volum
 
 Control Sonos speakers using the unified `sonos` CLI. Plays on **all speakers by default** with **60% volume**.
 
+## ⚠️ Access Control
+
+**Announcements are ADMIN-ONLY.** Only users with `admin` or `wife` tier can make Sonos announcements. For non-admin users requesting announcements, politely decline and explain this is restricted to household admins for security/privacy reasons.
+
 ## Quick Reference
 
 ```bash

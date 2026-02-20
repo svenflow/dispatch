@@ -1,11 +1,51 @@
 ---
 name: tts
-description: Convert text to audio using local Kokoro TTS model. Use when asked to read content aloud, create audiobooks, or convert text to speech. Runs locally on Mac with Metal acceleration.
+description: Convert text to audio using local TTS models. Two options - Kokoro (fast, preset voices) or Qwen3-TTS (slower, custom voice design via natural language prompts). Use when asked to read content aloud, create audiobooks, or convert text to speech. Trigger words - tts, text to speech, speak, voice, audio, narrate.
 ---
 
 # Text-to-Speech (Local)
 
-Convert text to high-quality audio using the Kokoro ONNX model. Runs entirely locally on Mac - no API keys needed.
+Two TTS engines available, both run locally on Mac:
+
+| Engine | Speed | Voice Control | RAM | Best For |
+|--------|-------|---------------|-----|----------|
+| **Kokoro** | ~0.25x RT | 54 preset voices | ~500MB | Fast generation, audiobooks |
+| **Qwen3-TTS** | ~1.2x RT | Natural language prompts | ~7GB | Custom voices, expressive speech |
+
+---
+
+## Qwen3-TTS Voice Design (NEW!)
+
+Generate speech with custom voice styles described in natural language. The model understands descriptions like "an excited child" or "a tired professor".
+
+```bash
+# Basic usage with voice style
+~/.claude/skills/tts/scripts/speak-qwen "Hello world" --style "An excited tech enthusiast"
+
+# Save to file
+~/.claude/skills/tts/scripts/speak-qwen "Breaking news" --style "A serious news anchor" -o /tmp/news.wav
+
+# Play immediately
+~/.claude/skills/tts/scripts/speak-qwen "Good morning" --style "A warm, friendly barista" --play
+```
+
+**Example styles:**
+- "An excited child who just ate too much candy"
+- "A deep, calm narrator reading a bedtime story"
+- "A tired professor explaining quantum physics"
+- "A sports commentator during an exciting play"
+- "Someone who drank too much coffee"
+
+**Model info:**
+- 1.7B params, 4.2GB on disk, ~7GB peak RAM
+- ~21 tokens/sec on M4 Pro
+- Location: `~/code/qwen3-tts-apple-silicon/`
+
+---
+
+## Kokoro (Fast, Preset Voices)
+
+Convert text to high-quality audio using the Kokoro ONNX model. Faster than Qwen3 but uses preset voices.
 
 ## Quick Start
 
@@ -76,9 +116,17 @@ After generating audio, send via iMessage:
 ~/.claude/skills/sms-assistant/scripts/send-sms "+phone" --image /tmp/output.wav
 ```
 
-## Model Info
-
+**Kokoro Model Info:**
 - **Model**: Kokoro v1.0 (310MB ONNX)
 - **Voices**: 27MB voice pack
 - **Speed**: ~0.25x realtime on M3
 - **Location**: `~/.claude/skills/tts/models/`
+
+---
+
+## When to Use Which
+
+- **Need speed?** → Kokoro (4x faster)
+- **Need custom voice style?** → Qwen3-TTS
+- **Long audiobook?** → Kokoro (less RAM, faster)
+- **Expressive/emotional?** → Qwen3-TTS (can describe emotion in style)

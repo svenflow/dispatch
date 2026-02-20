@@ -1,0 +1,442 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "numpy",
+#     "pillow",
+#     "pyobjc-framework-Metal",
+#     "pyobjc-framework-MetalKit",
+#     "pyobjc-framework-Cocoa",
+# ]
+# ///
+"""
+Render true agent-based Physarum simulation using Metal compute shaders.
+
+Each agent has position and angle. On each step:
+1. SENSE: sample pheromone at 3 sensor positions (ahead, left, right)
+2. ROTATE: turn toward highest concentration
+3. MOVE: step forward
+4. DEPOSIT: add pheromone at current position
+
+Based on Jeff Jones' 2010 paper on Physarum transport networks.
+
+Usage:
+    render-physarum-metal output.mov
+    render-physarum-metal output.mov --agents 500000 --duration 15
+"""
+
+import argparse
+import ctypes
+import os
+import subprocess
+import sys
+import tempfile
+
+import Metal
+import numpy as np
+from PIL import Image
+
+
+# Metal shader source
+METAL_SOURCE = """
+#include <metal_stdlib>
+using namespace metal;
+
+// Agent: x, y, angle, _pad
+struct Agent {
+    float x;
+    float y;
+    float angle;
+    float _pad;
+};
+
+// Params
+struct Params {
+    float sensorAngle;   // radians
+    float sensorDist;    // pixels
+    float turnAngle;     // radians
+    float moveSpeed;     // pixels per step
+    float depositAmount;
+    float decayFactor;
+    int width;
+    int height;
+    int numAgents;
+    float time;
+};
+
+// Hash function for randomness
+float hash(float2 p, float seed) {
+    float3 p3 = fract(float3(p.xyx) * 0.1031 + seed);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+// Sample pheromone at position with bounds check
+float sampleTrail(device float* trail, float x, float y, int width, int height) {
+    int ix = int(x) % width;
+    int iy = int(y) % height;
+    if (ix < 0) ix += width;
+    if (iy < 0) iy += height;
+    return trail[iy * width + ix];
+}
+
+// Agent update kernel
+kernel void updateAgents(
+    device Agent* agents [[buffer(0)]],
+    device float* trail [[buffer(1)]],
+    device atomic_uint* trailAtomic [[buffer(2)]],
+    constant Params& params [[buffer(3)]],
+    uint id [[thread_position_in_grid]]
+) {
+    if (id >= uint(params.numAgents)) return;
+
+    Agent agent = agents[id];
+    float x = agent.x;
+    float y = agent.y;
+    float angle = agent.angle;
+
+    // SENSE: sample at 3 positions
+    float sensorL = sampleTrail(trail,
+        x + cos(angle - params.sensorAngle) * params.sensorDist,
+        y + sin(angle - params.sensorAngle) * params.sensorDist,
+        params.width, params.height);
+    float sensorC = sampleTrail(trail,
+        x + cos(angle) * params.sensorDist,
+        y + sin(angle) * params.sensorDist,
+        params.width, params.height);
+    float sensorR = sampleTrail(trail,
+        x + cos(angle + params.sensorAngle) * params.sensorDist,
+        y + sin(angle + params.sensorAngle) * params.sensorDist,
+        params.width, params.height);
+
+    // ROTATE: turn toward highest concentration
+    float randVal = hash(float2(x, y), params.time + float(id) * 0.001);
+
+    if (sensorC > sensorL && sensorC > sensorR) {
+        // Go straight
+    } else if (sensorC < sensorL && sensorC < sensorR) {
+        // Random turn
+        angle += (randVal > 0.5 ? 1.0 : -1.0) * params.turnAngle;
+    } else if (sensorR > sensorL) {
+        angle += params.turnAngle;
+    } else if (sensorL > sensorR) {
+        angle -= params.turnAngle;
+    }
+
+    // MOVE: step forward
+    float newX = x + cos(angle) * params.moveSpeed;
+    float newY = y + sin(angle) * params.moveSpeed;
+
+    // Wrap around (toroidal)
+    if (newX < 0) newX += float(params.width);
+    if (newX >= float(params.width)) newX -= float(params.width);
+    if (newY < 0) newY += float(params.height);
+    if (newY >= float(params.height)) newY -= float(params.height);
+
+    // DEPOSIT: add pheromone (using atomics)
+    int ix = int(newX);
+    int iy = int(newY);
+    if (ix >= 0 && ix < params.width && iy >= 0 && iy < params.height) {
+        // Atomic add - we'll scale down later
+        atomic_fetch_add_explicit(&trailAtomic[iy * params.width + ix],
+            uint(params.depositAmount * 1000.0), memory_order_relaxed);
+    }
+
+    // Update agent
+    agents[id].x = newX;
+    agents[id].y = newY;
+    agents[id].angle = angle;
+}
+
+// Apply atomic deposits to trail
+kernel void applyDeposits(
+    device float* trail [[buffer(0)]],
+    device atomic_uint* trailAtomic [[buffer(1)]],
+    constant Params& params [[buffer(2)]],
+    uint2 pos [[thread_position_in_grid]]
+) {
+    if (pos.x >= uint(params.width) || pos.y >= uint(params.height)) return;
+
+    int idx = int(pos.y) * params.width + int(pos.x);
+    uint atomicVal = atomic_exchange_explicit(&trailAtomic[idx], 0, memory_order_relaxed);
+    trail[idx] += float(atomicVal) / 1000.0;
+}
+
+// Diffuse and decay trail
+kernel void diffuseTrail(
+    device float* trailIn [[buffer(0)]],
+    device float* trailOut [[buffer(1)]],
+    constant Params& params [[buffer(2)]],
+    uint2 pos [[thread_position_in_grid]]
+) {
+    if (pos.x >= uint(params.width) || pos.y >= uint(params.height)) return;
+
+    int x = int(pos.x);
+    int y = int(pos.y);
+    int w = params.width;
+    int h = params.height;
+
+    // 3x3 blur
+    float sum = 0.0;
+    for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            int nx = (x + dx + w) % w;
+            int ny = (y + dy + h) % h;
+            sum += trailIn[ny * w + nx];
+        }
+    }
+    float blurred = sum / 9.0;
+
+    // Apply decay
+    trailOut[y * w + x] = blurred * params.decayFactor;
+}
+"""
+
+
+def render_physarum_metal(
+    output_path: str,
+    width: int = 1080,
+    height: int = 1080,
+    fps: int = 30,
+    duration: float = 15.0,
+    num_agents: int = 300000,
+    sensor_angle: float = 0.4,
+    sensor_dist: float = 20.0,
+    turn_angle: float = 0.3,
+    move_speed: float = 1.5,
+    deposit: float = 0.8,
+    decay: float = 0.97,
+    iterations: int = 3,
+    hq: bool = True,
+):
+    """Render Physarum using Metal compute shaders."""
+
+    # Create Metal device
+    device = Metal.MTLCreateSystemDefaultDevice()
+    if device is None:
+        print("ERROR: No Metal device found", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Using Metal device: {device.name()}")
+
+    # Compile shaders
+    library, error = device.newLibraryWithSource_options_error_(METAL_SOURCE, None, None)
+    if library is None:
+        print(f"Shader compilation error: {error}", file=sys.stderr)
+        sys.exit(1)
+
+    updateAgentsFn = library.newFunctionWithName_("updateAgents")
+    applyDepositsFn = library.newFunctionWithName_("applyDeposits")
+    diffuseTrailFn = library.newFunctionWithName_("diffuseTrail")
+
+    updateAgentsPSO, _ = device.newComputePipelineStateWithFunction_error_(updateAgentsFn, None)
+    applyDepositsPSO, _ = device.newComputePipelineStateWithFunction_error_(applyDepositsFn, None)
+    diffuseTrailPSO, _ = device.newComputePipelineStateWithFunction_error_(diffuseTrailFn, None)
+
+    # Create buffers
+    # Agents: [x, y, angle, pad] * num_agents
+    agent_data = np.zeros((num_agents, 4), dtype=np.float32)
+    # Initialize in center cluster
+    for i in range(num_agents):
+        angle = np.random.uniform(0, 2 * np.pi)
+        radius = np.random.uniform(0, min(width, height) * 0.3)
+        agent_data[i, 0] = width / 2 + np.cos(angle) * radius  # x
+        agent_data[i, 1] = height / 2 + np.sin(angle) * radius  # y
+        agent_data[i, 2] = np.random.uniform(0, 2 * np.pi)  # heading
+
+    agent_buffer = device.newBufferWithBytes_length_options_(
+        agent_data.tobytes(), agent_data.nbytes, Metal.MTLResourceStorageModeShared)
+
+    # Trail buffers (ping-pong)
+    trail_size = width * height * 4  # float32
+    trail_a = device.newBufferWithLength_options_(trail_size, Metal.MTLResourceStorageModeShared)
+    trail_b = device.newBufferWithLength_options_(trail_size, Metal.MTLResourceStorageModeShared)
+
+    # Atomic buffer for deposits
+    atomic_size = width * height * 4  # uint32
+    trail_atomic = device.newBufferWithLength_options_(atomic_size, Metal.MTLResourceStorageModeShared)
+
+    # Clear atomic buffer
+    atomic_arr = (ctypes.c_uint32 * (width * height)).from_buffer(
+        trail_atomic.contents().as_buffer(atomic_size))
+    for i in range(width * height):
+        atomic_arr[i] = 0
+
+    # Params struct (must match Metal struct layout)
+    class Params(ctypes.Structure):
+        _fields_ = [
+            ("sensorAngle", ctypes.c_float),
+            ("sensorDist", ctypes.c_float),
+            ("turnAngle", ctypes.c_float),
+            ("moveSpeed", ctypes.c_float),
+            ("depositAmount", ctypes.c_float),
+            ("decayFactor", ctypes.c_float),
+            ("width", ctypes.c_int32),
+            ("height", ctypes.c_int32),
+            ("numAgents", ctypes.c_int32),
+            ("time", ctypes.c_float),
+        ]
+
+    params = Params(
+        sensorAngle=sensor_angle,
+        sensorDist=sensor_dist,
+        turnAngle=turn_angle,
+        moveSpeed=move_speed,
+        depositAmount=deposit,
+        decayFactor=decay,
+        width=width,
+        height=height,
+        numAgents=num_agents,
+        time=0.0,
+    )
+    params_buffer = device.newBufferWithBytes_length_options_(
+        bytes(params), ctypes.sizeof(params), Metal.MTLResourceStorageModeShared)
+
+    # Command queue
+    commandQueue = device.newCommandQueue()
+
+    # Thread configuration
+    agentThreads = Metal.MTLSizeMake(num_agents, 1, 1)
+    agentThreadgroup = Metal.MTLSizeMake(min(256, updateAgentsPSO.maxTotalThreadsPerThreadgroup()), 1, 1)
+
+    trailThreads = Metal.MTLSizeMake(width, height, 1)
+    trailThreadgroup = Metal.MTLSizeMake(16, 16, 1)
+
+    current_trail = trail_a
+    other_trail = trail_b
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        num_frames = int(fps * duration)
+        print(f"Rendering {num_frames} frames at {width}x{height} with {num_agents} agents...")
+
+        for frame_idx in range(num_frames):
+            # Update time in params
+            params.time = frame_idx / fps
+            params_ptr = (ctypes.c_char * ctypes.sizeof(params)).from_buffer_copy(bytes(params))
+            params_buffer.contents().as_buffer(ctypes.sizeof(params))[:] = bytes(params_ptr)
+
+            for _ in range(iterations):
+                commandBuffer = commandQueue.commandBuffer()
+
+                # 1. Update agents (sense, rotate, move, deposit to atomic)
+                encoder = commandBuffer.computeCommandEncoder()
+                encoder.setComputePipelineState_(updateAgentsPSO)
+                encoder.setBuffer_offset_atIndex_(agent_buffer, 0, 0)
+                encoder.setBuffer_offset_atIndex_(current_trail, 0, 1)
+                encoder.setBuffer_offset_atIndex_(trail_atomic, 0, 2)
+                encoder.setBuffer_offset_atIndex_(params_buffer, 0, 3)
+                encoder.dispatchThreads_threadsPerThreadgroup_(agentThreads, agentThreadgroup)
+                encoder.endEncoding()
+
+                # 2. Apply atomic deposits to trail
+                encoder = commandBuffer.computeCommandEncoder()
+                encoder.setComputePipelineState_(applyDepositsPSO)
+                encoder.setBuffer_offset_atIndex_(current_trail, 0, 0)
+                encoder.setBuffer_offset_atIndex_(trail_atomic, 0, 1)
+                encoder.setBuffer_offset_atIndex_(params_buffer, 0, 2)
+                encoder.dispatchThreads_threadsPerThreadgroup_(trailThreads, trailThreadgroup)
+                encoder.endEncoding()
+
+                # 3. Diffuse trail
+                encoder = commandBuffer.computeCommandEncoder()
+                encoder.setComputePipelineState_(diffuseTrailPSO)
+                encoder.setBuffer_offset_atIndex_(current_trail, 0, 0)
+                encoder.setBuffer_offset_atIndex_(other_trail, 0, 1)
+                encoder.setBuffer_offset_atIndex_(params_buffer, 0, 2)
+                encoder.dispatchThreads_threadsPerThreadgroup_(trailThreads, trailThreadgroup)
+                encoder.endEncoding()
+
+                commandBuffer.commit()
+                commandBuffer.waitUntilCompleted()
+
+                # Swap buffers
+                current_trail, other_trail = other_trail, current_trail
+
+            # Read trail and save frame
+            trail_arr = np.frombuffer(
+                current_trail.contents().as_buffer(trail_size), dtype=np.float32
+            ).reshape((height, width))
+
+            # Colorize - golden/amber theme
+            normalized = np.clip(trail_arr / 2.0, 0, 1)
+
+            # Color mapping
+            r = np.clip(normalized * 2.5, 0, 1)
+            g = np.clip(normalized * 2.0, 0, 1)
+            b = np.clip(normalized * 0.8, 0, 1)
+
+            # Boost bright areas
+            bright = normalized > 0.3
+            r[bright] = np.clip(r[bright] * 1.2 + 0.3, 0, 1)
+            g[bright] = np.clip(g[bright] * 1.1 + 0.2, 0, 1)
+            b[bright] = np.clip(b[bright] + 0.1, 0, 1)
+
+            rgb = np.stack([r, g, b], axis=-1)
+            rgb = (rgb * 255).astype(np.uint8)
+
+            img = Image.fromarray(rgb, 'RGB')
+            frame_path = os.path.join(tmpdir, f'frame_{frame_idx:04d}.png')
+            img.save(frame_path)
+
+            if (frame_idx + 1) % fps == 0:
+                print(f"  {frame_idx + 1}/{num_frames} frames ({(frame_idx + 1) / fps:.0f}s)")
+
+        print("Encoding video with ffmpeg...")
+
+        is_mov = output_path.lower().endswith('.mov')
+        if hq:
+            ffmpeg_cmd = [
+                'ffmpeg', '-y', '-framerate', str(fps),
+                '-i', os.path.join(tmpdir, 'frame_%04d.png'),
+                '-c:v', 'libx265', '-b:v', '50M', '-maxrate', '60M', '-bufsize', '120M',
+                '-preset', 'slow', '-tag:v', 'hvc1', '-pix_fmt', 'yuv420p', '-movflags', '+faststart',
+            ]
+            if is_mov:
+                ffmpeg_cmd.extend(['-brand', 'qt'])
+            ffmpeg_cmd.append(output_path)
+        else:
+            ffmpeg_cmd = [
+                'ffmpeg', '-y', '-framerate', str(fps),
+                '-i', os.path.join(tmpdir, 'frame_%04d.png'),
+                '-c:v', 'libx265', '-crf', '26', '-preset', 'fast',
+                '-tag:v', 'hvc1', '-pix_fmt', 'yuv420p', output_path
+            ]
+
+        result = subprocess.run(ffmpeg_cmd, capture_output=True)
+        if result.returncode != 0:
+            print(f"ffmpeg error:\n{result.stderr.decode()}", file=sys.stderr)
+            sys.exit(1)
+
+        file_size = os.path.getsize(output_path)
+        print(f"Done! Output: {output_path} ({file_size / 1024 / 1024:.1f} MB)")
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Render Physarum using Metal compute shaders')
+    parser.add_argument('output', help='Output video path')
+    parser.add_argument('--width', type=int, default=1080)
+    parser.add_argument('--height', type=int, default=1080)
+    parser.add_argument('--fps', type=int, default=30)
+    parser.add_argument('--duration', type=float, default=15.0)
+    parser.add_argument('--agents', type=int, default=300000, help='Number of agents')
+    parser.add_argument('--sensor-angle', type=float, default=0.4, help='Sensor angle in radians')
+    parser.add_argument('--sensor-dist', type=float, default=20.0, help='Sensor distance in pixels')
+    parser.add_argument('--turn-angle', type=float, default=0.3, help='Turn angle in radians')
+    parser.add_argument('--move-speed', type=float, default=1.5, help='Move speed in pixels')
+    parser.add_argument('--deposit', type=float, default=0.8, help='Pheromone deposit amount')
+    parser.add_argument('--decay', type=float, default=0.97, help='Pheromone decay factor')
+    parser.add_argument('--iterations', type=int, default=3, help='Sim iterations per frame')
+    parser.add_argument('--fast', action='store_true')
+
+    args = parser.parse_args()
+
+    render_physarum_metal(
+        args.output, args.width, args.height, args.fps, args.duration,
+        args.agents, args.sensor_angle, args.sensor_dist, args.turn_angle,
+        args.move_speed, args.deposit, args.decay, args.iterations,
+        hq=not args.fast,
+    )
+
+
+if __name__ == '__main__':
+    main()

@@ -196,6 +196,10 @@ class SDKBackend:
                 f"tier={tier} chat_id={chat_id} source={source}"
             )
 
+            # Resolve model: check registry for explicit override, else default to opus
+            existing_entry = self.registry.get(chat_id)
+            model = existing_entry.get("model", "opus") if existing_entry else "opus"
+
             session = SDKSession(
                 chat_id=chat_id,
                 contact_name=contact_name,
@@ -203,6 +207,7 @@ class SDKBackend:
                 cwd=str(transcript_dir),
                 session_type=session_type,
                 source=source,
+                model=model,
             )
             await session.start(resume_session_id=None)
             self.sessions[chat_id] = session
@@ -211,7 +216,7 @@ class SDKBackend:
             session._needs_system_prompt = True
             session._system_prompt_args = (session_name, contact_name, tier, chat_id, source)
 
-            # Register in persistent registry
+            # Register in persistent registry (preserve model if already set)
             self.registry.register(
                 chat_id=chat_id,
                 session_name=session_name,
@@ -220,6 +225,7 @@ class SDKBackend:
                 contact_name=contact_name,
                 tier=tier,
                 source=source,
+                model=model,
             )
 
             lifecycle_log.info(
@@ -266,6 +272,10 @@ class SDKBackend:
             f"tier={tier} chat_id={chat_id} source={source}"
         )
 
+        # Resolve model: check registry for explicit override, else default to opus
+        existing_entry = self.registry.get(chat_id)
+        model = existing_entry.get("model", "opus") if existing_entry else "opus"
+
         session = SDKSession(
             chat_id=chat_id,
             contact_name=contact_name,
@@ -273,6 +283,7 @@ class SDKBackend:
             cwd=str(transcript_dir),
             session_type=session_type,
             source=source,
+            model=model,
         )
         await session.start(resume_session_id=None)
         self.sessions[chat_id] = session
@@ -290,6 +301,7 @@ class SDKBackend:
             contact_name=contact_name,
             tier=tier,
             source=source,
+            model=model,
         )
 
         lifecycle_log.info(

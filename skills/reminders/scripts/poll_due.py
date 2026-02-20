@@ -17,10 +17,19 @@ CORE_DATA_EPOCH = 978307200
 CONTACT_LIST_PREFIX = "Claude: "
 
 
-def find_reminders_db():
-    """Find the most recently modified Reminders database."""
+def find_all_reminders_dbs():
+    """Find all Reminders databases."""
     base_path = Path.home() / "Library/Group Containers/group.com.apple.reminders/Container_v1/Stores"
     dbs = list(base_path.glob("Data-*.sqlite"))
+    # Exclude Data-local.sqlite as it's for local sync state, not actual reminders
+    return [db for db in dbs if "local" not in db.name.lower()]
+
+
+def find_reminders_db():
+    """Find the most recently modified Reminders database (legacy, for backwards compat)."""
+    dbs = find_all_reminders_dbs()
+    if not dbs:
+        return None
 
     # Sort by modification time of the -wal file (most active)
     def get_wal_mtime(db_path):
@@ -100,7 +109,8 @@ def get_due_reminders(db_path, include_all=False, contact=None):
     Returns:
         List of reminder dicts with id, title, due_date, notes, list_name, contact
     """
-    conn = sqlite3.connect(str(db_path))
+    # Use URI mode with read-only to properly access WAL journal data
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
 
@@ -179,7 +189,8 @@ def get_cron_reminders(db_path, contact=None):
     Returns:
         List of reminder dicts with cron patterns (includes due_date as "until" date)
     """
-    conn = sqlite3.connect(str(db_path))
+    # Use URI mode with read-only to properly access WAL journal data
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
 
@@ -276,12 +287,19 @@ def main():
         print(result)
         return
 
-    db_path = find_reminders_db()
-    if not db_path:
+    db_paths = find_all_reminders_dbs()
+    if not db_paths:
         print("Error: Could not find Reminders database", file=sys.stderr)
         sys.exit(1)
 
-    reminders = get_due_reminders(db_path, include_all=args.all, contact=args.contact)
+    # Aggregate reminders from all databases
+    reminders = []
+    for db_path in db_paths:
+        try:
+            reminders.extend(get_due_reminders(db_path, include_all=args.all, contact=args.contact))
+        except Exception:
+            # Skip databases that can't be read
+            pass
 
     if args.json:
         print(json.dumps(reminders, indent=2))

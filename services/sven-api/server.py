@@ -75,6 +75,7 @@ async def log_requests(request: Request, call_next):
 
 # Config
 ALLOWED_TOKENS_FILE = Path(__file__).parent / "allowed_tokens.json"
+APNS_TOKENS_FILE = Path.home() / "dispatch" / "state" / "sven-apns-tokens.json"
 DB_PATH = Path.home() / "dispatch" / "state" / "sven-messages.db"
 AUDIO_DIR = Path.home() / "dispatch" / "state" / "sven-audio"
 RATE_LIMIT_WINDOW = 60  # seconds
@@ -90,6 +91,12 @@ class PromptRequest(BaseModel):
     token: str
     attestation: Optional[str] = None
     assertion: Optional[str] = None
+
+
+class APNsRegisterRequest(BaseModel):
+    """Request to register APNs device token"""
+    device_token: str
+    apns_token: str
 
 
 class PromptResponse(BaseModel):
@@ -426,6 +433,52 @@ async def register_token(token: str):
     allowed_tokens.add(token)
     save_allowed_tokens(allowed_tokens)
     return {"status": "ok", "message": "Token registered"}
+
+
+@app.post("/register-apns")
+async def register_apns(request: APNsRegisterRequest):
+    """
+    Register APNs device token for push notifications.
+
+    The iOS app calls this on launch to register/update its APNs token.
+    Maps device_token (app-level ID) to apns_token (Apple push token).
+    """
+    device_short = request.device_token[:8] if request.device_token else "none"
+    apns_short = request.apns_token[:8] if request.apns_token else "none"
+    logger.info(f"POST /register-apns: device={device_short}... apns={apns_short}...")
+
+    # Validate device token is registered
+    allowed_tokens = load_allowed_tokens()
+    if allowed_tokens and request.device_token not in allowed_tokens:
+        # Auto-register if no tokens exist yet (first-time setup)
+        if not allowed_tokens:
+            allowed_tokens.add(request.device_token)
+            save_allowed_tokens(allowed_tokens)
+            logger.info(f"First device registration: {device_short}...")
+        else:
+            logger.warning(f"POST /register-apns: unauthorized device={device_short}")
+            raise HTTPException(status_code=401, detail="Unknown device token")
+
+    # Load existing APNs tokens
+    try:
+        apns_tokens = json.loads(APNS_TOKENS_FILE.read_text()) if APNS_TOKENS_FILE.exists() else {}
+    except Exception as e:
+        logger.error(f"POST /register-apns: failed to load tokens: {e}")
+        apns_tokens = {}
+
+    # Store mapping: device_token -> apns_token
+    apns_tokens[request.device_token] = request.apns_token
+
+    # Save
+    try:
+        APNS_TOKENS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        APNS_TOKENS_FILE.write_text(json.dumps(apns_tokens, indent=2))
+        logger.info(f"POST /register-apns: saved APNs token for device={device_short}...")
+    except Exception as e:
+        logger.error(f"POST /register-apns: failed to save tokens: {e}")
+        raise HTTPException(status_code=500, detail="Failed to save APNs token")
+
+    return {"status": "ok", "message": "APNs token registered"}
 
 
 @app.get("/tokens")

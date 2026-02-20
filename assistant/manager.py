@@ -991,6 +991,22 @@ class IPCServer:
                 return {"ok": False, "error": "Missing chat_id"}
             session = await self.backend.restart_session(chat_id)
             return {"ok": session is not None, "message": f"Restarted {chat_id}" if session else "Failed to restart"}
+        elif cmd == "set_model":
+            chat_id = request.get("chat_id")
+            model = request.get("model")
+            if not chat_id:
+                return {"ok": False, "error": "Missing chat_id"}
+            if model not in ("opus", "sonnet", "haiku"):
+                return {"ok": False, "error": f"Invalid model: {model}"}
+            # Update registry with new model
+            existing = self.registry.get(chat_id)
+            if not existing:
+                return {"ok": False, "error": f"Session not found: {chat_id}"}
+            existing["model"] = model
+            self.registry.register(**existing)
+            # Restart session to pick up new model
+            session = await self.backend.restart_session(chat_id)
+            return {"ok": session is not None, "message": f"Set model to {model} for {chat_id}"}
         elif cmd == "kill_all_sessions":
             count = await self.backend.kill_all_sessions()
             return {"ok": True, "message": f"Killed {count} sessions"}

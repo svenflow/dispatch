@@ -1,0 +1,141 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["requests"]
+# ///
+"""
+Download photos for a place to /tmp and print paths.
+
+Usage:
+    place-photos <place_id> [--limit N]
+    place-photos "thai wellness massage somerville" [--limit N]
+
+If input looks like a place_id (starts with ChIJ), uses it directly.
+Otherwise searches for the place first.
+
+Prints paths to downloaded images, one per line.
+"""
+
+import subprocess
+import sys
+import os
+import json
+import requests
+import tempfile
+from pathlib import Path
+
+def get_api_key():
+    """Get API key from keychain."""
+    result = subprocess.run(
+        ["security", "find-generic-password", "-s", "google-api-key", "-w"],
+        capture_output=True, text=True
+    )
+    return result.stdout.strip()
+
+def run_goplaces(args):
+    """Run goplaces command with API key."""
+    env = os.environ.copy()
+    env["GOOGLE_PLACES_API_KEY"] = get_api_key()
+    result = subprocess.run(
+        ["goplaces"] + args,
+        capture_output=True, text=True, env=env
+    )
+    return result.stdout, result.stderr, result.returncode
+
+def search_place(query):
+    """Search for a place and return its ID."""
+    stdout, stderr, code = run_goplaces(["search", query, "--json", "--limit", "1"])
+    if code != 0:
+        print(f"Error searching: {stderr}", file=sys.stderr)
+        return None
+    try:
+        results = json.loads(stdout)
+        if results:
+            return results[0].get("place_id")
+    except json.JSONDecodeError:
+        pass
+    return None
+
+def get_photo_names(place_id):
+    """Get photo names for a place."""
+    stdout, stderr, code = run_goplaces(["details", place_id, "--photos", "--json"])
+    if code != 0:
+        print(f"Error getting details: {stderr}", file=sys.stderr)
+        return []
+    try:
+        details = json.loads(stdout)
+        photos = details.get("photos", [])
+        return [p.get("name") for p in photos if p.get("name")]
+    except json.JSONDecodeError:
+        return []
+
+def get_photo_url(photo_name, max_width=800):
+    """Get the actual URL for a photo."""
+    stdout, stderr, code = run_goplaces(["photo", photo_name, "--max-width", str(max_width), "--json"])
+    if code != 0:
+        return None
+    try:
+        data = json.loads(stdout)
+        return data.get("photo_uri")
+    except json.JSONDecodeError:
+        return None
+
+def download_photo(url, place_id, index):
+    """Download a photo to /tmp and return the path."""
+    try:
+        response = requests.get(url, timeout=30)
+        response.raise_for_status()
+
+        # Create filename
+        filename = f"place_{place_id[:8]}_{index}.jpg"
+        filepath = Path(tempfile.gettempdir()) / filename
+
+        with open(filepath, "wb") as f:
+            f.write(response.content)
+
+        return str(filepath)
+    except Exception as e:
+        print(f"Error downloading: {e}", file=sys.stderr)
+        return None
+
+def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Download place photos")
+    parser.add_argument("query", help="Place ID or search query")
+    parser.add_argument("--limit", "-n", type=int, default=3, help="Max photos to download (default: 3)")
+    args = parser.parse_args()
+
+    # Determine if input is place_id or search query
+    if args.query.startswith("ChIJ"):
+        place_id = args.query
+    else:
+        place_id = search_place(args.query)
+        if not place_id:
+            print("Place not found", file=sys.stderr)
+            sys.exit(1)
+
+    # Get photo names
+    photo_names = get_photo_names(place_id)
+    if not photo_names:
+        print("No photos found", file=sys.stderr)
+        sys.exit(1)
+
+    # Limit photos
+    photo_names = photo_names[:args.limit]
+
+    # Download each photo
+    paths = []
+    for i, name in enumerate(photo_names):
+        url = get_photo_url(name)
+        if url:
+            path = download_photo(url, place_id, i)
+            if path:
+                paths.append(path)
+                print(path)
+
+    if not paths:
+        print("Failed to download any photos", file=sys.stderr)
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

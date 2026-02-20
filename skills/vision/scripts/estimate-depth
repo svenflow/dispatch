@@ -1,0 +1,76 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "torch",
+#     "torchvision",
+#     "pillow",
+#     "numpy",
+#     "transformers",
+#     "accelerate",
+# ]
+# ///
+"""Depth estimation using DPT (MiDaS-based)."""
+
+import sys
+import numpy as np
+from PIL import Image
+import torch
+
+def estimate_depth(input_path: str, output_prefix: str):
+    """Estimate depth using DPT-Large."""
+
+    from transformers import DPTImageProcessor, DPTForDepthEstimation
+
+    print("Loading DPT depth model...")
+    processor = DPTImageProcessor.from_pretrained("Intel/dpt-large")
+    model = DPTForDepthEstimation.from_pretrained("Intel/dpt-large")
+
+    device = "mps" if torch.backends.mps.is_available() else "cpu"
+    print(f"Using device: {device}")
+    model.to(device)
+
+    print("Loading image...")
+    image = Image.open(input_path).convert("RGB")
+    w, h = image.size
+
+    print("Estimating depth...")
+    inputs = processor(images=image, return_tensors="pt").to(device)
+
+    with torch.no_grad():
+        outputs = model(**inputs)
+        predicted_depth = outputs.predicted_depth
+
+    prediction = torch.nn.functional.interpolate(
+        predicted_depth.unsqueeze(1),
+        size=(h, w),
+        mode="bicubic",
+        align_corners=False,
+    ).squeeze()
+
+    depth = prediction.cpu().numpy()
+    depth = (depth - depth.min()) / (depth.max() - depth.min()) * 255
+    depth = depth.astype(np.uint8)
+
+    depth_gray_path = f"{output_prefix}_depth_gray.png"
+    Image.fromarray(depth).save(depth_gray_path)
+    print(f"Saved grayscale depth: {depth_gray_path}")
+
+    # Viridis-like colormap
+    depth_normalized = depth.astype(np.float32) / 255.0
+    r = (np.clip(1.5 - np.abs(depth_normalized * 4 - 3), 0, 1) * 255).astype(np.uint8)
+    g = (np.clip(1.5 - np.abs(depth_normalized * 4 - 2), 0, 1) * 255).astype(np.uint8)
+    b = (np.clip(1.5 - np.abs(depth_normalized * 4 - 1), 0, 1) * 255).astype(np.uint8)
+    depth_colored = np.stack([r, g, b], axis=-1)
+
+    depth_color_path = f"{output_prefix}_depth_color.png"
+    Image.fromarray(depth_colored).save(depth_color_path)
+    print(f"Saved colored depth: {depth_color_path}")
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 3:
+        print("Usage: estimate-depth <input_image> <output_prefix>")
+        sys.exit(1)
+
+    estimate_depth(sys.argv[1], sys.argv[2])

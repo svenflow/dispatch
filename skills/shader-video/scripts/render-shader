@@ -1,0 +1,252 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "numpy",
+#     "pillow",
+#     "moderngl",
+# ]
+# ///
+"""
+Render a GLSL shader to video using ModernGL (headless).
+
+Usage:
+    render-shader shader.frag output.mp4
+    render-shader shader.frag output.mp4 --duration 8 --width 1080 --height 1080 --fps 60
+
+The shader should use these uniforms:
+    uniform vec2 u_resolution;  // Screen resolution
+    uniform float u_time;       // Time in seconds
+    out vec4 fragColor;         // Output color
+"""
+
+import argparse
+import os
+import re
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+import moderngl
+import numpy as np
+from PIL import Image
+
+
+def adapt_shader_for_moderngl(shader_code: str) -> str:
+    """Adapt shader code to work with our moderngl setup."""
+
+    # If shader doesn't have version, add it
+    if not shader_code.strip().startswith('#version'):
+        shader_code = '#version 330\n' + shader_code
+
+    # Add output declaration if missing
+    if 'out vec4' not in shader_code and 'gl_FragColor' in shader_code:
+        # Old-style shader using gl_FragColor
+        shader_code = shader_code.replace('gl_FragColor', 'fragColor')
+        # Add output declaration after version
+        lines = shader_code.split('\n')
+        for i, line in enumerate(lines):
+            if line.strip().startswith('#version'):
+                lines.insert(i + 1, 'out vec4 fragColor;')
+                break
+        shader_code = '\n'.join(lines)
+
+    # Ensure uniforms are declared
+    if 'uniform vec2 u_resolution' not in shader_code:
+        lines = shader_code.split('\n')
+        for i, line in enumerate(lines):
+            if line.strip().startswith('#version'):
+                lines.insert(i + 1, 'uniform vec2 u_resolution;')
+                lines.insert(i + 2, 'uniform float u_time;')
+                break
+        shader_code = '\n'.join(lines)
+
+    return shader_code
+
+
+def render_shader_to_video(
+    shader_path: str,
+    output_path: str,
+    width: int = 2160,
+    height: int = 2160,
+    fps: int = 30,
+    duration: float = 6.0,
+    save_frame: bool = False,
+    hq: bool = True,
+):
+    """Render shader to video using ModernGL headless context."""
+
+    # Read and adapt shader
+    with open(shader_path) as f:
+        frag_shader = f.read()
+
+    frag_shader = adapt_shader_for_moderngl(frag_shader)
+
+    # Create headless context
+    ctx = moderngl.create_standalone_context()
+
+    # Create framebuffer
+    fbo = ctx.framebuffer(
+        color_attachments=[ctx.texture((width, height), 4)]
+    )
+
+    # Simple vertex shader for fullscreen quad
+    vertex_shader = '''
+    #version 330
+    in vec2 in_vert;
+    void main() {
+        gl_Position = vec4(in_vert, 0.0, 1.0);
+    }
+    '''
+
+    # Create shader program
+    try:
+        prog = ctx.program(
+            vertex_shader=vertex_shader,
+            fragment_shader=frag_shader,
+        )
+    except Exception as e:
+        print(f"Shader compilation error:\n{e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Fullscreen quad vertices
+    vertices = np.array([
+        -1.0, -1.0,
+         1.0, -1.0,
+        -1.0,  1.0,
+         1.0,  1.0,
+    ], dtype='f4')
+
+    vbo = ctx.buffer(vertices)
+    vao = ctx.simple_vertex_array(prog, vbo, 'in_vert')
+
+    # Create temp directory for frames
+    with tempfile.TemporaryDirectory() as tmpdir:
+        num_frames = int(fps * duration)
+
+        print(f"Rendering {num_frames} frames at {width}x{height}...")
+
+        for frame_idx in range(num_frames):
+            time_value = frame_idx / fps
+
+            # Set uniforms (only if they exist in shader)
+            if 'u_resolution' in prog:
+                prog['u_resolution'].value = (float(width), float(height))
+            if 'u_time' in prog:
+                prog['u_time'].value = time_value
+
+            # Render
+            fbo.use()
+            ctx.clear(0.0, 0.0, 0.0, 1.0)
+            vao.render(moderngl.TRIANGLE_STRIP)
+
+            # Read pixels
+            data = fbo.read(components=4)
+            img = Image.frombytes('RGBA', (width, height), data)
+            img = img.transpose(Image.FLIP_TOP_BOTTOM)
+
+            # Save frame
+            frame_path = os.path.join(tmpdir, f'frame_{frame_idx:04d}.png')
+            img.save(frame_path)
+
+            if (frame_idx + 1) % fps == 0:
+                print(f"  {frame_idx + 1}/{num_frames} frames ({(frame_idx + 1) / fps:.0f}s)")
+
+        # Optionally save a single frame for preview
+        if save_frame:
+            frame_path = output_path.replace('.mp4', '_frame.png')
+            img.save(frame_path)
+            print(f"Saved preview frame: {frame_path}")
+
+        print("Encoding video with ffmpeg...")
+
+        # Determine output format - use .mov for iMessage compatibility
+        is_mov = output_path.lower().endswith('.mov')
+
+        # Use ffmpeg to create video
+        if hq:
+            # High quality settings for iMessage: QuickTime container, high bitrate
+            ffmpeg_cmd = [
+                'ffmpeg', '-y',
+                '-framerate', str(fps),
+                '-i', os.path.join(tmpdir, 'frame_%04d.png'),
+                '-c:v', 'libx265',
+                '-b:v', '50M',
+                '-maxrate', '60M',
+                '-bufsize', '120M',
+                '-preset', 'slow',
+                '-tag:v', 'hvc1',
+                '-pix_fmt', 'yuv420p',
+                '-movflags', '+faststart',
+            ]
+            if is_mov:
+                ffmpeg_cmd.extend(['-brand', 'qt'])
+            ffmpeg_cmd.append(output_path)
+        else:
+            # Fast/small settings for quick previews
+            ffmpeg_cmd = [
+                'ffmpeg', '-y',
+                '-framerate', str(fps),
+                '-i', os.path.join(tmpdir, 'frame_%04d.png'),
+                '-c:v', 'libx265',
+                '-crf', '26',
+                '-preset', 'fast',
+                '-tag:v', 'hvc1',
+                '-pix_fmt', 'yuv420p',
+                output_path
+            ]
+
+        result = subprocess.run(ffmpeg_cmd, capture_output=True)
+        if result.returncode != 0:
+            print(f"ffmpeg error:\n{result.stderr.decode()}", file=sys.stderr)
+            sys.exit(1)
+
+        file_size = os.path.getsize(output_path)
+        print(f"Done! Output: {output_path} ({file_size / 1024:.1f} KB)")
+
+        if file_size > 100 * 1024 * 1024:
+            print("Warning: File exceeds 100MB iMessage limit", file=sys.stderr)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Render a GLSL shader to video',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''
+Examples:
+    render-shader shader.frag output.mp4
+    render-shader shader.frag output.mp4 --duration 10 --fps 60
+    render-shader shader.frag output.mp4 --width 1080 --height 1080 --save-frame
+        '''
+    )
+    parser.add_argument('shader', help='Path to GLSL fragment shader file')
+    parser.add_argument('output', help='Output video path (.mp4)')
+    parser.add_argument('--width', type=int, default=2160, help='Video width (default: 2160 for 4K)')
+    parser.add_argument('--height', type=int, default=2160, help='Video height (default: 2160 for 4K)')
+    parser.add_argument('--fps', type=int, default=30, help='Frames per second (default: 30)')
+    parser.add_argument('--duration', type=float, default=6.0, help='Duration in seconds (default: 6.0)')
+    parser.add_argument('--save-frame', action='store_true', help='Save a preview frame as PNG')
+    parser.add_argument('--fast', action='store_true', help='Use fast/small encoding (lower quality, smaller file)')
+    parser.add_argument('--hq', action='store_true', default=True, help='Use high quality encoding for iMessage (default)')
+
+    args = parser.parse_args()
+
+    if not os.path.exists(args.shader):
+        print(f"Error: Shader file not found: {args.shader}", file=sys.stderr)
+        sys.exit(1)
+
+    render_shader_to_video(
+        args.shader,
+        args.output,
+        args.width,
+        args.height,
+        args.fps,
+        args.duration,
+        args.save_frame,
+        hq=not args.fast,
+    )
+
+
+if __name__ == '__main__':
+    main()

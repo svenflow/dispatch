@@ -1,0 +1,330 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "numpy",
+#     "pillow",
+#     "moderngl",
+# ]
+# ///
+"""
+Render Belousov-Zhabotinsky (BZ) reaction to video using ping-pong buffers.
+
+The BZ reaction uses 3 chemicals (A, B, C) in a cyclic reaction system:
+  A + B → 2A (rate α)
+  B + C → 2B (rate β)
+  C + A → 2C (rate γ)
+
+This produces spiral waves and oscillating patterns.
+
+Usage:
+    render-bz-reaction output.mov
+    render-bz-reaction output.mov --duration 15 --alpha 1.2 --beta 1.0 --gamma 1.0
+"""
+
+import argparse
+import os
+import subprocess
+import sys
+import tempfile
+
+import moderngl
+import numpy as np
+from PIL import Image
+
+
+def render_bz_reaction(
+    output_path: str,
+    width: int = 1080,
+    height: int = 1080,
+    fps: int = 30,
+    duration: float = 15.0,
+    iterations: int = 5,  # Simulation steps per frame (fewer needed for BZ)
+    alpha: float = 1.2,
+    beta: float = 1.0,
+    gamma: float = 1.0,
+    hq: bool = True,
+):
+    """Render BZ reaction with ping-pong buffers."""
+
+    ctx = moderngl.create_standalone_context()
+
+    # Create two framebuffers for ping-pong
+    # Stores: r=A, g=B, b=C concentrations
+    tex_a = ctx.texture((width, height), 4, dtype='f4')
+    tex_b = ctx.texture((width, height), 4, dtype='f4')
+    fbo_a = ctx.framebuffer(color_attachments=[tex_a])
+    fbo_b = ctx.framebuffer(color_attachments=[tex_b])
+
+    # Output framebuffer
+    tex_out = ctx.texture((width, height), 4)
+    fbo_out = ctx.framebuffer(color_attachments=[tex_out])
+
+    vertex_shader = '''
+    #version 330
+    in vec2 in_position;
+    out vec2 v_texcoord;
+    void main() {
+        gl_Position = vec4(in_position, 0.0, 1.0);
+        v_texcoord = in_position * 0.5 + 0.5;
+    }
+    '''
+
+    # Initialize with random concentrations
+    init_shader = '''
+    #version 330
+    in vec2 v_texcoord;
+    out vec4 fragColor;
+
+    float hash(vec2 p) {
+        vec3 p3 = fract(vec3(p.xyx) * vec3(.1031, .1030, .0973));
+        p3 += dot(p3, p3.yxz + 33.33);
+        return fract((p3.x + p3.y) * p3.z);
+    }
+
+    void main() {
+        vec2 uv = v_texcoord;
+
+        // Random initial concentrations for all three chemicals
+        float a = hash(gl_FragCoord.xy * 0.1);
+        float b = hash(gl_FragCoord.xy * 0.1 + 100.0);
+        float c = hash(gl_FragCoord.xy * 0.1 + 200.0);
+
+        fragColor = vec4(a, b, c, 1.0);
+    }
+    '''
+
+    # BZ reaction simulation
+    sim_shader = f'''
+    #version 330
+    uniform vec2 u_resolution;
+    uniform sampler2D u_state;
+    uniform float u_alpha;
+    uniform float u_beta;
+    uniform float u_gamma;
+    in vec2 v_texcoord;
+    out vec4 fragColor;
+
+    void main() {{
+        vec2 texel = 1.0 / u_resolution;
+        vec2 uv = v_texcoord;
+
+        // Get current concentrations
+        vec4 current = texture(u_state, uv);
+        float a = current.r;
+        float b = current.g;
+        float c = current.b;
+
+        // Diffusion: average with 8 neighbors (Moore neighborhood)
+        vec4 sum = vec4(0.0);
+        for (int dy = -1; dy <= 1; dy++) {{
+            for (int dx = -1; dx <= 1; dx++) {{
+                sum += texture(u_state, uv + vec2(float(dx), float(dy)) * texel);
+            }}
+        }}
+        vec4 avg = sum / 9.0;
+
+        // Use diffused values
+        a = avg.r;
+        b = avg.g;
+        c = avg.b;
+
+        // BZ reaction equations:
+        // A + B → 2A (rate α)
+        // B + C → 2B (rate β)
+        // C + A → 2C (rate γ)
+        float alpha = u_alpha;
+        float beta = u_beta;
+        float gamma = u_gamma;
+
+        float newA = a + a * (alpha * b - gamma * c);
+        float newB = b + b * (beta * c - alpha * a);
+        float newC = c + c * (gamma * a - beta * b);
+
+        // Clamp to [0, 1]
+        newA = clamp(newA, 0.0, 1.0);
+        newB = clamp(newB, 0.0, 1.0);
+        newC = clamp(newC, 0.0, 1.0);
+
+        fragColor = vec4(newA, newB, newC, 1.0);
+    }}
+    '''
+
+    # Display shader - map RGB chemicals to colors
+    display_shader = '''
+    #version 330
+    uniform sampler2D u_state;
+    in vec2 v_texcoord;
+    out vec4 fragColor;
+
+    void main() {
+        vec2 uv = v_texcoord;
+        vec4 state = texture(u_state, uv);
+        float a = state.r;
+        float b = state.g;
+        float c = state.b;
+
+        // Color mapping - each chemical gets a color channel
+        // But with more artistic blending
+
+        // Option 1: Direct RGB mapping (psychedelic)
+        // vec3 color = vec3(a, b, c);
+
+        // Option 2: Artistic palette
+        vec3 colorA = vec3(0.9, 0.2, 0.3);   // Red-pink for A
+        vec3 colorB = vec3(0.2, 0.8, 0.4);   // Green for B
+        vec3 colorC = vec3(0.3, 0.4, 0.9);   // Blue for C
+
+        vec3 color = a * colorA + b * colorB + c * colorC;
+
+        // Normalize to prevent over-saturation
+        float maxVal = max(max(color.r, color.g), color.b);
+        if (maxVal > 1.0) color /= maxVal;
+
+        // Add some contrast
+        color = pow(color, vec3(0.9));
+
+        // Subtle vignette
+        float vignette = 1.0 - length(uv - 0.5) * 0.3;
+        color *= vignette;
+
+        fragColor = vec4(color, 1.0);
+    }
+    '''
+
+    try:
+        prog_init = ctx.program(vertex_shader=vertex_shader, fragment_shader=init_shader)
+        prog_sim = ctx.program(vertex_shader=vertex_shader, fragment_shader=sim_shader)
+        prog_display = ctx.program(vertex_shader=vertex_shader, fragment_shader=display_shader)
+    except Exception as e:
+        print(f"Shader compilation error:\n{e}", file=sys.stderr)
+        sys.exit(1)
+
+    vertices = np.array([-1.0, -1.0, 1.0, -1.0, -1.0, 1.0, 1.0, 1.0], dtype='f4')
+    vbo = ctx.buffer(vertices)
+    vao_init = ctx.simple_vertex_array(prog_init, vbo, 'in_position')
+    vao_sim = ctx.simple_vertex_array(prog_sim, vbo, 'in_position')
+    vao_display = ctx.simple_vertex_array(prog_display, vbo, 'in_position')
+
+    prog_sim['u_resolution'].value = (float(width), float(height))
+    prog_sim['u_alpha'].value = alpha
+    prog_sim['u_beta'].value = beta
+    prog_sim['u_gamma'].value = gamma
+
+    # Initialize
+    fbo_a.use()
+    vao_init.render(moderngl.TRIANGLE_STRIP)
+
+    tex_a.use(0)
+    tex_b.use(1)
+    prog_sim['u_state'] = 0
+    prog_display['u_state'] = 0
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        num_frames = int(fps * duration)
+        print(f"Rendering {num_frames} frames at {width}x{height}...")
+        print(f"Parameters: α={alpha}, β={beta}, γ={gamma}, {iterations} iterations/frame")
+
+        current_fbo = fbo_a
+        current_tex = tex_a
+        other_fbo = fbo_b
+        other_tex = tex_b
+
+        for frame_idx in range(num_frames):
+            for _ in range(iterations):
+                current_tex.use(0)
+                other_fbo.use()
+                vao_sim.render(moderngl.TRIANGLE_STRIP)
+
+                current_fbo, other_fbo = other_fbo, current_fbo
+                current_tex, other_tex = other_tex, current_tex
+
+            current_tex.use(0)
+            fbo_out.use()
+            ctx.clear(0.0, 0.0, 0.0, 1.0)
+            vao_display.render(moderngl.TRIANGLE_STRIP)
+
+            data = fbo_out.read(components=4)
+            img = Image.frombytes('RGBA', (width, height), data)
+            img = img.transpose(Image.FLIP_TOP_BOTTOM)
+
+            frame_path = os.path.join(tmpdir, f'frame_{frame_idx:04d}.png')
+            img.save(frame_path)
+
+            if (frame_idx + 1) % fps == 0:
+                print(f"  {frame_idx + 1}/{num_frames} frames ({(frame_idx + 1) / fps:.0f}s)")
+
+        print("Encoding video with ffmpeg...")
+
+        is_mov = output_path.lower().endswith('.mov')
+
+        if hq:
+            ffmpeg_cmd = [
+                'ffmpeg', '-y',
+                '-framerate', str(fps),
+                '-i', os.path.join(tmpdir, 'frame_%04d.png'),
+                '-c:v', 'libx265',
+                '-b:v', '50M',
+                '-maxrate', '60M',
+                '-bufsize', '120M',
+                '-preset', 'slow',
+                '-tag:v', 'hvc1',
+                '-pix_fmt', 'yuv420p',
+                '-movflags', '+faststart',
+            ]
+            if is_mov:
+                ffmpeg_cmd.extend(['-brand', 'qt'])
+            ffmpeg_cmd.append(output_path)
+        else:
+            ffmpeg_cmd = [
+                'ffmpeg', '-y',
+                '-framerate', str(fps),
+                '-i', os.path.join(tmpdir, 'frame_%04d.png'),
+                '-c:v', 'libx265',
+                '-crf', '26',
+                '-preset', 'fast',
+                '-tag:v', 'hvc1',
+                '-pix_fmt', 'yuv420p',
+                output_path
+            ]
+
+        result = subprocess.run(ffmpeg_cmd, capture_output=True)
+        if result.returncode != 0:
+            print(f"ffmpeg error:\n{result.stderr.decode()}", file=sys.stderr)
+            sys.exit(1)
+
+        file_size = os.path.getsize(output_path)
+        print(f"Done! Output: {output_path} ({file_size / 1024 / 1024:.1f} MB)")
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Render Belousov-Zhabotinsky reaction to video')
+    parser.add_argument('output', help='Output video path (.mov recommended)')
+    parser.add_argument('--width', type=int, default=1080, help='Video width (default: 1080)')
+    parser.add_argument('--height', type=int, default=1080, help='Video height (default: 1080)')
+    parser.add_argument('--fps', type=int, default=30, help='Frames per second (default: 30)')
+    parser.add_argument('--duration', type=float, default=15.0, help='Duration in seconds (default: 15)')
+    parser.add_argument('--iterations', type=int, default=5, help='Simulation steps per frame (default: 5)')
+    parser.add_argument('--alpha', type=float, default=1.2, help='Rate constant α for A+B→2A (default: 1.2)')
+    parser.add_argument('--beta', type=float, default=1.0, help='Rate constant β for B+C→2B (default: 1.0)')
+    parser.add_argument('--gamma', type=float, default=1.0, help='Rate constant γ for C+A→2C (default: 1.0)')
+    parser.add_argument('--fast', action='store_true', help='Fast encoding (lower quality)')
+
+    args = parser.parse_args()
+
+    render_bz_reaction(
+        args.output,
+        args.width,
+        args.height,
+        args.fps,
+        args.duration,
+        args.iterations,
+        args.alpha,
+        args.beta,
+        args.gamma,
+        hq=not args.fast,
+    )
+
+
+if __name__ == '__main__':
+    main()

@@ -249,26 +249,32 @@ chrome screenshot 123456
 chrome close 123456
 ```
 
-## Cross-Origin Iframe Automation (e.g., Apple Sign-In)
+## CSP-Protected Pages & Cross-Origin Iframe Automation
 
-Some sites embed login forms in cross-origin iframes (e.g., Apple's idmsa.apple.com iframe on account.apple.com). Normal JS execution is blocked by:
-- CSP (Content Security Policy) blocking `eval()`
-- Cross-origin iframe security
+Some sites have strict Content Security Policy (CSP) that blocks normal JS injection:
+- Google Cloud Console (blocks `eval()` via Trusted Types)
+- Apple Sign-In iframes (cross-origin restrictions)
+- Many enterprise/banking sites
 
-**Solution:** Use `insert-text` and `iframe-click` commands which use Chrome Debugger API with `Page.createIsolatedWorld` to execute JS inside the iframe.
+**Solution:** Use `iframe-click` and `insert-text` commands which use Chrome Debugger API with `Page.createIsolatedWorld` to bypass CSP restrictions.
 
-### Commands for Iframe Automation
+**IMPORTANT:** If normal `chrome click` or `chrome js` fails with CSP/Trusted Types errors, use `iframe-click` instead - it works on BOTH iframes AND main frame content.
+
+### Commands for CSP-Protected Pages
 
 ```bash
-# Click element inside an Apple auth iframe (or similar cross-origin iframe)
+# Click element on CSP-protected pages (works on main frame OR iframes)
 chrome iframe-click <tab_id> '<css-selector>'
 chrome iframe-click 123456 'input[type="password"]'
 chrome iframe-click 123456 'button#sign-in'
+chrome iframe-click 123456 'text:Desktop client 1'  # Click by text content
 
-# Insert text at current focus (works inside iframes)
+# Insert text at current focus (works on CSP-protected pages)
 chrome insert-text <tab_id> '<text>'
 chrome insert-text 123456 'mypassword123'
 ```
+
+**When to use:** If you see "Trusted Type assignment" errors or CSP violations, switch to `iframe-click`.
 
 ### Apple Login Flow Example (App Store Connect)
 

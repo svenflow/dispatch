@@ -2,9 +2,19 @@
 # /// script
 # dependencies = []
 # ///
+"""
+reply - Universal reply CLI that auto-detects backend from cwd
+
+Usage:
+    reply "message"                     # Send text
+    reply --image /path/to.png          # Send image only
+    reply "caption" --image /path.png   # Send text + image
+    reply --file /path/to.pdf           # Send any file
+"""
 import sys
 import json
 import subprocess
+import argparse
 from pathlib import Path
 
 TRANSCRIPTS_DIR = Path.home() / "transcripts"
@@ -28,9 +38,16 @@ def strip_registry_prefix(chat_id: str) -> str:
     return chat_id
 
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: reply 'message'", file=sys.stderr)
-        sys.exit(1)
+    parser = argparse.ArgumentParser(description="Universal reply CLI")
+    parser.add_argument("message", nargs="?", default="", help="Message text")
+    parser.add_argument("--image", "-i", help="Path to image file")
+    parser.add_argument("--file", "-f", help="Path to any file")
+    parser.add_argument("--allow-raw-filepath", action="store_true",
+                        help="Allow sending filepath as text (normally rejected)")
+    args = parser.parse_args()
+
+    if not args.message and not args.image and not args.file:
+        parser.error("Must provide message, --image, or --file")
 
     cwd = Path.cwd()
     try:
@@ -63,15 +80,26 @@ def main():
         sys.exit(1)
 
     bare_chat_id = strip_registry_prefix(chat_id)
-    msg = sys.argv[1]
 
     if backend == "signal":
         if is_group_chat_id(chat_id):
-            cmd = [str(SEND_SIGNAL_GROUP), bare_chat_id, msg]
+            cmd = [str(SEND_SIGNAL_GROUP), bare_chat_id]
         else:
-            cmd = [str(SEND_SIGNAL), bare_chat_id, msg]
+            cmd = [str(SEND_SIGNAL), bare_chat_id]
+        # Signal CLIs take message as second positional arg
+        if args.message:
+            cmd.append(args.message)
+        # Note: Signal image/file support would need to be added to signal CLIs
     else:
-        cmd = [str(SEND_SMS), bare_chat_id, msg]
+        cmd = [str(SEND_SMS), bare_chat_id]
+        if args.message:
+            cmd.append(args.message)
+        if args.image:
+            cmd.extend(["--image", args.image])
+        if args.file:
+            cmd.extend(["--file", args.file])
+        if args.allow_raw_filepath:
+            cmd.append("--allow-raw-filepath")
 
     result = subprocess.run(cmd)
     sys.exit(result.returncode)

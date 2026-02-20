@@ -667,10 +667,50 @@ struct RecordingIndicator: View {
 struct ProfileView: View {
     @ObservedObject var conversationStore: ConversationStore
     @Environment(\.dismiss) private var dismiss
+    @State private var serverURL: String = SvenAPIClient.serverURL
+    @State private var showingConnectionTest = false
+    @State private var connectionTestResult: String?
+    @State private var isTestingConnection = false
 
     var body: some View {
         NavigationStack {
             List {
+                Section(header: Text("Server Configuration")) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Server URL")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        TextField("e.g. 100.91.58.120:8080", text: $serverURL)
+                            .textFieldStyle(.roundedBorder)
+                            .autocapitalization(.none)
+                            .autocorrectionDisabled()
+                            .keyboardType(.URL)
+                            .onChange(of: serverURL) { _, newValue in
+                                SvenAPIClient.serverURL = newValue
+                            }
+                    }
+                    .padding(.vertical, 4)
+
+                    Button(action: testConnection) {
+                        HStack {
+                            if isTestingConnection {
+                                ProgressView()
+                                    .scaleEffect(0.8)
+                            } else {
+                                Image(systemName: "antenna.radiowaves.left.and.right")
+                            }
+                            Text("Test Connection")
+                        }
+                    }
+                    .disabled(isTestingConnection)
+
+                    if let result = connectionTestResult {
+                        Text(result)
+                            .font(.caption)
+                            .foregroundColor(result.contains("✓") ? .green : .red)
+                    }
+                }
+
                 Section {
                     Button(role: .destructive) {
                         Task {
@@ -699,11 +739,55 @@ struct ProfileView: View {
                         .foregroundColor(.secondary)
                 }
             }
-            .navigationTitle("Profile")
+            .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private func testConnection() {
+        isTestingConnection = true
+        connectionTestResult = nil
+
+        Task {
+            do {
+                var urlString = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !urlString.hasPrefix("http://") && !urlString.hasPrefix("https://") {
+                    urlString = "http://" + urlString
+                }
+                if urlString.hasSuffix("/") {
+                    urlString = String(urlString.dropLast())
+                }
+
+                guard let url = URL(string: "\(urlString)/health") else {
+                    await MainActor.run {
+                        connectionTestResult = "✗ Invalid URL"
+                        isTestingConnection = false
+                    }
+                    return
+                }
+
+                var request = URLRequest(url: url)
+                request.timeoutInterval = 5
+
+                let (_, response) = try await URLSession.shared.data(for: request)
+
+                await MainActor.run {
+                    if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
+                        connectionTestResult = "✓ Connected successfully!"
+                    } else {
+                        connectionTestResult = "✗ Server returned error"
+                    }
+                    isTestingConnection = false
+                }
+            } catch {
+                await MainActor.run {
+                    connectionTestResult = "✗ \(error.localizedDescription)"
+                    isTestingConnection = false
                 }
             }
         }

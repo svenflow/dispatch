@@ -1,0 +1,13 @@
+#!/bin/bash
+# Wrapper for Apple Vision person segmentation
+# Usage: segment-person input.jpg output_prefix
+
+if [ $# -lt 2 ]; then
+    echo "Usage: segment-person <input_image> <output_prefix>"
+    echo "Example: segment-person photo.jpg /tmp/result"
+    echo "Outputs: result_mask.png, result_overlay.png, result_cutout.png"
+    exit 1
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+swift "$SCRIPT_DIR/segment-person.swift" "$1" "$2"

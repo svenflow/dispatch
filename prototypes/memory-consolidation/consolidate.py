@@ -17,6 +17,7 @@ Usage:
 
 import argparse
 import json
+import os
 import re
 import sqlite3
 import subprocess
@@ -29,12 +30,13 @@ from typing import Optional
 # Paths (per PLAN.md)
 HOME = Path.home()
 DISPATCH_DIR = HOME / "dispatch"
-STATE_DIR = DISPATCH_DIR / "state"
-PROGRESS_FILE = STATE_DIR / "consolidation-progress.json"
-# Backups go to ~/.claude/state/ (not dispatch) since they contain PII
-BACKUP_DIR = HOME / ".claude/state/notes-backup"
 LOGS_DIR = DISPATCH_DIR / "logs"
 LOG_FILE = LOGS_DIR / "memory-consolidation.log"
+# Memory state in ~/memories (not ~/.claude or ~/dispatch)
+MEMORIES_DIR = HOME / "memories"
+CHECKPOINTS_FILE = MEMORIES_DIR / "checkpoints.json"
+BACKUP_DIR = MEMORIES_DIR / "backups"
+REPORTS_DIR = MEMORIES_DIR / "reports"
 CONTACTS_CLI = HOME / ".claude/skills/contacts/scripts/contacts"
 READ_SMS_CLI = HOME / ".claude/skills/sms-assistant/scripts/read-sms"
 CHAT_DB = HOME / "Library/Messages/chat.db"
@@ -43,37 +45,60 @@ CHAT_DB = HOME / "Library/Messages/chat.db"
 MANAGED_HEADER = "<!-- CLAUDE-MANAGED:v1 -->"
 LAST_UPDATED_PATTERN = r"\*Last updated: (\d{4}-\d{2}-\d{2} \d{2}:\d{2})\*"
 
-# Base extraction prompt
-EXTRACTION_PROMPT_BASE = """You are extracting personal facts about {contact_name} from recent conversations.
+# Base extraction prompt - STRICT first-person only
+EXTRACTION_PROMPT_BASE = """You are extracting personal facts about {contact_name} from their messages.
 
-EXTRACT (bullet points only):
-- Family/relationships (spouse, kids, siblings, pets)
-- Location/living situation
-- Profession/employer (but NOT technical details of their work)
-- Hobbies/interests
-- Important dates (birthday, anniversary)
-- Preferences (food, music, travel, etc.)
-- Life events (expecting baby, moving, new job)
+## CRITICAL RULES - READ CAREFULLY
 
-DO NOT EXTRACT:
-- Transactional details ("asked about weather")
-- Technical/coding preferences (those go in CLAUDE.md)
-- Sensitive info (SSN, passwords, financial details)
-- What we DID together - focus on WHO they ARE
-- System/infrastructure details (what computer they use, smart home setup)
-- Work project details
+Extract ONLY facts that {contact_name} explicitly states about THEMSELVES.
+
+### ✅ EXTRACT - Self-references (explicit or contextually clear):
+- "I have a dog" → Has a dog
+- "My birthday is March 5" → Birthday: March 5
+- "I love sushi" → Loves sushi
+- "My wife Sarah" → Wife named Sarah
+- "Just landed in Boston!" → Currently in Boston (contextually clear self-reference)
+- "Working from home today" → Works from home (implicit first-person)
+- "This Boston winter is killing me" → Lives in Boston area
+
+### ❌ DO NOT EXTRACT - Requests or questions (not personal facts):
+- "Find dog-friendly places" → NOT evidence they have a dog
+- "Book something with a hot tub" → Request, not preference
+- "What's the weather?" → Transactional
+- "Can you help my mom with X?" → About mom, not them
+
+### ❌ DO NOT EXTRACT - Inferred or contextual:
+- They asked about ski trips → Does NOT mean they ski
+- They're in a group chat about X → Does NOT mean they like X
+- Someone else mentioned them → NOT valid source
+
+### ❌ DO NOT EXTRACT - System metadata:
+- Phone number, tier, group memberships (stored elsewhere)
+
+### ⚠️ HANDLE CAREFULLY - Negations and corrections:
+- "I don't have a dog" → Do NOT extract "has a dog"
+- "Actually I moved to NYC" → Supersedes previous "lives in Boston"
+- "I'm not really into sushi" → Could note "doesn't like sushi" if relevant
+
+### ⚠️ HANDLE CAREFULLY - Temporal context:
+- Present tense "I live in Boston" → Current fact
+- Past tense "I lived in Boston" → Note as "Previously lived in Boston" or skip
+- Future "I'm planning to move" → Note as "Planning to move to X"
 
 {tier_emphasis}
 
-Existing memories:
+## Existing memories:
 {existing_memories}
 
-New messages since last update:
+## Messages FROM {contact_name}:
 {messages}
 
-Output ONLY bullet points starting with "- ". No headers, no categories, no explanations.
-Deduplicate similar facts. Max 15 items, most important first.
-If no new personal facts, output the existing memories unchanged."""
+## Output format:
+- Output ONLY bullet points starting with "- "
+- If NO explicit facts found, output "(no facts)"
+- If a new fact contradicts existing memory, use the newer information
+- Max 15 items, most important first
+- When in doubt, DO NOT extract - false positives are worse than missing facts"""
 
 # Tier-specific emphasis (added to extraction prompt based on relationship)
 TIER_EMPHASIS = {
@@ -114,26 +139,29 @@ def get_extraction_prompt(contact_name: str, tier: str, existing_memories: str, 
         messages=messages
     )
 
-# Review prompt (per PLAN.md) - now includes conversation context for verification
-REVIEW_PROMPT = """Compare the existing memories vs proposed update for {contact_name}.
+# Review prompt - verifies facts are from explicit self-references
+REVIEW_PROMPT = """Review the proposed memory extraction for {contact_name}.
 
-Existing memories:
-{existing}
-
-Proposed update:
+## Proposed facts:
 {proposed}
 
-Recent conversation (for context verification):
+## Messages from {contact_name} (source):
 {messages}
 
-Check:
-1. Is any important existing information being lost?
-2. Are the new facts plausible based on the conversation above?
-3. Are facts genuinely new (not duplicates of existing)?
+## For EACH proposed fact, verify:
+1. Is there a self-referential statement from {contact_name} supporting it?
+   - Explicit: "I have a dog", "My birthday is..."
+   - Contextual: "Just landed in Boston!" (clearly about them)
+2. Is it about {contact_name} themselves (not someone else)?
+3. Is it NOT system metadata (phone, tier, group membership)?
+4. If it's a negation, is it correctly captured? ("don't have" ≠ "has")
 
-Output ONLY one of:
-- APPROVED
-- REJECTED: <reason>"""
+## Output ONE of:
+- APPROVED (all facts verified)
+- PARTIAL: [list only the verified facts as bullet points]
+- REJECTED: <reason - e.g., "no verifiable self-references found">
+
+If some facts are good but others aren't, use PARTIAL and list only the good ones."""
 
 
 def log(message: str):
@@ -144,17 +172,40 @@ def log(message: str):
         f.write(f"{timestamp} | {message}\n")
 
 
-def load_progress() -> dict:
-    """Load consolidation progress from checkpoint file."""
-    if PROGRESS_FILE.exists():
-        return json.loads(PROGRESS_FILE.read_text())
+def load_checkpoints() -> dict:
+    """Load consolidation checkpoints (last processed time per contact)."""
+    if CHECKPOINTS_FILE.exists():
+        return json.loads(CHECKPOINTS_FILE.read_text())
     return {}
 
 
-def save_progress(progress: dict):
-    """Save consolidation progress."""
-    PROGRESS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    PROGRESS_FILE.write_text(json.dumps(progress, indent=2, default=str))
+def save_checkpoints(checkpoints: dict):
+    """Save consolidation checkpoints."""
+    CHECKPOINTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    CHECKPOINTS_FILE.write_text(json.dumps(checkpoints, indent=2, default=str))
+
+
+def save_daily_report(results: list[dict]):
+    """Save daily consolidation report to ~/memories/reports/."""
+    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    report_file = REPORTS_DIR / f"{date_str}.json"
+
+    report = {
+        "date": date_str,
+        "timestamp": datetime.now().isoformat(),
+        "total_contacts": len(results),
+        "summary": {},
+        "contacts": results,
+    }
+
+    # Build summary by status
+    for r in results:
+        status = r["status"]
+        report["summary"][status] = report["summary"].get(status, 0) + 1
+
+    report_file.write_text(json.dumps(report, indent=2, default=str))
+    log(f"Daily report saved to {report_file}")
 
 
 def get_contact_notes(name: str) -> Optional[str]:
@@ -228,6 +279,38 @@ def get_messages_since(phone: str, since: Optional[datetime], limit: int = 500) 
     return ""
 
 
+def filter_messages_by_sender(messages: str, sender_phone: str) -> str:
+    """Filter group chat messages to only include messages FROM a specific sender.
+
+    Message format: 'YYYY-MM-DD HH:MM:SS | +phone | IN/OUT | message'
+    We want to keep only lines where the sender matches sender_phone.
+    """
+    if not messages:
+        return ""
+
+    filtered_lines = []
+    for line in messages.split('\n'):
+        # Skip header lines (start with #) and empty lines
+        if line.startswith('#') or not line.strip():
+            filtered_lines.append(line)
+            continue
+
+        # Parse message format: timestamp | sender | direction | content
+        parts = line.split(' | ', 3)
+        if len(parts) >= 3:
+            sender = parts[1].strip()
+            # Keep if sender matches the contact's phone (normalize both)
+            sender_normalized = sender.replace('-', '').replace(' ', '').replace('(', '').replace(')', '')
+            phone_normalized = sender_phone.replace('-', '').replace(' ', '').replace('(', '').replace(')', '')
+            if sender_normalized == phone_normalized:
+                filtered_lines.append(line)
+        else:
+            # Keep non-message lines (headers, etc)
+            filtered_lines.append(line)
+
+    return '\n'.join(filtered_lines)
+
+
 def get_group_chats_for_contact(phone: str) -> list[str]:
     """Get all group chat IDs where this contact participates (per PLAN.md SQL query)."""
     try:
@@ -253,13 +336,17 @@ def call_claude(prompt: str) -> str:
         f.write(prompt)
         prompt_file = f.name
 
+    # Clear CLAUDECODE to allow spawning claude from SDK sessions
+    clean_env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+
     try:
         result = subprocess.run(
-            f"cat '{prompt_file}' | claude -p - --model sonnet",
+            f"cat '{prompt_file}' | claude -p - --model opus",
             shell=True,
             capture_output=True,
             text=True,
-            timeout=120
+            timeout=120,
+            env=clean_env
         )
         if result.returncode != 0:
             log(f"Claude CLI failed (code {result.returncode}): {result.stderr[:500]}")
@@ -326,11 +413,15 @@ def consolidate_contact(contact_name: str, phone: str, tier: str = "unknown", dr
     messages = get_messages_since(phone, last_updated)
 
     # Also get messages from group chats (per PLAN.md Data Sources)
+    # IMPORTANT: Only include messages FROM this contact, not all group messages
     group_chats = get_group_chats_for_contact(phone)
     for group_id in group_chats:
         group_msgs = get_messages_since(group_id, last_updated, limit=100)
         if group_msgs:
-            messages += f"\n\n--- Group chat {group_id} ---\n{group_msgs}"
+            # Filter to only messages sent by this contact
+            filtered_msgs = filter_messages_by_sender(group_msgs, phone)
+            if filtered_msgs.strip():
+                messages += f"\n\n--- Group chat {group_id} (messages from {contact_name}) ---\n{filtered_msgs}"
 
     if not messages.strip() or "No messages found" in messages:
         result["status"] = "skipped"
@@ -382,7 +473,21 @@ def consolidate_contact(contact_name: str, phone: str, tier: str = "unknown", dr
     if verbose:
         print(f"  Review: {review_result.split(chr(10))[0]}")
 
-    if "REJECTED" in review_result:
+    # Handle PARTIAL approval - use the filtered facts from review
+    if "PARTIAL:" in review_result:
+        # Extract the approved facts from the PARTIAL response
+        partial_facts = '\n'.join([l for l in review_result.split('\n') if l.strip().startswith('- ')])
+        if partial_facts:
+            proposed = partial_facts
+            result["facts_after"] = len([l for l in proposed.split('\n') if l.strip().startswith('- ')])
+            if verbose:
+                print(f"  Partial approval: {result['facts_after']} facts kept")
+        else:
+            result["status"] = "rejected"
+            result["error"] = "PARTIAL with no valid facts"
+            log(f"Rejected {contact_name}: partial review had no valid facts")
+            return result
+    elif "REJECTED" in review_result:
         result["status"] = "rejected"
         result["error"] = review_result
         log(f"Rejected {contact_name}: {review_result}")
@@ -415,13 +520,13 @@ def consolidate_contact(contact_name: str, phone: str, tier: str = "unknown", dr
         result["status"] = "updated"
         log(f"Updated {contact_name}: {result['facts_before']} -> {result['facts_after']} facts")
 
-        # Update progress checkpoint (per PLAN.md First-Run Backfill)
-        progress = load_progress()
-        progress[phone] = {
+        # Update checkpoint (per PLAN.md First-Run Backfill)
+        checkpoints = load_checkpoints()
+        checkpoints[phone] = {
             "last_processed_ts": datetime.now().isoformat(),
             "contact_name": contact_name,
         }
-        save_progress(progress)
+        save_checkpoints(checkpoints)
     else:
         result["status"] = "error"
         result["error"] = "Failed to write notes to Contacts.app"
@@ -502,6 +607,10 @@ def main():
             print(f"  {status}: {count}")
 
         log(f"Batch complete: {by_status}")
+
+        # Save daily report to ~/memories/reports/
+        if not args.dry_run:
+            save_daily_report(results)
 
     elif args.contact:
         # Look up contact

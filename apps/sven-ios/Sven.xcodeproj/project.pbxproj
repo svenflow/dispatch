@@ -17,6 +17,9 @@
 		A3000007 /* SvenShortcuts.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000008; };
 		A4000002 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4000001; };
 		A5000001 /* RecordingSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000002; };
+		A6000001 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6000002; };
+		A7000001 /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7000002; };
+		A7000010 /* SvenNotificationService.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = A7000003; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -27,7 +30,28 @@
 			remoteGlobalIDString = A100000A;
 			remoteInfo = Sven;
 		};
+		A7000011 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A100000D /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A7000004;
+			remoteInfo = SvenNotificationService;
+		};
 /* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		A7000012 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				A7000010 /* SvenNotificationService.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		A1000002 /* SvenApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SvenApp.swift; sourceTree = "<group>"; };
@@ -42,6 +66,11 @@
 		A3000008 /* SvenShortcuts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SvenShortcuts.swift; sourceTree = "<group>"; };
 		A4000001 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
 		A5000002 /* RecordingSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingSheet.swift; sourceTree = "<group>"; };
+		A6000002 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		A6000003 /* Sven.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Sven.entitlements; sourceTree = "<group>"; };
+		A7000002 /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
+		A7000003 /* SvenNotificationService.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = SvenNotificationService.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		A7000005 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -53,6 +82,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		A2000005 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A7000006 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -77,6 +113,7 @@
 			isa = PBXGroup;
 			children = (
 				A1000008 /* Sven */,
+				A7000007 /* SvenNotificationService */,
 				A2000006 /* SvenUITests */,
 				A1000009 /* Products */,
 			);
@@ -86,6 +123,7 @@
 			isa = PBXGroup;
 			children = (
 				A1000002 /* SvenApp.swift */,
+				A6000002 /* AppDelegate.swift */,
 				A1000004 /* ContentView.swift */,
 				A3000002 /* AudioRecorder.swift */,
 				A3000004 /* SvenAPIClient.swift */,
@@ -94,6 +132,7 @@
 				A4000001 /* Models.swift */,
 				A5000002 /* RecordingSheet.swift */,
 				A1000021 /* Assets.xcassets */,
+				A6000003 /* Sven.entitlements */,
 			);
 			path = Sven;
 			sourceTree = "<group>";
@@ -103,6 +142,7 @@
 			children = (
 				A1000005 /* Sven.app */,
 				A2000004 /* SvenUITests.xctest */,
+				A7000003 /* SvenNotificationService.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -115,6 +155,15 @@
 			path = SvenUITests;
 			sourceTree = "<group>";
 		};
+		A7000007 /* SvenNotificationService */ = {
+			isa = PBXGroup;
+			children = (
+				A7000002 /* NotificationService.swift */,
+				A7000005 /* Info.plist */,
+			);
+			path = SvenNotificationService;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -125,10 +174,12 @@
 				A100000C /* Sources */,
 				A1000006 /* Frameworks */,
 				A1000022 /* Resources */,
+				A7000012 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				A7000013 /* PBXTargetDependency */,
 			);
 			name = Sven;
 			productName = Sven;
@@ -151,6 +202,22 @@
 			productName = SvenUITests;
 			productReference = A2000004;
 			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+		A7000004 /* SvenNotificationService */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A7000008;
+			buildPhases = (
+				A7000009 /* Sources */,
+				A7000006 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = SvenNotificationService;
+			productName = SvenNotificationService;
+			productReference = A7000003;
+			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
 
@@ -177,6 +244,7 @@
 			targets = (
 				A100000A /* Sven */,
 				A2000007 /* SvenUITests */,
+				A7000004 /* SvenNotificationService */,
 			);
 		};
 /* End PBXProject section */
@@ -187,6 +255,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A1000001 /* SvenApp.swift in Sources */,
+				A6000001 /* AppDelegate.swift in Sources */,
 				A1000003 /* ContentView.swift in Sources */,
 				A3000001 /* AudioRecorder.swift in Sources */,
 				A3000003 /* SvenAPIClient.swift in Sources */,
@@ -205,6 +274,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A7000009 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A7000001 /* NotificationService.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -213,6 +290,11 @@
 			target = A100000A /* Sven */;
 			targetProxy = A2000003 /* PBXContainerItemProxy */;
 		};
+		A7000013 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A7000004 /* SvenNotificationService */;
+			targetProxy = A7000011 /* PBXContainerItemProxy */;
+		};
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
@@ -220,8 +302,9 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Sven/Sven.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 32;
+				CURRENT_PROJECT_VERSION = 39;
 				DEVELOPMENT_TEAM = B5JUGARUU6;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -247,8 +330,9 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Sven/Sven.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 32;
+				CURRENT_PROJECT_VERSION = 39;
 				DEVELOPMENT_TEAM = B5JUGARUU6;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -419,6 +503,60 @@
 			};
 			name = Release;
 		};
+		A700000A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 39;
+				DEVELOPMENT_TEAM = B5JUGARUU6;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = SvenNotificationService/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = SvenNotificationService;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.sven.Sven.NotificationService;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		A700000B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 39;
+				DEVELOPMENT_TEAM = B5JUGARUU6;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = SvenNotificationService/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = SvenNotificationService;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.sven.Sven.NotificationService;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -445,6 +583,15 @@
 			buildConfigurations = (
 				A200000B /* Debug */,
 				A200000C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A7000008 /* Build configuration list for PBXNativeTarget "SvenNotificationService" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A700000A /* Debug */,
+				A700000B /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

@@ -170,8 +170,9 @@ PROMPT_END
 sed -i '' "s/ADMIN_PHONE/$ADMIN_PHONE/g" "$PROMPT_FILE"
 
 # Spawn healing Claude (run in background with PID tracking for manual timeout)
+# Clear CLAUDECODE env var to allow nested Claude sessions
 HEALING_PROMPT=$(cat "$PROMPT_FILE")
-claude --dangerously-skip-permissions -p "$HEALING_PROMPT" >> "$LOG" 2>&1 &
+env -u CLAUDECODE claude --dangerously-skip-permissions -p "$HEALING_PROMPT" >> "$LOG" 2>&1 &
 HEALER_PID=$!
 
 # Wait up to 15 minutes for healer

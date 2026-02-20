@@ -1,0 +1,76 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "ultralytics",
+#     "pillow",
+#     "numpy",
+#     "opencv-python",
+# ]
+# ///
+"""FastSAM - Segment Anything Model (fast version)."""
+
+import sys
+import numpy as np
+from PIL import Image
+import cv2
+
+def segment_image(input_path: str, output_prefix: str):
+    """Segment image using FastSAM."""
+
+    from ultralytics import FastSAM
+
+    print("Loading FastSAM model...")
+    model = FastSAM("FastSAM-s.pt")
+
+    print("Loading image...")
+    img = cv2.imread(input_path)
+    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    h, w = img_rgb.shape[:2]
+
+    print("Running FastSAM segmentation...")
+    results = model(img_rgb, device="mps", retina_masks=True, verbose=False)
+
+    result = results[0]
+    colored_overlay = img_rgb.copy().astype(np.float32)
+
+    np.random.seed(42)
+    num_masks = len(result.masks.data) if result.masks is not None else 0
+
+    if num_masks > 0:
+        print(f"Found {num_masks} segments")
+
+        masks = result.masks.data.cpu().numpy()
+        combined_mask = np.zeros((h, w), dtype=np.uint8)
+
+        areas = [mask.sum() for mask in masks]
+        sorted_indices = np.argsort(areas)[::-1]
+
+        for idx, i in enumerate(sorted_indices[:20]):
+            mask = masks[i]
+            if mask.shape != (h, w):
+                mask = cv2.resize(mask.astype(np.float32), (w, h)) > 0.5
+
+            color = np.random.randint(50, 255, 3)
+            colored_overlay[mask] = colored_overlay[mask] * 0.5 + color * 0.5
+
+            gray_val = min(255, (idx + 1) * 12)
+            combined_mask[mask] = gray_val
+
+        mask_path = f"{output_prefix}_mask.png"
+        Image.fromarray(combined_mask).save(mask_path)
+        print(f"Saved mask: {mask_path}")
+    else:
+        print("No segments found")
+
+    overlay_path = f"{output_prefix}_overlay.png"
+    Image.fromarray(colored_overlay.astype(np.uint8)).save(overlay_path)
+    print(f"Saved overlay: {overlay_path}")
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 3:
+        print("Usage: segment-fastsam <input_image> <output_prefix>")
+        sys.exit(1)
+
+    segment_image(sys.argv[1], sys.argv[2])

@@ -1,0 +1,588 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "numpy",
+#     "pillow",
+#     "pyobjc-framework-Metal",
+#     "pyobjc-framework-MetalKit",
+#     "pyobjc-framework-Cocoa",
+# ]
+# ///
+"""
+Render 3-CHANNEL Physarum simulation using Metal compute shaders.
+
+Three separate species (R, G, B) with slightly different parameters:
+- Each species has its own trail buffer
+- Each species senses its own pheromone primarily
+- Slight cross-sensing creates interference patterns
+- Different sensor angles/speeds create unique behaviors
+
+Usage:
+    render-physarum-rgb output.mov
+    render-physarum-rgb output.mov --agents 300000 --duration 15
+"""
+
+import argparse
+import ctypes
+import os
+import subprocess
+import sys
+import tempfile
+
+import Metal
+import numpy as np
+from PIL import Image
+
+
+# Metal shader source - 3 species version
+METAL_SOURCE = """
+#include <metal_stdlib>
+using namespace metal;
+
+// Agent: x, y, angle, species (0=R, 1=G, 2=B)
+struct Agent {
+    float x;
+    float y;
+    float angle;
+    float species;
+};
+
+// Params per species
+struct Params {
+    float sensorAngle;
+    float sensorDist;
+    float turnAngle;
+    float moveSpeed;
+    float depositAmount;
+    float decayFactor;
+    int width;
+    int height;
+    int numAgents;
+    float time;
+    float crossSense;  // How much to sense other species' trails
+};
+
+float hash(float2 p, float seed) {
+    float3 p3 = fract(float3(p.xyx) * 0.1031 + seed);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+float sampleTrail(device float* trail, float x, float y, int width, int height) {
+    int ix = int(x) % width;
+    int iy = int(y) % height;
+    if (ix < 0) ix += width;
+    if (iy < 0) iy += height;
+    return trail[iy * width + ix];
+}
+
+// Sample combined trail (own + cross-sensing of others)
+float sampleCombinedTrail(
+    device float* trailR, device float* trailG, device float* trailB,
+    float x, float y, int width, int height, int species, float crossSense
+) {
+    float r = sampleTrail(trailR, x, y, width, height);
+    float g = sampleTrail(trailG, x, y, width, height);
+    float b = sampleTrail(trailB, x, y, width, height);
+
+    // Each species is attracted to own trail, REPELLED by others
+    // This creates territorial behavior and color separation
+    if (species == 0) {  // Red
+        return r - crossSense * (g + b);
+    } else if (species == 1) {  // Green
+        return g - crossSense * (r + b);
+    } else {  // Blue
+        return b - crossSense * (r + g);
+    }
+}
+
+// Agent update kernel - each agent senses combined trails
+kernel void updateAgents(
+    device Agent* agents [[buffer(0)]],
+    device float* trailR [[buffer(1)]],
+    device float* trailG [[buffer(2)]],
+    device float* trailB [[buffer(3)]],
+    device atomic_uint* atomicR [[buffer(4)]],
+    device atomic_uint* atomicG [[buffer(5)]],
+    device atomic_uint* atomicB [[buffer(6)]],
+    constant Params& params [[buffer(7)]],
+    uint id [[thread_position_in_grid]]
+) {
+    if (id >= uint(params.numAgents)) return;
+
+    Agent agent = agents[id];
+    float x = agent.x;
+    float y = agent.y;
+    float angle = agent.angle;
+    int species = int(agent.species);
+
+    // Per-species parameter tweaks
+    float sensorAngle = params.sensorAngle;
+    float sensorDist = params.sensorDist;
+    float turnAngle = params.turnAngle;
+    float moveSpeed = params.moveSpeed;
+
+    // Each species behaves slightly differently
+    if (species == 0) {  // Red: tighter turns, faster
+        sensorAngle *= 0.85;
+        turnAngle *= 1.1;
+        moveSpeed *= 1.05;
+    } else if (species == 1) {  // Green: wider sensors, slower turns
+        sensorAngle *= 1.15;
+        sensorDist *= 1.1;
+        turnAngle *= 0.9;
+    } else {  // Blue: medium all around, longer sensing
+        sensorDist *= 1.2;
+        moveSpeed *= 0.95;
+    }
+
+    // SENSE: sample combined trails at 3 positions
+    float sensorL = sampleCombinedTrail(trailR, trailG, trailB,
+        x + cos(angle - sensorAngle) * sensorDist,
+        y + sin(angle - sensorAngle) * sensorDist,
+        params.width, params.height, species, params.crossSense);
+    float sensorC = sampleCombinedTrail(trailR, trailG, trailB,
+        x + cos(angle) * sensorDist,
+        y + sin(angle) * sensorDist,
+        params.width, params.height, species, params.crossSense);
+    float sensorR_val = sampleCombinedTrail(trailR, trailG, trailB,
+        x + cos(angle + sensorAngle) * sensorDist,
+        y + sin(angle + sensorAngle) * sensorDist,
+        params.width, params.height, species, params.crossSense);
+
+    // ROTATE
+    float randVal = hash(float2(x, y), params.time + float(id) * 0.001);
+
+    if (sensorC > sensorL && sensorC > sensorR_val) {
+        // Go straight
+    } else if (sensorC < sensorL && sensorC < sensorR_val) {
+        angle += (randVal > 0.5 ? 1.0 : -1.0) * turnAngle;
+    } else if (sensorR_val > sensorL) {
+        angle += turnAngle;
+    } else if (sensorL > sensorR_val) {
+        angle -= turnAngle;
+    }
+
+    // MOVE
+    float newX = x + cos(angle) * moveSpeed;
+    float newY = y + sin(angle) * moveSpeed;
+
+    // Wrap
+    if (newX < 0) newX += float(params.width);
+    if (newX >= float(params.width)) newX -= float(params.width);
+    if (newY < 0) newY += float(params.height);
+    if (newY >= float(params.height)) newY -= float(params.height);
+
+    // DEPOSIT to own species' atomic buffer
+    int ix = int(newX);
+    int iy = int(newY);
+    if (ix >= 0 && ix < params.width && iy >= 0 && iy < params.height) {
+        uint deposit = uint(params.depositAmount * 1000.0);
+        int idx = iy * params.width + ix;
+        if (species == 0) {
+            atomic_fetch_add_explicit(&atomicR[idx], deposit, memory_order_relaxed);
+        } else if (species == 1) {
+            atomic_fetch_add_explicit(&atomicG[idx], deposit, memory_order_relaxed);
+        } else {
+            atomic_fetch_add_explicit(&atomicB[idx], deposit, memory_order_relaxed);
+        }
+    }
+
+    agents[id].x = newX;
+    agents[id].y = newY;
+    agents[id].angle = angle;
+}
+
+// Apply deposits - one kernel for all 3 channels
+kernel void applyDeposits(
+    device float* trailR [[buffer(0)]],
+    device float* trailG [[buffer(1)]],
+    device float* trailB [[buffer(2)]],
+    device atomic_uint* atomicR [[buffer(3)]],
+    device atomic_uint* atomicG [[buffer(4)]],
+    device atomic_uint* atomicB [[buffer(5)]],
+    constant Params& params [[buffer(6)]],
+    uint2 pos [[thread_position_in_grid]]
+) {
+    if (pos.x >= uint(params.width) || pos.y >= uint(params.height)) return;
+
+    int idx = int(pos.y) * params.width + int(pos.x);
+
+    uint valR = atomic_exchange_explicit(&atomicR[idx], 0, memory_order_relaxed);
+    uint valG = atomic_exchange_explicit(&atomicG[idx], 0, memory_order_relaxed);
+    uint valB = atomic_exchange_explicit(&atomicB[idx], 0, memory_order_relaxed);
+
+    trailR[idx] += float(valR) / 1000.0;
+    trailG[idx] += float(valG) / 1000.0;
+    trailB[idx] += float(valB) / 1000.0;
+}
+
+// Diffuse all 3 channels
+kernel void diffuseTrails(
+    device float* trailR_in [[buffer(0)]],
+    device float* trailG_in [[buffer(1)]],
+    device float* trailB_in [[buffer(2)]],
+    device float* trailR_out [[buffer(3)]],
+    device float* trailG_out [[buffer(4)]],
+    device float* trailB_out [[buffer(5)]],
+    constant Params& params [[buffer(6)]],
+    uint2 pos [[thread_position_in_grid]]
+) {
+    if (pos.x >= uint(params.width) || pos.y >= uint(params.height)) return;
+
+    int x = int(pos.x);
+    int y = int(pos.y);
+    int w = params.width;
+    int h = params.height;
+
+    float sumR = 0.0, sumG = 0.0, sumB = 0.0;
+    for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            int nx = (x + dx + w) % w;
+            int ny = (y + dy + h) % h;
+            int nidx = ny * w + nx;
+            sumR += trailR_in[nidx];
+            sumG += trailG_in[nidx];
+            sumB += trailB_in[nidx];
+        }
+    }
+
+    int idx = y * w + x;
+    // Slightly different decay per channel for color variation
+    trailR_out[idx] = (sumR / 9.0) * params.decayFactor;
+    trailG_out[idx] = (sumG / 9.0) * (params.decayFactor * 0.995);  // Green decays slightly faster
+    trailB_out[idx] = (sumB / 9.0) * (params.decayFactor * 1.005);  // Blue decays slightly slower
+}
+"""
+
+
+def render_physarum_rgb(
+    output_path: str,
+    width: int = 1080,
+    height: int = 1080,
+    fps: int = 30,
+    duration: float = 15.0,
+    num_agents: int = 300000,
+    sensor_angle: float = 0.4,
+    sensor_dist: float = 20.0,
+    turn_angle: float = 0.3,
+    move_speed: float = 1.5,
+    deposit: float = 0.6,
+    decay: float = 0.97,
+    cross_sense: float = 0.5,
+    iterations: int = 3,
+    seed_image: str = None,
+    hq: bool = True,
+):
+    """Render 3-channel Physarum using Metal compute shaders."""
+
+    device = Metal.MTLCreateSystemDefaultDevice()
+    if device is None:
+        print("ERROR: No Metal device found", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Using Metal device: {device.name()}")
+
+    library, error = device.newLibraryWithSource_options_error_(METAL_SOURCE, None, None)
+    if library is None:
+        print(f"Shader compilation error: {error}", file=sys.stderr)
+        sys.exit(1)
+
+    updateAgentsFn = library.newFunctionWithName_("updateAgents")
+    applyDepositsFn = library.newFunctionWithName_("applyDeposits")
+    diffuseTrailsFn = library.newFunctionWithName_("diffuseTrails")
+
+    updateAgentsPSO, _ = device.newComputePipelineStateWithFunction_error_(updateAgentsFn, None)
+    applyDepositsPSO, _ = device.newComputePipelineStateWithFunction_error_(applyDepositsFn, None)
+    diffuseTrailsPSO, _ = device.newComputePipelineStateWithFunction_error_(diffuseTrailsFn, None)
+
+    # Initialize agents - either from seed image or random
+    agent_data = np.zeros((num_agents, 4), dtype=np.float32)
+
+    if seed_image is not None:
+        # Load and resize seed image
+        print(f"Seeding agents from image: {seed_image}")
+        seed_img = Image.open(seed_image).convert('RGB')
+        seed_img = seed_img.resize((width, height), Image.LANCZOS)
+        seed_arr = np.array(seed_img).astype(np.float32) / 255.0
+
+        # Calculate brightness for probability distribution
+        brightness = 0.299 * seed_arr[:,:,0] + 0.587 * seed_arr[:,:,1] + 0.114 * seed_arr[:,:,2]
+        brightness = brightness ** 0.5  # Gamma to spread distribution
+
+        # Normalize to probability
+        prob = brightness / brightness.sum()
+        flat_prob = prob.flatten()
+
+        # Sample agent positions weighted by brightness
+        indices = np.random.choice(len(flat_prob), size=num_agents, p=flat_prob)
+        y_coords = indices // width
+        x_coords = indices % width
+
+        for i in range(num_agents):
+            x, y = x_coords[i], y_coords[i]
+            r, g, b = seed_arr[y, x]
+
+            # Determine species by dominant channel
+            if r >= g and r >= b:
+                species = 0  # Red
+            elif g >= r and g >= b:
+                species = 1  # Green
+            else:
+                species = 2  # Blue
+
+            # Add small jitter
+            agent_data[i, 0] = float(x) + np.random.uniform(-0.5, 0.5)
+            agent_data[i, 1] = float(y) + np.random.uniform(-0.5, 0.5)
+            agent_data[i, 2] = np.random.uniform(0, 2 * np.pi)  # Random heading
+            agent_data[i, 3] = float(species)
+
+        print(f"  Seeded {num_agents} agents from image")
+    else:
+        # Random initialization - species in wedges
+        agents_per_species = num_agents // 3
+
+        for i in range(num_agents):
+            species = i // agents_per_species
+            if species > 2:
+                species = 2
+
+            base_angle = species * 2.0 * np.pi / 3.0 + np.pi / 6
+            angle = base_angle + np.random.uniform(-np.pi/4, np.pi/4)
+            radius = np.random.uniform(100, min(width, height) * 0.45)
+
+            agent_data[i, 0] = width / 2 + np.cos(angle) * radius
+            agent_data[i, 1] = height / 2 + np.sin(angle) * radius
+            agent_data[i, 2] = angle + np.random.uniform(-np.pi/4, np.pi/4)
+            agent_data[i, 3] = float(species)
+
+    agent_buffer = device.newBufferWithBytes_length_options_(
+        agent_data.tobytes(), agent_data.nbytes, Metal.MTLResourceStorageModeShared)
+
+    # Trail buffers - 3 channels, ping-pong each
+    trail_size = width * height * 4  # float32
+    trailR_a = device.newBufferWithLength_options_(trail_size, Metal.MTLResourceStorageModeShared)
+    trailR_b = device.newBufferWithLength_options_(trail_size, Metal.MTLResourceStorageModeShared)
+    trailG_a = device.newBufferWithLength_options_(trail_size, Metal.MTLResourceStorageModeShared)
+    trailG_b = device.newBufferWithLength_options_(trail_size, Metal.MTLResourceStorageModeShared)
+    trailB_a = device.newBufferWithLength_options_(trail_size, Metal.MTLResourceStorageModeShared)
+    trailB_b = device.newBufferWithLength_options_(trail_size, Metal.MTLResourceStorageModeShared)
+
+    # Atomic buffers for deposits
+    atomic_size = width * height * 4
+    atomicR = device.newBufferWithLength_options_(atomic_size, Metal.MTLResourceStorageModeShared)
+    atomicG = device.newBufferWithLength_options_(atomic_size, Metal.MTLResourceStorageModeShared)
+    atomicB = device.newBufferWithLength_options_(atomic_size, Metal.MTLResourceStorageModeShared)
+
+    # Clear atomic buffers
+    for atomic_buf in [atomicR, atomicG, atomicB]:
+        arr = (ctypes.c_uint32 * (width * height)).from_buffer(
+            atomic_buf.contents().as_buffer(atomic_size))
+        for i in range(width * height):
+            arr[i] = 0
+
+    # Params
+    class Params(ctypes.Structure):
+        _fields_ = [
+            ("sensorAngle", ctypes.c_float),
+            ("sensorDist", ctypes.c_float),
+            ("turnAngle", ctypes.c_float),
+            ("moveSpeed", ctypes.c_float),
+            ("depositAmount", ctypes.c_float),
+            ("decayFactor", ctypes.c_float),
+            ("width", ctypes.c_int32),
+            ("height", ctypes.c_int32),
+            ("numAgents", ctypes.c_int32),
+            ("time", ctypes.c_float),
+            ("crossSense", ctypes.c_float),
+        ]
+
+    params = Params(
+        sensorAngle=sensor_angle,
+        sensorDist=sensor_dist,
+        turnAngle=turn_angle,
+        moveSpeed=move_speed,
+        depositAmount=deposit,
+        decayFactor=decay,
+        width=width,
+        height=height,
+        numAgents=num_agents,
+        time=0.0,
+        crossSense=cross_sense,
+    )
+    params_buffer = device.newBufferWithBytes_length_options_(
+        bytes(params), ctypes.sizeof(params), Metal.MTLResourceStorageModeShared)
+
+    commandQueue = device.newCommandQueue()
+
+    agentThreads = Metal.MTLSizeMake(num_agents, 1, 1)
+    agentThreadgroup = Metal.MTLSizeMake(min(256, updateAgentsPSO.maxTotalThreadsPerThreadgroup()), 1, 1)
+    trailThreads = Metal.MTLSizeMake(width, height, 1)
+    trailThreadgroup = Metal.MTLSizeMake(16, 16, 1)
+
+    # Current trails
+    currR, nextR = trailR_a, trailR_b
+    currG, nextG = trailG_a, trailG_b
+    currB, nextB = trailB_a, trailB_b
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        num_frames = int(fps * duration)
+        print(f"Rendering {num_frames} frames at {width}x{height} with {num_agents} agents (3 species)...")
+
+        for frame_idx in range(num_frames):
+            params.time = frame_idx / fps
+            params_ptr = (ctypes.c_char * ctypes.sizeof(params)).from_buffer_copy(bytes(params))
+            params_buffer.contents().as_buffer(ctypes.sizeof(params))[:] = bytes(params_ptr)
+
+            for _ in range(iterations):
+                commandBuffer = commandQueue.commandBuffer()
+
+                # 1. Update agents
+                encoder = commandBuffer.computeCommandEncoder()
+                encoder.setComputePipelineState_(updateAgentsPSO)
+                encoder.setBuffer_offset_atIndex_(agent_buffer, 0, 0)
+                encoder.setBuffer_offset_atIndex_(currR, 0, 1)
+                encoder.setBuffer_offset_atIndex_(currG, 0, 2)
+                encoder.setBuffer_offset_atIndex_(currB, 0, 3)
+                encoder.setBuffer_offset_atIndex_(atomicR, 0, 4)
+                encoder.setBuffer_offset_atIndex_(atomicG, 0, 5)
+                encoder.setBuffer_offset_atIndex_(atomicB, 0, 6)
+                encoder.setBuffer_offset_atIndex_(params_buffer, 0, 7)
+                encoder.dispatchThreads_threadsPerThreadgroup_(agentThreads, agentThreadgroup)
+                encoder.endEncoding()
+
+                # 2. Apply deposits
+                encoder = commandBuffer.computeCommandEncoder()
+                encoder.setComputePipelineState_(applyDepositsPSO)
+                encoder.setBuffer_offset_atIndex_(currR, 0, 0)
+                encoder.setBuffer_offset_atIndex_(currG, 0, 1)
+                encoder.setBuffer_offset_atIndex_(currB, 0, 2)
+                encoder.setBuffer_offset_atIndex_(atomicR, 0, 3)
+                encoder.setBuffer_offset_atIndex_(atomicG, 0, 4)
+                encoder.setBuffer_offset_atIndex_(atomicB, 0, 5)
+                encoder.setBuffer_offset_atIndex_(params_buffer, 0, 6)
+                encoder.dispatchThreads_threadsPerThreadgroup_(trailThreads, trailThreadgroup)
+                encoder.endEncoding()
+
+                # 3. Diffuse trails
+                encoder = commandBuffer.computeCommandEncoder()
+                encoder.setComputePipelineState_(diffuseTrailsPSO)
+                encoder.setBuffer_offset_atIndex_(currR, 0, 0)
+                encoder.setBuffer_offset_atIndex_(currG, 0, 1)
+                encoder.setBuffer_offset_atIndex_(currB, 0, 2)
+                encoder.setBuffer_offset_atIndex_(nextR, 0, 3)
+                encoder.setBuffer_offset_atIndex_(nextG, 0, 4)
+                encoder.setBuffer_offset_atIndex_(nextB, 0, 5)
+                encoder.setBuffer_offset_atIndex_(params_buffer, 0, 6)
+                encoder.dispatchThreads_threadsPerThreadgroup_(trailThreads, trailThreadgroup)
+                encoder.endEncoding()
+
+                commandBuffer.commit()
+                commandBuffer.waitUntilCompleted()
+
+                # Swap buffers
+                currR, nextR = nextR, currR
+                currG, nextG = nextG, currG
+                currB, nextB = nextB, currB
+
+            # Read trails and save frame
+            r_arr = np.frombuffer(currR.contents().as_buffer(trail_size), dtype=np.float32).reshape((height, width))
+            g_arr = np.frombuffer(currG.contents().as_buffer(trail_size), dtype=np.float32).reshape((height, width))
+            b_arr = np.frombuffer(currB.contents().as_buffer(trail_size), dtype=np.float32).reshape((height, width))
+
+            # Debug first frame
+            if frame_idx == 0:
+                print(f"  Trail stats: R max={r_arr.max():.3f}, G max={g_arr.max():.3f}, B max={b_arr.max():.3f}")
+
+            # Normalize each channel independently for maximum color separation
+            r_max = max(r_arr.max(), 0.01)
+            g_max = max(g_arr.max(), 0.01)
+            b_max = max(b_arr.max(), 0.01)
+
+            r = np.clip(r_arr / r_max, 0, 1)
+            g = np.clip(g_arr / g_max, 0, 1)
+            b = np.clip(b_arr / b_max, 0, 1)
+
+            # Gamma for better contrast
+            r = np.power(r, 0.6)
+            g = np.power(g, 0.6)
+            b = np.power(b, 0.6)
+
+            # Boost saturation by reducing common component
+            min_rgb = np.minimum(np.minimum(r, g), b)
+            r = np.clip(r - min_rgb * 0.3, 0, 1)
+            g = np.clip(g - min_rgb * 0.3, 0, 1)
+            b = np.clip(b - min_rgb * 0.3, 0, 1)
+
+            rgb = np.stack([r, g, b], axis=-1)
+            rgb = (rgb * 255).astype(np.uint8)
+
+            img = Image.fromarray(rgb, 'RGB')
+            frame_path = os.path.join(tmpdir, f'frame_{frame_idx:04d}.png')
+            img.save(frame_path)
+
+            if (frame_idx + 1) % fps == 0:
+                print(f"  {frame_idx + 1}/{num_frames} frames ({(frame_idx + 1) / fps:.0f}s)")
+
+        print("Encoding video with ffmpeg...")
+
+        is_mov = output_path.lower().endswith('.mov')
+        if hq:
+            ffmpeg_cmd = [
+                'ffmpeg', '-y', '-framerate', str(fps),
+                '-i', os.path.join(tmpdir, 'frame_%04d.png'),
+                '-c:v', 'libx265', '-b:v', '50M', '-maxrate', '60M', '-bufsize', '120M',
+                '-preset', 'slow', '-tag:v', 'hvc1', '-pix_fmt', 'yuv420p', '-movflags', '+faststart',
+            ]
+            if is_mov:
+                ffmpeg_cmd.extend(['-brand', 'qt'])
+            ffmpeg_cmd.append(output_path)
+        else:
+            ffmpeg_cmd = [
+                'ffmpeg', '-y', '-framerate', str(fps),
+                '-i', os.path.join(tmpdir, 'frame_%04d.png'),
+                '-c:v', 'libx265', '-crf', '26', '-preset', 'fast',
+                '-tag:v', 'hvc1', '-pix_fmt', 'yuv420p', output_path
+            ]
+
+        result = subprocess.run(ffmpeg_cmd, capture_output=True)
+        if result.returncode != 0:
+            print(f"ffmpeg error:\n{result.stderr.decode()}", file=sys.stderr)
+            sys.exit(1)
+
+        file_size = os.path.getsize(output_path)
+        print(f"Done! Output: {output_path} ({file_size / 1024 / 1024:.1f} MB)")
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Render 3-channel Physarum using Metal')
+    parser.add_argument('output', help='Output video path')
+    parser.add_argument('--width', type=int, default=1080)
+    parser.add_argument('--height', type=int, default=1080)
+    parser.add_argument('--fps', type=int, default=30)
+    parser.add_argument('--duration', type=float, default=15.0)
+    parser.add_argument('--agents', type=int, default=300000)
+    parser.add_argument('--sensor-angle', type=float, default=0.4)
+    parser.add_argument('--sensor-dist', type=float, default=20.0)
+    parser.add_argument('--turn-angle', type=float, default=0.3)
+    parser.add_argument('--move-speed', type=float, default=1.5)
+    parser.add_argument('--deposit', type=float, default=0.6)
+    parser.add_argument('--decay', type=float, default=0.97)
+    parser.add_argument('--cross-sense', type=float, default=0.5, help='Cross-species sensing strength')
+    parser.add_argument('--iterations', type=int, default=3)
+    parser.add_argument('--seed-image', type=str, help='Image to seed agent positions from')
+    parser.add_argument('--fast', action='store_true')
+
+    args = parser.parse_args()
+
+    render_physarum_rgb(
+        args.output, args.width, args.height, args.fps, args.duration,
+        args.agents, args.sensor_angle, args.sensor_dist, args.turn_angle,
+        args.move_speed, args.deposit, args.decay, args.cross_sense,
+        args.iterations, args.seed_image, hq=not args.fast,
+    )
+
+
+if __name__ == '__main__':
+    main()

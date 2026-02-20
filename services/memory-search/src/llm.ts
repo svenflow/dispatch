@@ -218,75 +218,60 @@ export async function embedBatch(
 }
 
 // =============================================================================
-// Reranking Functions (via embed-rerank Python server)
+// Native Reranking Functions (via node-llama-cpp)
 // =============================================================================
 
-// embed-rerank server URL (Python MLX-based reranker)
-const EMBED_RERANK_URL = "http://localhost:9000/api/v1/rerank/";
-
 /**
- * Check if embed-rerank server is available
+ * Rerank documents using native node-llama-cpp with qwen3-reranker.
+ * This is the primary reranking function - no external server needed.
  */
-export async function isRerankServerAvailable(): Promise<boolean> {
-  try {
-    const resp = await fetch("http://localhost:9000/health/", {
-      signal: AbortSignal.timeout(1000),
-    });
-    return resp.ok;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Rerank documents by relevance to query.
- * Uses embed-rerank Python server (MLX-accelerated on Apple Silicon).
- */
-export async function rerank(
+export async function rerankNative(
   query: string,
   documents: { file: string; text: string }[]
 ): Promise<RerankResult[]> {
   if (documents.length === 0) return [];
 
-  // Build map from text to original info
-  const textToDoc = new Map<string, { file: string; index: number }>();
-  documents.forEach((doc, index) => {
-    textToDoc.set(doc.text, { file: doc.file, index });
-  });
+  const context = await ensureRerankContext();
 
-  // Call embed-rerank API
-  const passages = documents.map((doc) => doc.text);
-
-  const response = await fetch(EMBED_RERANK_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ query, passages }),
-    signal: AbortSignal.timeout(30000), // 30s timeout for large batches
-  });
-
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`Rerank API failed: ${response.status} - ${error}`);
-  }
-
-  const data = await response.json() as { results: Array<{ text: string; index: number; score: number }> };
-
-  // Map back to our result format
-  const allResults: RerankResult[] = [];
-  for (const item of data.results) {
-    const docInfo = textToDoc.get(item.text);
-    if (docInfo) {
-      allResults.push({
-        file: docInfo.file,
-        score: item.score,
-        index: docInfo.index,
+  // Score each document
+  const results: RerankResult[] = [];
+  for (let i = 0; i < documents.length; i++) {
+    const doc = documents[i];
+    try {
+      const score = await context.rank(query, doc.text);
+      results.push({
+        file: doc.file,
+        score,
+        index: i,
+      });
+    } catch (e) {
+      // If ranking fails for a doc, log and give it lowest score
+      console.error(`[rerank] Failed to rank doc ${doc.file}:`, e);
+      results.push({
+        file: doc.file,
+        score: -Infinity,
+        index: i,
       });
     }
   }
 
-  // Sort all results by score (API should return sorted, but ensure it)
-  allResults.sort((a, b) => b.score - a.score);
-  return allResults;
+  // Sort by score descending
+  results.sort((a, b) => b.score - a.score);
+  return results;
+}
+
+/**
+ * Create a native rerank function for use with SearchEngine.
+ * Uses node-llama-cpp with qwen3-reranker model.
+ */
+export function createNativeRerankFunction(): (
+  query: string,
+  docs: { file: string; text: string }[]
+) => Promise<{ file: string; score: number }[]> {
+  return async (query, docs) => {
+    const results = await rerankNative(query, docs);
+    return results.map((r) => ({ file: r.file, score: r.score }));
+  };
 }
 
 // =============================================================================
@@ -302,49 +287,29 @@ export function createEmbedFunction(): (text: string) => Promise<Float32Array> {
   };
 }
 
-/**
- * Create a rerank function for use with SearchEngine.
- */
-export function createRerankFunction(): (
-  query: string,
-  docs: { file: string; text: string }[]
-) => Promise<{ file: string; score: number }[]> {
-  return async (query, docs) => {
-    const results = await rerank(query, docs);
-    return results.map((r) => ({ file: r.file, score: r.score }));
-  };
-}
-
 // =============================================================================
 // Model Warmup and Health
 // =============================================================================
 
 /**
- * Warm up models by running a dummy operation.
- * Checks if embed-rerank server is available.
+ * Warm up native reranker model by running a dummy operation.
+ * This loads the qwen3-reranker model into memory.
  */
 export async function warmupModels(): Promise<void> {
   if (modelsWarmed) return;
 
-  console.log("Checking rerank server...");
+  console.log("Warming up native reranker...");
   const start = Date.now();
 
   try {
-    // Check if embed-rerank server is running
-    const available = await isRerankServerAvailable();
-    if (available) {
-      // Warm up with a test query
-      const rerankStart = Date.now();
-      await rerank("warmup", [{ file: "test", text: "test document" }]);
-      console.log(`  Rerank server ready (${Date.now() - rerankStart}ms)`);
-      modelsWarmed = true;
-    } else {
-      console.log("  Rerank server not available - running FTS-only mode");
-      console.log("  Start with: uv run embed-rerank --port 9000");
-    }
+    // Warm up native reranker with a test query
+    const rerankStart = Date.now();
+    await rerankNative("warmup query", [{ file: "test", text: "test document for warmup" }]);
+    console.log(`  Native reranker ready (${Date.now() - rerankStart}ms)`);
+    modelsWarmed = true;
     console.log(`Warmup completed in ${Date.now() - start}ms`);
   } catch (error) {
-    console.error("Failed to warm up rerank:", error);
+    console.error("Failed to warm up native reranker:", error);
     // Don't throw - allow daemon to continue without reranking
   }
 }

@@ -1,0 +1,1322 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "httpx",
+#     "typer[all]",
+#     "rich",
+# ]
+# ///
+"""
+TouchDesigner CLI - Control TD from the command line.
+
+Usage:
+    td ping              # Check if TD is running
+    td info              # Get TD server info
+    td exec "code"       # Execute Python in TD
+    td node ls /path     # List nodes
+    td node create ...   # Create nodes
+    ... and more
+"""
+
+import json
+import sys
+from pathlib import Path
+from typing import Annotated, Optional
+
+import httpx
+import typer
+from rich import print as rprint
+from rich.console import Console
+from rich.table import Table
+
+# ============================================================================
+# Configuration
+# ============================================================================
+
+DEFAULT_HOST = "localhost"
+DEFAULT_PORT = 9981
+DEFAULT_TIMEOUT = 30.0
+CONFIG_PATH = Path.home() / ".config" / "td" / "config.toml"
+
+console = Console()
+VERBOSE = False
+
+def load_config() -> dict:
+    """Load config from ~/.config/td/config.toml if it exists."""
+    if CONFIG_PATH.exists():
+        try:
+            import tomllib
+            with open(CONFIG_PATH, "rb") as f:
+                return tomllib.load(f)
+        except Exception:
+            pass
+    return {}
+
+def get_config_value(key: str, default):
+    """Get a config value with fallback to default."""
+    config = load_config()
+    keys = key.split(".")
+    value = config
+    for k in keys:
+        if isinstance(value, dict) and k in value:
+            value = value[k]
+        else:
+            return default
+    return value
+
+def verbose_log(msg: str):
+    """Print debug message if verbose mode is enabled."""
+    if VERBOSE:
+        console.print(f"[dim][DEBUG] {msg}[/dim]")
+
+# ============================================================================
+# Exceptions
+# ============================================================================
+
+class TDError(Exception):
+    """Base exception for TD CLI."""
+    pass
+
+class TDConnectionError(TDError):
+    """TD is not running or unreachable."""
+    pass
+
+class TDExecutionError(TDError):
+    """Python execution error in TD."""
+    pass
+
+class TDTimeoutError(TDError):
+    """Operation timed out."""
+    pass
+
+# ============================================================================
+# HTTP Client
+# ============================================================================
+
+class TDClient:
+    """HTTP client for TouchDesigner WebServer DAT."""
+
+    def __init__(self, host: str = None, port: int = None, timeout: float = None):
+        # Load from config with fallbacks
+        self.host = host or get_config_value("server.host", DEFAULT_HOST)
+        self.port = port or get_config_value("server.port", DEFAULT_PORT)
+        self.timeout = timeout or get_config_value("server.timeout", DEFAULT_TIMEOUT)
+        self.base_url = f"http://{self.host}:{self.port}"
+        self._client = None
+        verbose_log(f"TDClient initialized: {self.base_url}")
+
+    @property
+    def client(self) -> httpx.Client:
+        if self._client is None:
+            self._client = httpx.Client(base_url=self.base_url, timeout=self.timeout)
+        return self._client
+
+    def close(self):
+        if self._client:
+            self._client.close()
+            self._client = None
+
+    def _request(self, method: str, path: str, **kwargs) -> dict:
+        """Make HTTP request and handle errors."""
+        try:
+            response = self.client.request(method, path, **kwargs)
+            response.raise_for_status()
+            return response.json()
+        except httpx.ConnectError:
+            raise TDConnectionError(f"Cannot connect to TouchDesigner at {self.base_url}. Is TD running with the MCP WebServer component?")
+        except httpx.TimeoutException:
+            raise TDTimeoutError(f"Request timed out after {self.timeout}s")
+        except httpx.HTTPStatusError as e:
+            raise TDError(f"HTTP {e.response.status_code}: {e.response.text}")
+
+    def ping(self) -> dict:
+        """Check if TD is responding."""
+        return self._request("GET", "/api/td/server/td")
+
+    def info(self) -> dict:
+        """Get TD server info."""
+        return self._request("GET", "/api/td/server/td")
+
+    def exec(self, script: str) -> dict:
+        """Execute Python script in TD."""
+        result = self._request("POST", "/api/td/server/exec", json={"script": script})
+        if not result.get("success"):
+            raise TDExecutionError(result.get("error", "Unknown error"))
+        return result
+
+    def get_nodes(self, parent_path: str, pattern: str = "*", include_properties: bool = False) -> dict:
+        """List nodes under a path."""
+        params = {
+            "parentPath": parent_path,
+            "pattern": pattern,
+            "includeProperties": str(include_properties).lower()
+        }
+        return self._request("GET", "/api/nodes", params=params)
+
+    def create_node(self, parent_path: str, node_type: str, node_name: Optional[str] = None) -> dict:
+        """Create a new node."""
+        data = {
+            "parentPath": parent_path,
+            "nodeType": node_type,
+        }
+        if node_name:
+            data["nodeName"] = node_name
+        return self._request("POST", "/api/nodes", json=data)
+
+    def delete_node(self, node_path: str) -> dict:
+        """Delete a node."""
+        return self._request("DELETE", "/api/nodes", params={"nodePath": node_path})
+
+    def get_node_detail(self, node_path: str) -> dict:
+        """Get detailed info about a node."""
+        return self._request("GET", "/api/nodes/detail", params={"nodePath": node_path})
+
+    def update_node(self, node_path: str, properties: dict) -> dict:
+        """Update node properties."""
+        return self._request("PATCH", "/api/nodes/detail", json={
+            "nodePath": node_path,
+            "properties": properties
+        })
+
+    def get_node_errors(self, node_path: str) -> dict:
+        """Get errors for a node and its children."""
+        return self._request("GET", "/api/nodes/errors", params={"nodePath": node_path})
+
+    def call_method(self, node_path: str, method: str, args: list = None, kwargs: dict = None) -> dict:
+        """Call a method on a node."""
+        data = {
+            "nodePath": node_path,
+            "method": method,
+        }
+        if args:
+            data["args"] = args
+        if kwargs:
+            data["kwargs"] = kwargs
+        return self._request("POST", "/api/td/nodes/exec", json=data)
+
+    def get_classes(self) -> dict:
+        """Get list of TD Python classes."""
+        return self._request("GET", "/api/td/classes")
+
+    def get_class_details(self, class_name: str) -> dict:
+        """Get details of a TD Python class."""
+        return self._request("GET", f"/api/td/classes/{class_name}")
+
+    def get_module_help(self, module_name: str) -> dict:
+        """Get Python help for a module."""
+        return self._request("GET", "/api/td/modules/help", params={"moduleName": module_name})
+
+# ============================================================================
+# Global client instance
+# ============================================================================
+
+_client: Optional[TDClient] = None
+
+def get_client() -> TDClient:
+    global _client
+    if _client is None:
+        _client = TDClient()
+    return _client
+
+# ============================================================================
+# Output helpers
+# ============================================================================
+
+def output(data, json_mode: bool = False):
+    """Output data in appropriate format."""
+    if json_mode:
+        print(json.dumps(data, indent=2))
+    else:
+        rprint(data)
+
+def error(msg: str, code: int = 1):
+    """Print error and exit."""
+    console.print(f"[red]Error:[/red] {msg}", style="bold")
+    sys.exit(code)
+
+# ============================================================================
+# CLI App
+# ============================================================================
+
+def verbose_callback(value: bool):
+    """Callback to set global verbose mode."""
+    global VERBOSE
+    if value:
+        VERBOSE = True
+
+app = typer.Typer(
+    name="td",
+    help="TouchDesigner CLI - Control TD from the command line.",
+    no_args_is_help=True,
+)
+
+@app.callback()
+def main_callback(
+    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Enable debug output", callback=verbose_callback, is_eager=True)] = False,
+):
+    """TouchDesigner CLI with optional verbose mode."""
+    pass
+
+# Node subcommand
+node_app = typer.Typer(help="Manage TD nodes")
+app.add_typer(node_app, name="node")
+
+# Render subcommand
+render_app = typer.Typer(help="Render and export")
+app.add_typer(render_app, name="render")
+
+# Wire subcommand
+wire_app = typer.Typer(help="Connect and disconnect nodes")
+app.add_typer(wire_app, name="wire")
+
+# ============================================================================
+# Core Commands
+# ============================================================================
+
+@app.command()
+def ping():
+    """Check if TouchDesigner is running and responding."""
+    try:
+        client = get_client()
+        result = client.ping()
+        if result.get("success"):
+            data = result.get("data", {})
+            console.print(f"[green]✓[/green] TouchDesigner is running")
+            console.print(f"  Version: {data.get('version', 'unknown')}")
+            console.print(f"  API: {data.get('mcpApiVersion', 'unknown')}")
+            sys.exit(0)
+        else:
+            error("TD responded but with error")
+    except TDConnectionError as e:
+        console.print(f"[red]✗[/red] {e}")
+        sys.exit(1)
+    except Exception as e:
+        error(str(e))
+
+@app.command()
+def info(
+    json_output: Annotated[bool, typer.Option("--json", "-j", help="Output as JSON")] = False,
+):
+    """Get TouchDesigner server information."""
+    try:
+        client = get_client()
+        result = client.info()
+
+        if json_output:
+            output(result, json_mode=True)
+        else:
+            if result.get("success"):
+                data = result.get("data", {})
+                table = Table(title="TouchDesigner Info")
+                table.add_column("Property", style="cyan")
+                table.add_column("Value", style="green")
+                for key, value in data.items():
+                    table.add_row(key, str(value))
+                console.print(table)
+            else:
+                error(result.get("error", "Unknown error"))
+    except TDError as e:
+        error(str(e))
+
+@app.command(name="exec")
+def exec_cmd(
+    code: Annotated[Optional[str], typer.Argument(help="Python code to execute")] = None,
+    file: Annotated[Optional[Path], typer.Option("--file", "-f", help="Execute code from file")] = None,
+    vars: Annotated[Optional[list[str]], typer.Option("--var", "-V", help="Variables as key=value pairs")] = None,
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Show what would be executed")] = False,
+    json_output: Annotated[bool, typer.Option("--json", "-j", help="Output as JSON")] = False,
+):
+    """Execute Python code in TouchDesigner."""
+    # Get code from argument or file
+    if file:
+        if not file.exists():
+            error(f"File not found: {file}")
+        script = file.read_text()
+    elif code:
+        script = code
+    else:
+        error("Provide code as argument or use --file")
+
+    # Apply variable substitutions
+    if vars:
+        for var in vars:
+            if "=" not in var:
+                error(f"Invalid variable format: {var}. Use key=value")
+            key, value = var.split("=", 1)
+            script = script.replace(f"${{{key}}}", value)
+            script = script.replace(f"$({key})", value)
+        verbose_log(f"Applied {len(vars)} variable substitutions")
+
+    if dry_run:
+        console.print("[yellow]Would execute:[/yellow]")
+        console.print(script)
+        return
+
+    try:
+        client = get_client()
+        result = client.exec(script)
+
+        if json_output:
+            output(result, json_mode=True)
+        else:
+            data = result.get("data", {})
+            if "result" in data:
+                rprint(f"[green]Result:[/green] {data['result']}")
+            if data.get("stdout"):
+                rprint(f"[dim]{data['stdout']}[/dim]")
+            if data.get("stderr"):
+                rprint(f"[red]{data['stderr']}[/red]")
+    except TDError as e:
+        error(str(e))
+
+# ============================================================================
+# Node Commands
+# ============================================================================
+
+@node_app.command("ls")
+def node_ls(
+    path: Annotated[str, typer.Argument(help="Parent path to list (e.g., /project1)")] = "/",
+    pattern: Annotated[str, typer.Option("--pattern", "-p", help="Filter pattern")] = "*",
+    recursive: Annotated[bool, typer.Option("--recursive", "-r", help="List recursively")] = False,
+    json_output: Annotated[bool, typer.Option("--json", "-j", help="Output as JSON")] = False,
+):
+    """List nodes under a path."""
+    try:
+        client = get_client()
+        result = client.get_nodes(path, pattern)
+
+        if json_output:
+            output(result, json_mode=True)
+        else:
+            if result.get("success"):
+                nodes = result.get("data", {}).get("nodes", [])
+                if not nodes:
+                    console.print(f"[dim]No nodes found under {path}[/dim]")
+                    return
+
+                table = Table(title=f"Nodes in {path}")
+                table.add_column("Name", style="cyan")
+                table.add_column("Type", style="green")
+                table.add_column("Path", style="dim")
+
+                for node in nodes:
+                    table.add_row(
+                        node.get("name", ""),
+                        node.get("opType", ""),
+                        node.get("path", "")
+                    )
+                console.print(table)
+            else:
+                error(result.get("error", "Unknown error"))
+    except TDError as e:
+        error(str(e))
+
+@node_app.command("create")
+def node_create(
+    path: Annotated[str, typer.Argument(help="Parent path (e.g., /project1)")],
+    node_type: Annotated[str, typer.Argument(help="Node type (e.g., noiseTOP, nullCHOP)")],
+    name: Annotated[Optional[str], typer.Argument(help="Node name (optional)")] = None,
+    json_output: Annotated[bool, typer.Option("--json", "-j", help="Output as JSON")] = False,
+):
+    """Create a new node."""
+    try:
+        client = get_client()
+        result = client.create_node(path, node_type, name)
+
+        if json_output:
+            output(result, json_mode=True)
+        else:
+            if result.get("success"):
+                data = result.get("data", {}).get("result", {})
+                console.print(f"[green]✓[/green] Created {data.get('opType')} at {data.get('path')}")
+            else:
+                error(result.get("error", "Unknown error"))
+    except TDError as e:
+        error(str(e))
+
+@node_app.command("rm")
+def node_rm(
+    path: Annotated[str, typer.Argument(help="Node path to delete")],
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Show what would be deleted")] = False,
+    json_output: Annotated[bool, typer.Option("--json", "-j", help="Output as JSON")] = False,
+):
+    """Delete a node."""
+    if dry_run:
+        console.print(f"[yellow]Would delete:[/yellow] {path}")
+        return
+
+    try:
+        client = get_client()
+        result = client.delete_node(path)
+
+        if json_output:
+            output(result, json_mode=True)
+        else:
+            if result.get("success"):
+                console.print(f"[green]✓[/green] Deleted {path}")
+            else:
+                error(result.get("error", "Unknown error"))
+    except TDError as e:
+        error(str(e))
+
+@node_app.command("get")
+def node_get(
+    path: Annotated[str, typer.Argument(help="Node path")],
+    json_output: Annotated[bool, typer.Option("--json", "-j", help="Output as JSON")] = False,
+):
+    """Get detailed info about a node."""
+    try:
+        client = get_client()
+        result = client.get_node_detail(path)
+
+        if json_output:
+            output(result, json_mode=True)
+        else:
+            if result.get("success"):
+                data = result.get("data", {})
+                console.print(f"[bold]{data.get('name')}[/bold] ({data.get('opType')})")
+                console.print(f"Path: {data.get('path')}")
+                console.print(f"ID: {data.get('id')}")
+
+                props = data.get("properties", {})
+                if props:
+                    console.print("\n[bold]Properties:[/bold]")
+                    for key, value in list(props.items())[:20]:  # Limit to 20 props
+                        console.print(f"  {key}: {value}")
+                    if len(props) > 20:
+                        console.print(f"  ... and {len(props) - 20} more")
+            else:
+                error(result.get("error", "Unknown error"))
+    except TDError as e:
+        error(str(e))
+
+@node_app.command("set")
+def node_set(
+    path: Annotated[str, typer.Argument(help="Node path")],
+    params: Annotated[list[str], typer.Argument(help="Parameters as key=value pairs")],
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Show what would be set")] = False,
+    json_output: Annotated[bool, typer.Option("--json", "-j", help="Output as JSON")] = False,
+):
+    """Set node parameters."""
+    # Parse key=value pairs
+    properties = {}
+    for param in params:
+        if "=" not in param:
+            error(f"Invalid parameter format: {param}. Use key=value")
+        key, value = param.split("=", 1)
+        # Try to parse as number
+        try:
+            if "." in value:
+                value = float(value)
+            else:
+                value = int(value)
+        except ValueError:
+            pass  # Keep as string
+        properties[key] = value
+
+    if dry_run:
+        console.print(f"[yellow]Would set on {path}:[/yellow]")
+        for k, v in properties.items():
+            console.print(f"  {k} = {v}")
+        return
+
+    try:
+        client = get_client()
+        result = client.update_node(path, properties)
+
+        if json_output:
+            output(result, json_mode=True)
+        else:
+            if result.get("success"):
+                data = result.get("data", {})
+                updated = data.get("updated", [])
+                failed = data.get("failed", [])
+
+                if updated:
+                    console.print(f"[green]✓[/green] Updated: {', '.join(updated)}")
+                if failed:
+                    for f in failed:
+                        console.print(f"[red]✗[/red] Failed: {f.get('name')} - {f.get('reason')}")
+            else:
+                error(result.get("error", "Unknown error"))
+    except TDError as e:
+        error(str(e))
+
+@node_app.command("errors")
+def node_errors(
+    path: Annotated[str, typer.Argument(help="Node path to check")],
+    json_output: Annotated[bool, typer.Option("--json", "-j", help="Output as JSON")] = False,
+):
+    """Check for errors on a node and its children."""
+    try:
+        client = get_client()
+        result = client.get_node_errors(path)
+
+        if json_output:
+            output(result, json_mode=True)
+        else:
+            if result.get("success"):
+                data = result.get("data", {})
+                if data.get("hasErrors"):
+                    console.print(f"[red]Found {data.get('errorCount')} errors:[/red]")
+                    for err in data.get("errors", []):
+                        console.print(f"  [red]•[/red] {err.get('nodePath')}: {err.get('message')}")
+                else:
+                    console.print(f"[green]✓[/green] No errors found")
+            else:
+                error(result.get("error", "Unknown error"))
+    except TDError as e:
+        error(str(e))
+
+@node_app.command("call")
+def node_call(
+    path: Annotated[str, typer.Argument(help="Node path")],
+    method: Annotated[str, typer.Argument(help="Method name to call")],
+    args: Annotated[Optional[list[str]], typer.Argument(help="Method arguments")] = None,
+    json_output: Annotated[bool, typer.Option("--json", "-j", help="Output as JSON")] = False,
+):
+    """Call a method on a node."""
+    # Build the method call
+    args_str = ""
+    if args:
+        # Try to parse args as Python literals
+        parsed_args = []
+        for arg in args:
+            try:
+                # Try int
+                parsed_args.append(str(int(arg)))
+            except ValueError:
+                try:
+                    # Try float
+                    parsed_args.append(str(float(arg)))
+                except ValueError:
+                    # Keep as string
+                    parsed_args.append(repr(arg))
+        args_str = ", ".join(parsed_args)
+
+    script = f"op('{path}').{method}({args_str})"
+    verbose_log(f"Calling: {script}")
+
+    try:
+        client = get_client()
+        result = client.exec(script)
+
+        if json_output:
+            output(result, json_mode=True)
+        else:
+            if result.get("success"):
+                data = result.get("data", {})
+                if "result" in data:
+                    console.print(f"[green]Result:[/green] {data['result']}")
+                else:
+                    console.print(f"[green]✓[/green] Called {method} on {path}")
+            else:
+                error(result.get("error", "Unknown error"))
+    except TDError as e:
+        error(str(e))
+
+@node_app.command("params")
+def node_params(
+    path: Annotated[str, typer.Argument(help="Node path")],
+    filter_pattern: Annotated[Optional[str], typer.Option("--filter", "-f", help="Filter parameters by name")] = None,
+    json_output: Annotated[bool, typer.Option("--json", "-j", help="Output as JSON")] = False,
+):
+    """List all parameters of a node with their current values."""
+    # Get parameters via exec since the API returns properties but not all param details
+    script = f"""
+node = op('{path}')
+if node:
+    result = []
+    for p in node.pars():
+        result.append({{
+            'name': p.name,
+            'label': p.label,
+            'value': p.eval(),
+            'default': p.default,
+            'mode': str(p.mode),
+            'page': p.page.name if p.page else ''
+        }})
+    result
+else:
+    {{'error': 'Node not found'}}
+"""
+    try:
+        client = get_client()
+        result = client.exec(script)
+
+        if json_output:
+            output(result, json_mode=True)
+        else:
+            if result.get("success"):
+                data = result.get("data", {})
+                params = data.get("result", [])
+
+                if isinstance(params, dict) and params.get("error"):
+                    error(params["error"])
+
+                if filter_pattern:
+                    filter_lower = filter_pattern.lower()
+                    params = [p for p in params if filter_lower in p.get("name", "").lower() or filter_lower in p.get("label", "").lower()]
+
+                if not params:
+                    console.print("[dim]No parameters found[/dim]")
+                    return
+
+                # Group by page
+                pages = {}
+                for p in params:
+                    page = p.get("page", "General")
+                    if page not in pages:
+                        pages[page] = []
+                    pages[page].append(p)
+
+                for page_name, page_params in pages.items():
+                    table = Table(title=f"[bold]{page_name}[/bold]")
+                    table.add_column("Parameter", style="cyan")
+                    table.add_column("Value", style="green")
+                    table.add_column("Default", style="dim")
+
+                    for p in page_params[:30]:  # Limit per page
+                        val = str(p.get("value", ""))
+                        default = str(p.get("default", ""))
+                        # Highlight changed values
+                        val_style = "green bold" if val != default else "green"
+                        table.add_row(p.get("name", ""), f"[{val_style}]{val}[/{val_style}]", default)
+
+                    console.print(table)
+                    console.print()
+
+                if len(params) > 30 * len(pages):
+                    console.print(f"[dim]Showing subset of {len(params)} total parameters. Use --filter to narrow down.[/dim]")
+            else:
+                error(result.get("error", "Unknown error"))
+    except TDError as e:
+        error(str(e))
+
+# ============================================================================
+# Discovery Commands
+# ============================================================================
+
+@app.command("classes")
+def list_classes(
+    filter_pattern: Annotated[Optional[str], typer.Option("--filter", "-f", help="Filter by name")] = None,
+    json_output: Annotated[bool, typer.Option("--json", "-j", help="Output as JSON")] = False,
+):
+    """List available TouchDesigner Python classes."""
+    try:
+        client = get_client()
+        result = client.get_classes()
+
+        if json_output:
+            output(result, json_mode=True)
+        else:
+            if result.get("success"):
+                classes = result.get("data", {}).get("classes", [])
+
+                if filter_pattern:
+                    filter_lower = filter_pattern.lower()
+                    classes = [c for c in classes if filter_lower in c.get("name", "").lower()]
+
+                console.print(f"[bold]Available Classes ({len(classes)}):[/bold]\n")
+                for cls in classes[:50]:  # Limit output
+                    name = cls.get("name", "")
+                    desc = cls.get("description", "")[:60] + "..." if len(cls.get("description", "")) > 60 else cls.get("description", "")
+                    console.print(f"  [cyan]{name}[/cyan]: {desc}")
+
+                if len(classes) > 50:
+                    console.print(f"\n  ... and {len(classes) - 50} more. Use --filter to narrow down.")
+            else:
+                error(result.get("error", "Unknown error"))
+    except TDError as e:
+        error(str(e))
+
+@app.command("help")
+def get_help(
+    class_name: Annotated[str, typer.Argument(help="Class or module name")],
+    json_output: Annotated[bool, typer.Option("--json", "-j", help="Output as JSON")] = False,
+):
+    """Get Python help for a TouchDesigner class or module."""
+    try:
+        client = get_client()
+        result = client.get_module_help(class_name)
+
+        if json_output:
+            output(result, json_mode=True)
+        else:
+            if result.get("success"):
+                data = result.get("data", {})
+                console.print(f"[bold]Help for {data.get('moduleName')}:[/bold]\n")
+                console.print(data.get("helpText", "No help available"))
+            else:
+                error(result.get("error", "Unknown error"))
+    except TDError as e:
+        error(str(e))
+
+# ============================================================================
+# Wire Commands
+# ============================================================================
+
+@wire_app.command("connect")
+def wire_connect(
+    source: Annotated[str, typer.Argument(help="Source node path")],
+    target: Annotated[str, typer.Argument(help="Target node path")],
+    json_output: Annotated[bool, typer.Option("--json", "-j", help="Output as JSON")] = False,
+):
+    """Connect two nodes."""
+    script = f"op('{source}').outputConnectors[0].connect(op('{target}'))"
+    try:
+        client = get_client()
+        result = client.exec(script)
+
+        if json_output:
+            output(result, json_mode=True)
+        else:
+            console.print(f"[green]✓[/green] Connected {source} → {target}")
+    except TDError as e:
+        error(str(e))
+
+@wire_app.command("disconnect")
+def wire_disconnect(
+    source: Annotated[str, typer.Argument(help="Source node path")],
+    target: Annotated[str, typer.Argument(help="Target node path")],
+    json_output: Annotated[bool, typer.Option("--json", "-j", help="Output as JSON")] = False,
+):
+    """Disconnect two nodes."""
+    script = f"op('{source}').outputConnectors[0].disconnect(op('{target}'))"
+    try:
+        client = get_client()
+        result = client.exec(script)
+
+        if json_output:
+            output(result, json_mode=True)
+        else:
+            console.print(f"[green]✓[/green] Disconnected {source} → {target}")
+    except TDError as e:
+        error(str(e))
+
+@wire_app.command("ls")
+def wire_ls(
+    path: Annotated[str, typer.Argument(help="Node path to show connections for")],
+    json_output: Annotated[bool, typer.Option("--json", "-j", help="Output as JSON")] = False,
+):
+    """Show connections for a node."""
+    script = f"""
+node = op('{path}')
+connections = {{'inputs': [], 'outputs': []}}
+if node:
+    for i, conn in enumerate(node.inputConnectors):
+        for c in conn.connections:
+            connections['inputs'].append({{'index': i, 'from': c.owner.path if c.owner else None}})
+    for i, conn in enumerate(node.outputConnectors):
+        for c in conn.connections:
+            connections['outputs'].append({{'index': i, 'to': c.owner.path if c.owner else None}})
+connections
+"""
+    try:
+        client = get_client()
+        result = client.exec(script)
+
+        if json_output:
+            output(result, json_mode=True)
+        else:
+            if result.get("success"):
+                data = result.get("data", {}).get("result", {})
+                if isinstance(data, dict) and data.get("error"):
+                    error(data["error"])
+
+                inputs = data.get("inputs", [])
+                outputs = data.get("outputs", [])
+
+                console.print(f"[bold]Connections for {path}:[/bold]\n")
+
+                if inputs:
+                    console.print("[cyan]Inputs:[/cyan]")
+                    for inp in inputs:
+                        console.print(f"  [{inp.get('index')}] ← {inp.get('from')}")
+                else:
+                    console.print("[dim]No inputs[/dim]")
+
+                if outputs:
+                    console.print("\n[cyan]Outputs:[/cyan]")
+                    for out in outputs:
+                        console.print(f"  [{out.get('index')}] → {out.get('to')}")
+                else:
+                    console.print("[dim]No outputs[/dim]")
+            else:
+                error(result.get("error", "Unknown error"))
+    except TDError as e:
+        error(str(e))
+
+# ============================================================================
+# Render Commands
+# ============================================================================
+
+@render_app.command("start")
+def render_start(
+    path: Annotated[str, typer.Argument(help="MovieFileOut TOP path")],
+):
+    """Start recording on a MovieFileOut TOP."""
+    script = f"op('{path}').par.record = 1"
+    try:
+        client = get_client()
+        client.exec(script)
+        console.print(f"[green]✓[/green] Started recording: {path}")
+    except TDError as e:
+        error(str(e))
+
+@render_app.command("stop")
+def render_stop(
+    path: Annotated[str, typer.Argument(help="MovieFileOut TOP path")],
+):
+    """Stop recording on a MovieFileOut TOP."""
+    script = f"op('{path}').par.record = 0"
+    try:
+        client = get_client()
+        client.exec(script)
+        console.print(f"[green]✓[/green] Stopped recording: {path}")
+    except TDError as e:
+        error(str(e))
+
+@render_app.command("status")
+def render_status(
+    path: Annotated[str, typer.Argument(help="MovieFileOut TOP path")],
+    json_output: Annotated[bool, typer.Option("--json", "-j", help="Output as JSON")] = False,
+):
+    """Get recording status of a MovieFileOut TOP."""
+    script = f"""
+node = op('{path}')
+if node:
+    {{
+        'recording': node.par.record.eval(),
+        'file': node.par.file.eval(),
+        'codec': node.par.codec.eval(),
+        'fps': node.par.fps.eval() if hasattr(node.par, 'fps') else None,
+    }}
+else:
+    {{'error': 'Node not found'}}
+"""
+    try:
+        client = get_client()
+        result = client.exec(script)
+
+        if json_output:
+            output(result, json_mode=True)
+        else:
+            if result.get("success"):
+                data = result.get("data", {}).get("result", {})
+                if data.get("error"):
+                    error(data["error"])
+                recording = "🔴 Recording" if data.get("recording") else "⏹️ Stopped"
+                console.print(f"Status: {recording}")
+                console.print(f"File: {data.get('file', 'not set')}")
+                if data.get('codec'):
+                    console.print(f"Codec: {data.get('codec')}")
+            else:
+                error(result.get("error", "Unknown error"))
+    except TDError as e:
+        error(str(e))
+
+@render_app.command("wait")
+def render_wait(
+    path: Annotated[str, typer.Argument(help="MovieFileOut TOP path")],
+    duration: Annotated[float, typer.Option("--duration", "-d", help="Duration in seconds")] = 5.0,
+    show_progress: Annotated[bool, typer.Option("--progress", "-p", help="Show progress bar")] = True,
+):
+    """Start recording, wait for duration, then stop."""
+    import time
+
+    try:
+        client = get_client()
+
+        # Start recording
+        client.exec(f"op('{path}').par.record = 1")
+        console.print(f"[green]✓[/green] Started recording: {path}")
+
+        if show_progress:
+            from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeRemainingColumn
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TextColumn("{task.completed:.1f}s / {task.total:.1f}s"),
+                TimeRemainingColumn(),
+                console=console
+            ) as progress:
+                task = progress.add_task("Recording...", total=duration)
+                elapsed = 0.0
+                interval = 0.1
+                while elapsed < duration:
+                    time.sleep(interval)
+                    elapsed += interval
+                    progress.update(task, completed=min(elapsed, duration))
+        else:
+            time.sleep(duration)
+
+        # Stop recording
+        client.exec(f"op('{path}').par.record = 0")
+        console.print(f"[green]✓[/green] Stopped recording after {duration}s")
+
+    except TDError as e:
+        error(str(e))
+
+# ============================================================================
+# Performance Monitoring
+# ============================================================================
+
+@app.command("perf")
+def perf(
+    path: Annotated[Optional[str], typer.Argument(help="Node path (optional, defaults to root)")] = "/",
+    json_output: Annotated[bool, typer.Option("--json", "-j", help="Output as JSON")] = False,
+):
+    """Show performance metrics (FPS, cook time, memory)."""
+    script = f"""
+import td
+
+# Global performance
+perf = {{
+    'fps': project.cookRate,
+    'realtime': project.realTime,
+    'gpuMemory': td.sysinfo.gpu.memUsed if hasattr(td.sysinfo, 'gpu') else None,
+    'cpuMemory': td.sysinfo.ram.used if hasattr(td.sysinfo, 'ram') else None,
+}}
+
+# Node cook times if path specified
+node = op('{path}')
+if node and hasattr(node, 'cookTime'):
+    perf['nodeCookTime'] = node.cookTime() * 1000  # ms
+    perf['nodeName'] = node.name
+    perf['nodeType'] = node.OPType
+
+perf
+"""
+    try:
+        client = get_client()
+        result = client.exec(script)
+
+        if json_output:
+            output(result, json_mode=True)
+        else:
+            if result.get("success"):
+                data = result.get("data", {}).get("result", {})
+
+                table = Table(title="TouchDesigner Performance")
+                table.add_column("Metric", style="cyan")
+                table.add_column("Value", style="green")
+
+                table.add_row("FPS", f"{data.get('fps', 'N/A')}")
+                table.add_row("Realtime", "Yes" if data.get('realtime') else "No")
+
+                if data.get('gpuMemory') is not None:
+                    table.add_row("GPU Memory", f"{data.get('gpuMemory', 0):.1f} MB")
+                if data.get('cpuMemory') is not None:
+                    table.add_row("RAM Used", f"{data.get('cpuMemory', 0):.1f} MB")
+
+                if data.get('nodeCookTime') is not None:
+                    table.add_row(f"Cook Time ({data.get('nodeName')})", f"{data.get('nodeCookTime'):.2f} ms")
+
+                console.print(table)
+            else:
+                error(result.get("error", "Unknown error"))
+    except TDError as e:
+        error(str(e))
+
+# ============================================================================
+# Snapshot Commands
+# ============================================================================
+
+snapshot_app = typer.Typer(help="Save and restore node states")
+app.add_typer(snapshot_app, name="snapshot")
+
+@snapshot_app.command("save")
+def snapshot_save(
+    name: Annotated[str, typer.Argument(help="Snapshot name")],
+    path: Annotated[str, typer.Option("--path", "-p", help="Node path to snapshot")] = "/",
+):
+    """Save current node parameters to a snapshot file."""
+    import os
+    snapshot_dir = os.path.expanduser("~/.config/td/snapshots")
+    os.makedirs(snapshot_dir, exist_ok=True)
+
+    script = f"""
+node = op('{path}')
+if node:
+    snapshot = {{}}
+    for p in node.pars():
+        if not p.isDefault and p.mode == ParMode.CONSTANT:
+            snapshot[p.name] = p.eval()
+    snapshot
+else:
+    {{'error': 'Node not found'}}
+"""
+    try:
+        client = get_client()
+        result = client.exec(script)
+
+        if result.get("success"):
+            data = result.get("data", {}).get("result", {})
+            if isinstance(data, dict) and data.get("error"):
+                error(data["error"])
+
+            # Save to file
+            snapshot_file = os.path.join(snapshot_dir, f"{name}.json")
+            with open(snapshot_file, "w") as f:
+                json.dump({"path": path, "params": data}, f, indent=2)
+
+            console.print(f"[green]✓[/green] Saved snapshot '{name}' ({len(data)} params)")
+        else:
+            error(result.get("error", "Unknown error"))
+    except TDError as e:
+        error(str(e))
+
+@snapshot_app.command("restore")
+def snapshot_restore(
+    name: Annotated[str, typer.Argument(help="Snapshot name")],
+):
+    """Restore parameters from a snapshot file."""
+    import os
+    snapshot_dir = os.path.expanduser("~/.config/td/snapshots")
+    snapshot_file = os.path.join(snapshot_dir, f"{name}.json")
+
+    if not os.path.exists(snapshot_file):
+        error(f"Snapshot not found: {name}")
+
+    with open(snapshot_file) as f:
+        snapshot = json.load(f)
+
+    path = snapshot.get("path", "/")
+    params = snapshot.get("params", {})
+
+    # Build script to set all params
+    script_lines = [f"node = op('{path}')"]
+    for param_name, value in params.items():
+        if isinstance(value, str):
+            script_lines.append(f"node.par.{param_name} = '{value}'")
+        else:
+            script_lines.append(f"node.par.{param_name} = {value}")
+    script_lines.append(f"len([{', '.join(repr(k) for k in params.keys())}])")  # Return count
+    script = "\n".join(script_lines)
+
+    try:
+        client = get_client()
+        result = client.exec(script)
+
+        if result.get("success"):
+            console.print(f"[green]✓[/green] Restored snapshot '{name}' ({len(params)} params)")
+        else:
+            error(result.get("error", "Unknown error"))
+    except TDError as e:
+        error(str(e))
+
+@snapshot_app.command("ls")
+def snapshot_ls():
+    """List saved snapshots."""
+    import os
+    snapshot_dir = os.path.expanduser("~/.config/td/snapshots")
+
+    if not os.path.exists(snapshot_dir):
+        console.print("[dim]No snapshots saved yet[/dim]")
+        return
+
+    snapshots = [f[:-5] for f in os.listdir(snapshot_dir) if f.endswith(".json")]
+    if not snapshots:
+        console.print("[dim]No snapshots saved yet[/dim]")
+        return
+
+    console.print("[bold]Saved Snapshots:[/bold]")
+    for name in sorted(snapshots):
+        snapshot_file = os.path.join(snapshot_dir, f"{name}.json")
+        with open(snapshot_file) as f:
+            data = json.load(f)
+        console.print(f"  • {name} ({data.get('path', '/')} - {len(data.get('params', {}))} params)")
+
+# ============================================================================
+# Preset Commands (reusable parameter sets for any node type)
+# ============================================================================
+
+preset_app = typer.Typer(help="Manage reusable parameter presets")
+app.add_typer(preset_app, name="preset")
+
+@preset_app.command("save")
+def preset_save(
+    name: Annotated[str, typer.Argument(help="Preset name")],
+    path: Annotated[str, typer.Argument(help="Node path to save preset from")],
+    description: Annotated[Optional[str], typer.Option("--desc", "-d", help="Preset description")] = None,
+):
+    """Save node parameters as a reusable preset."""
+    import os
+    preset_dir = os.path.expanduser("~/.config/td/presets")
+    os.makedirs(preset_dir, exist_ok=True)
+
+    script = f"""
+node = op('{path}')
+if node:
+    preset = {{
+        'type': node.OPType,
+        'params': {{}}
+    }}
+    for p in node.pars():
+        if not p.isDefault and p.mode == ParMode.CONSTANT:
+            preset['params'][p.name] = p.eval()
+    preset
+else:
+    {{'error': 'Node not found'}}
+"""
+    try:
+        client = get_client()
+        result = client.exec(script)
+
+        if result.get("success"):
+            data = result.get("data", {}).get("result", {})
+            if isinstance(data, dict) and data.get("error"):
+                error(data["error"])
+
+            # Save preset
+            preset_file = os.path.join(preset_dir, f"{name}.json")
+            preset_data = {
+                "name": name,
+                "type": data.get("type"),
+                "description": description or "",
+                "params": data.get("params", {})
+            }
+            with open(preset_file, "w") as f:
+                json.dump(preset_data, f, indent=2)
+
+            console.print(f"[green]✓[/green] Saved preset '{name}' for {data.get('type')} ({len(data.get('params', {}))} params)")
+        else:
+            error(result.get("error", "Unknown error"))
+    except TDError as e:
+        error(str(e))
+
+@preset_app.command("apply")
+def preset_apply(
+    name: Annotated[str, typer.Argument(help="Preset name")],
+    path: Annotated[str, typer.Argument(help="Node path to apply preset to")],
+):
+    """Apply a preset to a node."""
+    import os
+    preset_dir = os.path.expanduser("~/.config/td/presets")
+    preset_file = os.path.join(preset_dir, f"{name}.json")
+
+    if not os.path.exists(preset_file):
+        error(f"Preset not found: {name}")
+
+    with open(preset_file) as f:
+        preset = json.load(f)
+
+    params = preset.get("params", {})
+
+    # Build script to set all params
+    script_lines = [f"node = op('{path}')"]
+    for param_name, value in params.items():
+        if isinstance(value, str):
+            script_lines.append(f"try:\n    node.par.{param_name} = '{value}'\nexcept: pass")
+        else:
+            script_lines.append(f"try:\n    node.par.{param_name} = {value}\nexcept: pass")
+    script_lines.append(f"len([{', '.join(repr(k) for k in params.keys())}])")
+    script = "\n".join(script_lines)
+
+    try:
+        client = get_client()
+        result = client.exec(script)
+
+        if result.get("success"):
+            console.print(f"[green]✓[/green] Applied preset '{name}' to {path}")
+        else:
+            error(result.get("error", "Unknown error"))
+    except TDError as e:
+        error(str(e))
+
+@preset_app.command("ls")
+def preset_ls():
+    """List saved presets."""
+    import os
+    preset_dir = os.path.expanduser("~/.config/td/presets")
+
+    if not os.path.exists(preset_dir):
+        console.print("[dim]No presets saved yet[/dim]")
+        return
+
+    presets = [f[:-5] for f in os.listdir(preset_dir) if f.endswith(".json")]
+    if not presets:
+        console.print("[dim]No presets saved yet[/dim]")
+        return
+
+    table = Table(title="Saved Presets")
+    table.add_column("Name", style="cyan")
+    table.add_column("Type", style="green")
+    table.add_column("Params", style="dim")
+    table.add_column("Description")
+
+    for name in sorted(presets):
+        preset_file = os.path.join(preset_dir, f"{name}.json")
+        with open(preset_file) as f:
+            data = json.load(f)
+        table.add_row(
+            name,
+            data.get("type", "unknown"),
+            str(len(data.get("params", {}))),
+            data.get("description", "")[:40]
+        )
+
+    console.print(table)
+
+# ============================================================================
+# Watch Command
+# ============================================================================
+
+@app.command("watch")
+def watch(
+    script_file: Annotated[Path, typer.Argument(help="Python script file to watch and re-execute")],
+    interval: Annotated[float, typer.Option("--interval", "-i", help="Check interval in seconds")] = 1.0,
+):
+    """Watch a script file and re-execute on changes (live coding)."""
+    import time
+    import os
+
+    if not script_file.exists():
+        error(f"File not found: {script_file}")
+
+    console.print(f"[cyan]Watching {script_file} (Ctrl+C to stop)[/cyan]")
+
+    last_mtime = 0.0
+    client = get_client()
+
+    try:
+        while True:
+            current_mtime = os.path.getmtime(script_file)
+            if current_mtime > last_mtime:
+                last_mtime = current_mtime
+                console.print(f"\n[yellow]→ Executing {script_file.name}...[/yellow]")
+
+                try:
+                    script = script_file.read_text()
+                    result = client.exec(script)
+
+                    if result.get("success"):
+                        data = result.get("data", {})
+                        if "result" in data:
+                            console.print(f"[green]Result:[/green] {data['result']}")
+                        if data.get("stdout"):
+                            console.print(f"[dim]{data['stdout']}[/dim]")
+                        if data.get("stderr"):
+                            console.print(f"[red]{data['stderr']}[/red]")
+                    else:
+                        console.print(f"[red]Error: {result.get('error')}[/red]")
+                except TDError as e:
+                    console.print(f"[red]Error: {e}[/red]")
+
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        console.print("\n[cyan]Stopped watching[/cyan]")
+
+# ============================================================================
+# Main
+# ============================================================================
+
+if __name__ == "__main__":
+    try:
+        app()
+    finally:
+        if _client:
+            _client.close()

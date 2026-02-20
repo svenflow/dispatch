@@ -1,0 +1,11 @@
+#!/bin/bash
+# Blender wrapper - use direct exec to avoid subprocess issues on macOS Tahoe
+BLENDER_PATH="$HOME/blender-git/install/Blender.app/Contents/MacOS/Blender"
+
+if [ ! -f "$BLENDER_PATH" ]; then
+    echo "Error: Blender not found at $BLENDER_PATH"
+    echo "Run: cd ~/blender-git/blender && make && cmake --install ../build_darwin --prefix ../install"
+    exit 1
+fi
+
+exec "$BLENDER_PATH" "$@"

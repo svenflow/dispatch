@@ -1,0 +1,319 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "numpy",
+#     "pillow",
+#     "moderngl",
+# ]
+# ///
+"""
+Render Lenia - continuous cellular automata with smooth organic lifeforms.
+
+Based on Bert Wang-Chak Chan's 2018 paper. Creates soft, organic creatures
+that look like radiolarians, jellyfish, and other marine life.
+"""
+
+import argparse
+import os
+import subprocess
+import sys
+import tempfile
+
+import moderngl
+import numpy as np
+from PIL import Image
+
+
+def render_lenia(
+    output_path: str,
+    width: int = 1080,
+    height: int = 1080,
+    fps: int = 30,
+    duration: float = 15.0,
+    iterations: int = 1,
+    kernel_radius: int = 13,
+    growth_mu: float = 0.15,
+    growth_sigma: float = 0.015,
+    hq: bool = True,
+):
+    """Render Lenia continuous cellular automaton."""
+
+    ctx = moderngl.create_standalone_context()
+
+    # State textures for ping-pong
+    state_a = ctx.texture((width, height), 1, dtype='f4')
+    state_b = ctx.texture((width, height), 1, dtype='f4')
+    fbo_a = ctx.framebuffer(color_attachments=[state_a])
+    fbo_b = ctx.framebuffer(color_attachments=[state_b])
+
+    tex_out = ctx.texture((width, height), 4)
+    fbo_out = ctx.framebuffer(color_attachments=[tex_out])
+
+    vertex_shader = '''
+    #version 330
+    in vec2 in_position;
+    out vec2 v_texcoord;
+    void main() {
+        gl_Position = vec4(in_position, 0.0, 1.0);
+        v_texcoord = in_position * 0.5 + 0.5;
+    }
+    '''
+
+    # Initialize with circular blob(s) - Lenia "orbium" initial conditions
+    init_shader = '''
+    #version 330
+    uniform vec2 u_resolution;
+    in vec2 v_texcoord;
+    out float fragColor;
+
+    void main() {
+        vec2 uv = gl_FragCoord.xy / u_resolution;
+        vec2 center = uv - 0.5;
+
+        float val = 0.0;
+
+        // Create initial "creature" - ring shape (common Lenia starting point)
+        float dist = length(center);
+        float ring = smoothstep(0.08, 0.1, dist) * smoothstep(0.15, 0.12, dist);
+        val = ring;
+
+        // Add a second smaller creature
+        vec2 center2 = uv - vec2(0.7, 0.3);
+        float dist2 = length(center2);
+        float ring2 = smoothstep(0.04, 0.05, dist2) * smoothstep(0.08, 0.06, dist2);
+        val = max(val, ring2 * 0.8);
+
+        // Third creature
+        vec2 center3 = uv - vec2(0.25, 0.7);
+        float dist3 = length(center3);
+        float ring3 = smoothstep(0.03, 0.04, dist3) * smoothstep(0.07, 0.05, dist3);
+        val = max(val, ring3 * 0.9);
+
+        fragColor = val;
+    }
+    '''
+
+    # Lenia update rule with convolution kernel
+    sim_shader = f'''
+    #version 330
+    uniform vec2 u_resolution;
+    uniform sampler2D u_state;
+    uniform float u_dt;
+    uniform float u_mu;      // Growth function center
+    uniform float u_sigma;   // Growth function width
+    uniform int u_radius;    // Kernel radius
+    in vec2 v_texcoord;
+    out float fragColor;
+
+    // Lenia kernel - ring-shaped (like a donut)
+    float kernel(float r, float radius) {{
+        float peak = 0.5;  // Peak at half radius
+        float width = 0.15;
+        float normalized_r = r / radius;
+        // Bell curve centered at peak
+        return exp(-pow((normalized_r - peak) / width, 2.0) / 2.0);
+    }}
+
+    // Growth function - bell curve
+    float growth(float u) {{
+        return 2.0 * exp(-pow((u - u_mu) / u_sigma, 2.0) / 2.0) - 1.0;
+    }}
+
+    void main() {{
+        vec2 texel = 1.0 / u_resolution;
+        vec2 uv = v_texcoord;
+
+        float current = texture(u_state, uv).r;
+
+        // Compute convolution with ring kernel
+        float sum = 0.0;
+        float kernel_sum = 0.0;
+        int R = u_radius;
+        float fR = float(R);
+
+        for (int dy = -R; dy <= R; dy++) {{
+            for (int dx = -R; dx <= R; dx++) {{
+                float r = length(vec2(float(dx), float(dy)));
+                if (r <= fR && r > 0.0) {{
+                    float k = kernel(r, fR);
+                    vec2 sample_uv = uv + vec2(float(dx), float(dy)) * texel;
+                    // Wrap around (toroidal)
+                    sample_uv = fract(sample_uv);
+                    float s = texture(u_state, sample_uv).r;
+                    sum += s * k;
+                    kernel_sum += k;
+                }}
+            }}
+        }}
+
+        // Normalize convolution
+        float U = sum / max(kernel_sum, 0.001);
+
+        // Apply growth function
+        float G = growth(U);
+
+        // Update state
+        float newState = current + u_dt * G;
+        newState = clamp(newState, 0.0, 1.0);
+
+        fragColor = newState;
+    }}
+    '''
+
+    # Display shader - organic color palette
+    display_shader = '''
+    #version 330
+    uniform sampler2D u_state;
+    in vec2 v_texcoord;
+    out vec4 fragColor;
+
+    void main() {
+        float state = texture(u_state, v_texcoord).r;
+
+        // Deep sea color palette
+        vec3 bgColor = vec3(0.0, 0.02, 0.05);
+        vec3 lowColor = vec3(0.0, 0.1, 0.2);
+        vec3 midColor = vec3(0.1, 0.4, 0.5);
+        vec3 highColor = vec3(0.3, 0.8, 0.7);
+        vec3 peakColor = vec3(0.9, 1.0, 0.95);
+
+        vec3 color = bgColor;
+        if (state > 0.01) {
+            if (state < 0.25) {
+                color = mix(lowColor, midColor, state / 0.25);
+            } else if (state < 0.5) {
+                color = mix(midColor, highColor, (state - 0.25) / 0.25);
+            } else {
+                color = mix(highColor, peakColor, (state - 0.5) / 0.5);
+            }
+        }
+
+        // Subtle glow
+        color += vec3(0.1, 0.2, 0.15) * state;
+
+        // Vignette
+        float vignette = 1.0 - length(v_texcoord - 0.5) * 0.4;
+        color *= vignette;
+
+        fragColor = vec4(color, 1.0);
+    }
+    '''
+
+    try:
+        prog_init = ctx.program(vertex_shader=vertex_shader, fragment_shader=init_shader)
+        prog_sim = ctx.program(vertex_shader=vertex_shader, fragment_shader=sim_shader)
+        prog_display = ctx.program(vertex_shader=vertex_shader, fragment_shader=display_shader)
+    except Exception as e:
+        print(f"Shader compilation error:\n{e}", file=sys.stderr)
+        sys.exit(1)
+
+    vertices = np.array([-1.0, -1.0, 1.0, -1.0, -1.0, 1.0, 1.0, 1.0], dtype='f4')
+    vbo = ctx.buffer(vertices)
+    vao_init = ctx.simple_vertex_array(prog_init, vbo, 'in_position')
+    vao_sim = ctx.simple_vertex_array(prog_sim, vbo, 'in_position')
+    vao_display = ctx.simple_vertex_array(prog_display, vbo, 'in_position')
+
+    prog_init['u_resolution'].value = (float(width), float(height))
+    prog_sim['u_resolution'].value = (float(width), float(height))
+    prog_sim['u_dt'].value = 0.1
+    prog_sim['u_mu'].value = growth_mu
+    prog_sim['u_sigma'].value = growth_sigma
+    prog_sim['u_radius'].value = kernel_radius
+
+    # Initialize
+    fbo_a.use()
+    vao_init.render(moderngl.TRIANGLE_STRIP)
+
+    state_a.use(0)
+    state_b.use(1)
+    prog_sim['u_state'] = 0
+    prog_display['u_state'] = 0
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        num_frames = int(fps * duration)
+        print(f"Rendering {num_frames} frames at {width}x{height}...")
+        print(f"Lenia params: mu={growth_mu}, sigma={growth_sigma}, radius={kernel_radius}")
+
+        current_fbo = fbo_a
+        current_tex = state_a
+        other_fbo = fbo_b
+        other_tex = state_b
+
+        for frame_idx in range(num_frames):
+            for _ in range(iterations):
+                current_tex.use(0)
+                other_fbo.use()
+                vao_sim.render(moderngl.TRIANGLE_STRIP)
+
+                current_fbo, other_fbo = other_fbo, current_fbo
+                current_tex, other_tex = other_tex, current_tex
+
+            current_tex.use(0)
+            fbo_out.use()
+            ctx.clear(0.0, 0.0, 0.0, 1.0)
+            vao_display.render(moderngl.TRIANGLE_STRIP)
+
+            data = fbo_out.read(components=4)
+            img = Image.frombytes('RGBA', (width, height), data)
+            img = img.transpose(Image.FLIP_TOP_BOTTOM)
+
+            frame_path = os.path.join(tmpdir, f'frame_{frame_idx:04d}.png')
+            img.save(frame_path)
+
+            if (frame_idx + 1) % fps == 0:
+                print(f"  {frame_idx + 1}/{num_frames} frames ({(frame_idx + 1) / fps:.0f}s)")
+
+        print("Encoding video with ffmpeg...")
+
+        is_mov = output_path.lower().endswith('.mov')
+        if hq:
+            ffmpeg_cmd = [
+                'ffmpeg', '-y', '-framerate', str(fps),
+                '-i', os.path.join(tmpdir, 'frame_%04d.png'),
+                '-c:v', 'libx265', '-b:v', '50M', '-maxrate', '60M', '-bufsize', '120M',
+                '-preset', 'slow', '-tag:v', 'hvc1', '-pix_fmt', 'yuv420p', '-movflags', '+faststart',
+            ]
+            if is_mov:
+                ffmpeg_cmd.extend(['-brand', 'qt'])
+            ffmpeg_cmd.append(output_path)
+        else:
+            ffmpeg_cmd = [
+                'ffmpeg', '-y', '-framerate', str(fps),
+                '-i', os.path.join(tmpdir, 'frame_%04d.png'),
+                '-c:v', 'libx265', '-crf', '26', '-preset', 'fast',
+                '-tag:v', 'hvc1', '-pix_fmt', 'yuv420p', output_path
+            ]
+
+        result = subprocess.run(ffmpeg_cmd, capture_output=True)
+        if result.returncode != 0:
+            print(f"ffmpeg error:\n{result.stderr.decode()}", file=sys.stderr)
+            sys.exit(1)
+
+        file_size = os.path.getsize(output_path)
+        print(f"Done! Output: {output_path} ({file_size / 1024 / 1024:.1f} MB)")
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Render Lenia continuous cellular automata')
+    parser.add_argument('output', help='Output video path')
+    parser.add_argument('--width', type=int, default=1080)
+    parser.add_argument('--height', type=int, default=1080)
+    parser.add_argument('--fps', type=int, default=30)
+    parser.add_argument('--duration', type=float, default=15.0)
+    parser.add_argument('--iterations', type=int, default=1)
+    parser.add_argument('--radius', type=int, default=13, help='Kernel radius')
+    parser.add_argument('--mu', type=float, default=0.15, help='Growth function center')
+    parser.add_argument('--sigma', type=float, default=0.015, help='Growth function width')
+    parser.add_argument('--fast', action='store_true')
+
+    args = parser.parse_args()
+
+    render_lenia(
+        args.output, args.width, args.height, args.fps, args.duration,
+        args.iterations, args.radius, args.mu, args.sigma, hq=not args.fast,
+    )
+
+
+if __name__ == '__main__':
+    main()

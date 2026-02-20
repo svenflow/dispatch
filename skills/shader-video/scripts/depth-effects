@@ -1,0 +1,588 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "numpy",
+#     "pillow",
+#     "moderngl",
+# ]
+# ///
+"""
+Image-based VJ effects using depth maps and segmentation masks.
+
+Usage:
+  depth-effects <effect> <image> <depth> [mask] <output.mp4> [options]
+
+Effects:
+  parallax    - TikTok-style 3D zoom (foreground zooms in, background pulls back)
+  pan         - Camera parallax pan (figure-8 motion with depth displacement)
+  hologram    - Sci-fi hologram scanning effect (requires mask)
+  rutt-etra   - Classic 70s video synth scanlines
+  particles   - Person dissolves into drifting particles (requires mask)
+  chromatic   - RGB channels explode outward from edges
+  pixelsort   - Horizontal glitch streaks based on depth
+  pointcloud  - 3D point cloud with motion trails
+  datamosh    - Block displacement and color channel chaos
+
+Examples:
+  depth-effects parallax photo.jpg depth.png output.mp4
+  depth-effects hologram photo.jpg depth.png mask.png output.mp4
+  depth-effects datamosh photo.jpg depth.png mask.png out.mp4 --duration 6
+"""
+
+import argparse
+import os
+import subprocess
+import tempfile
+import moderngl
+import numpy as np
+from PIL import Image
+
+
+# ==================== SHADERS ====================
+
+VERTEX_SHADER = '''
+#version 330
+in vec2 in_vert;
+in vec2 in_texcoord;
+out vec2 v_texcoord;
+void main() {
+    gl_Position = vec4(in_vert, 0.0, 1.0);
+    v_texcoord = in_texcoord;
+}
+'''
+
+PARALLAX_ZOOM_SHADER = '''
+#version 330
+uniform sampler2D u_image;
+uniform sampler2D u_depth;
+uniform float u_progress;
+in vec2 v_texcoord;
+out vec4 fragColor;
+
+void main() {
+    vec2 uv = v_texcoord;
+    vec2 center = vec2(0.5, 0.5);
+    float depth = texture(u_depth, uv).r;
+    float t = u_progress;
+    float ease = t * t * (3.0 - 2.0 * t);
+    float fg_zoom = 1.0 + ease * 0.3;
+    float bg_zoom = 1.0 - ease * 0.15;
+    float zoom = mix(bg_zoom, fg_zoom, depth);
+    vec2 zoomed_uv = center + (uv - center) / zoom;
+    zoomed_uv = clamp(zoomed_uv, 0.0, 1.0);
+    vec3 color = texture(u_image, zoomed_uv).rgb;
+    float blur_amount = (1.0 - depth) * ease * 0.3;
+    float vignette = 1.0 - length(uv - center) * blur_amount;
+    color *= max(vignette, 0.7);
+    fragColor = vec4(color, 1.0);
+}
+'''
+
+PARALLAX_PAN_SHADER = '''
+#version 330
+uniform sampler2D u_image;
+uniform sampler2D u_depth;
+uniform vec2 u_camera_offset;
+uniform float u_zoom;
+in vec2 v_texcoord;
+out vec4 fragColor;
+
+void main() {
+    vec2 uv = v_texcoord;
+    vec2 center = vec2(0.5, 0.5);
+    float depth = texture(u_depth, uv).r;
+    float parallax_strength = 0.08;
+    float displacement_factor = depth;
+    vec2 displaced_uv = uv - u_camera_offset * displacement_factor * parallax_strength;
+    float zoom_factor = 1.0 + (u_zoom - 1.0) * displacement_factor;
+    displaced_uv = center + (displaced_uv - center) / zoom_factor;
+    displaced_uv = clamp(displaced_uv, 0.001, 0.999);
+    vec3 color = texture(u_image, displaced_uv).rgb;
+    float vignette = 1.0 - length(uv - center) * 0.3 * (1.0 - depth * 0.5);
+    color *= vignette;
+    fragColor = vec4(color, 1.0);
+}
+'''
+
+HOLOGRAM_SHADER = '''
+#version 330
+uniform sampler2D u_image;
+uniform sampler2D u_depth;
+uniform sampler2D u_mask;
+uniform float u_time;
+uniform vec2 u_resolution;
+in vec2 v_texcoord;
+out vec4 fragColor;
+
+float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+void main() {
+    vec2 uv = v_texcoord;
+    float mask_val = texture(u_mask, uv).r;
+    float depth_val = texture(u_depth, uv).r;
+    vec3 original = texture(u_image, uv).rgb;
+    float scan_line = fract(uv.y * 100.0 - u_time * 2.0);
+    float scan_bright = smoothstep(0.0, 0.02, scan_line) * smoothstep(0.05, 0.02, scan_line);
+    float scan_bar_y = fract(u_time * 0.3);
+    float scan_bar = smoothstep(0.02, 0.0, abs(uv.y - scan_bar_y));
+    if (mask_val > 0.3) {
+        float luminance = dot(original, vec3(0.299, 0.587, 0.114));
+        vec3 holo_color = vec3(0.2, 0.8, 1.0) * luminance;
+        vec2 texel = 1.0 / u_resolution;
+        float depth_dx = texture(u_depth, uv + vec2(texel.x, 0.0)).r - texture(u_depth, uv - vec2(texel.x, 0.0)).r;
+        float depth_dy = texture(u_depth, uv + vec2(0.0, texel.y)).r - texture(u_depth, uv - vec2(0.0, texel.y)).r;
+        float edge = length(vec2(depth_dx, depth_dy)) * 10.0;
+        float flicker = 0.9 + 0.1 * sin(u_time * 30.0 + uv.y * 20.0);
+        float noise = hash(uv * 1000.0 + u_time) * 0.1;
+        float scanlines = 0.9 + 0.1 * sin(uv.y * u_resolution.y * 0.5);
+        holo_color *= flicker * scanlines;
+        holo_color += vec3(0.3, 0.6, 1.0) * edge;
+        holo_color += vec3(0.1, 0.2, 0.3) * scan_bright;
+        holo_color += vec3(0.5, 0.8, 1.0) * scan_bar * 0.5;
+        holo_color += noise;
+        float alpha = 0.7 + depth_val * 0.3;
+        vec3 bg = original * 0.2;
+        fragColor = vec4(mix(bg, holo_color, mask_val * alpha), 1.0);
+    } else {
+        vec3 bg = original * 0.3;
+        bg += vec3(0.0, 0.02, 0.05) * scan_bar * 0.3;
+        fragColor = vec4(bg, 1.0);
+    }
+}
+'''
+
+RUTT_ETRA_SHADER = '''
+#version 330
+uniform sampler2D u_image;
+uniform sampler2D u_depth;
+uniform float u_num_lines;
+uniform float u_displace_strength;
+in vec2 v_texcoord;
+out vec4 fragColor;
+
+void main() {
+    vec2 uv = v_texcoord;
+    float line_y = floor(uv.y * u_num_lines) / u_num_lines;
+    float depth_val = texture(u_depth, vec2(uv.x, line_y + 0.5/u_num_lines)).r;
+    float displacement = depth_val * u_displace_strength;
+    float displaced_y = line_y + displacement * 0.15;
+    float line_dist = abs(uv.y - displaced_y - 0.5/u_num_lines);
+    float line_width = 0.003 + depth_val * 0.002;
+    float line_brightness = smoothstep(line_width, 0.0, line_dist);
+    vec3 color = texture(u_image, vec2(uv.x, line_y + 0.5/u_num_lines)).rgb;
+    float glow = exp(-line_dist * 200.0) * 0.5;
+    vec3 final_color = color * (line_brightness + glow);
+    float r_offset = 0.001;
+    vec3 fringe_color = vec3(
+        texture(u_image, vec2(uv.x + r_offset, line_y)).r,
+        texture(u_image, vec2(uv.x, line_y)).g,
+        texture(u_image, vec2(uv.x - r_offset, line_y)).b
+    );
+    final_color = mix(final_color, fringe_color * (line_brightness + glow), 0.3);
+    float scanline_dark = 0.7 + 0.3 * cos(uv.y * u_num_lines * 3.14159 * 2.0);
+    final_color *= scanline_dark;
+    fragColor = vec4(final_color, 1.0);
+}
+'''
+
+PARTICLES_SHADER = '''
+#version 330
+uniform sampler2D u_image;
+uniform sampler2D u_depth;
+uniform sampler2D u_mask;
+uniform float u_time;
+uniform float u_disperse;
+in vec2 v_texcoord;
+out vec4 fragColor;
+
+float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float noise(vec2 p) {
+    vec2 i = floor(p); vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash(i), hash(i + vec2(1,0)), f.x), mix(hash(i + vec2(0,1)), hash(i + vec2(1,1)), f.x), f.y);
+}
+float fbm(vec2 p) { float v = 0.0, a = 0.5; for(int i=0;i<4;i++){v+=a*noise(p);p*=2.0;a*=0.5;} return v; }
+
+void main() {
+    vec2 uv = v_texcoord;
+    vec2 grid = uv * 80.0;
+    vec2 grid_id = floor(grid);
+    float particle_rand = hash(grid_id);
+    float particle_speed = 0.5 + particle_rand * 1.5;
+    float particle_dir = particle_rand * 6.28;
+    float local_mask = texture(u_mask, (grid_id + 0.5) / 80.0).r;
+    float disperse_amount = u_disperse * local_mask;
+    vec2 drift = vec2(cos(particle_dir), sin(particle_dir)) * disperse_amount * particle_speed;
+    drift += vec2(noise(grid_id * 0.1 + u_time) - 0.5, noise(grid_id * 0.1 + u_time + 100.0) - 0.5) * disperse_amount * 0.5;
+    vec2 sample_uv = clamp(uv - drift * 0.3, 0.0, 1.0);
+    vec3 color = texture(u_image, sample_uv).rgb;
+    float fade = 1.0 - disperse_amount * 0.8;
+    if (local_mask < 0.1) { color = texture(u_image, uv).rgb; fade = 1.0; }
+    if (disperse_amount > 0.1 && local_mask > 0.5) color += vec3(0.1, 0.15, 0.2) * disperse_amount;
+    fragColor = vec4(color * fade, 1.0);
+}
+'''
+
+CHROMATIC_SHADER = '''
+#version 330
+uniform sampler2D u_image;
+uniform sampler2D u_depth;
+uniform sampler2D u_mask;
+uniform float u_time;
+uniform float u_intensity;
+uniform vec2 u_resolution;
+in vec2 v_texcoord;
+out vec4 fragColor;
+
+void main() {
+    vec2 uv = v_texcoord;
+    vec2 center = vec2(0.5, 0.5);
+    float depth_val = texture(u_depth, uv).r;
+    vec2 dir = normalize(uv - center);
+    float dist = length(uv - center);
+    float aberration = u_intensity * depth_val * dist * 0.3 * (1.0 + 0.5 * sin(u_time * 3.0));
+    float r = texture(u_image, uv + dir * aberration).r;
+    float g = texture(u_image, uv).g;
+    float b = texture(u_image, uv - dir * aberration).b;
+    vec3 color = vec3(r, g, b);
+    vec2 texel = 1.0 / u_resolution;
+    float edge = abs(texture(u_mask, uv + texel).r - texture(u_mask, uv - texel).r);
+    edge += abs(texture(u_mask, uv + vec2(0, texel.y)).r - texture(u_mask, uv - vec2(0, texel.y)).r);
+    if (edge > 0.1) {
+        vec3 rainbow = vec3(sin(u_time * 2.0 + uv.x * 10.0) * 0.5 + 0.5,
+                           sin(u_time * 2.0 + uv.x * 10.0 + 2.094) * 0.5 + 0.5,
+                           sin(u_time * 2.0 + uv.x * 10.0 + 4.189) * 0.5 + 0.5);
+        color += rainbow * edge * u_intensity * 2.0;
+    }
+    fragColor = vec4(color, 1.0);
+}
+'''
+
+PIXELSORT_SHADER = '''
+#version 330
+uniform sampler2D u_image;
+uniform sampler2D u_depth;
+uniform float u_time;
+uniform float u_sort_amount;
+uniform vec2 u_resolution;
+in vec2 v_texcoord;
+out vec4 fragColor;
+
+float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+
+void main() {
+    vec2 uv = v_texcoord;
+    float depth_val = texture(u_depth, uv).r;
+    float row_hash = hash(vec2(floor(uv.y * u_resolution.y), 0.0));
+    float shift = depth_val * u_sort_amount * 0.2 * (0.5 + row_hash);
+    float dir = row_hash > 0.5 ? 1.0 : -1.0;
+    float threshold = 0.3 + 0.2 * sin(u_time * 2.0 + uv.y * 20.0);
+    vec2 sorted_uv = uv;
+    if (depth_val > threshold) sorted_uv.x = clamp(uv.x + shift * dir, 0.0, 1.0);
+    vec3 color = texture(u_image, sorted_uv).rgb;
+    color *= 0.95 + 0.05 * sin(uv.y * u_resolution.y * 2.0);
+    float block = floor(uv.y * 30.0 + u_time * 5.0);
+    if (hash(vec2(block, floor(u_time * 10.0))) > 0.95) color = vec3(1.0) - color;
+    fragColor = vec4(color, 1.0);
+}
+'''
+
+POINTCLOUD_SHADER = '''
+#version 330
+uniform sampler2D u_image;
+uniform sampler2D u_depth;
+uniform float u_rotation;
+in vec2 v_texcoord;
+out vec4 fragColor;
+
+void main() {
+    vec2 uv = v_texcoord;
+    vec2 center = vec2(0.5, 0.5);
+    vec2 grid = uv * 100.0;
+    vec2 grid_id = floor(grid);
+    vec2 grid_center = (grid_id + 0.5) / 100.0;
+    float depth_val = texture(u_depth, grid_center).r;
+    float angle = u_rotation;
+    vec2 pos = grid_center - center;
+    float z = (depth_val - 0.5) * 0.5;
+    float new_x = pos.x * cos(angle) - z * sin(angle);
+    float new_z = pos.x * sin(angle) + z * cos(angle);
+    float perspective = 1.0 / (1.0 + new_z * 0.5);
+    vec2 projected = vec2(new_x, pos.y) * perspective + center;
+    float dist = length(uv - projected);
+    float point_size = (0.003 + depth_val * 0.005) * perspective;
+    float point = smoothstep(point_size, 0.0, dist);
+    vec3 point_color = texture(u_image, grid_center).rgb;
+    float trail = 0.0;
+    for (int i = 1; i <= 5; i++) {
+        float trail_angle = angle - float(i) * 0.05;
+        float trail_x = pos.x * cos(trail_angle) - z * sin(trail_angle);
+        float trail_z = pos.x * sin(trail_angle) + z * cos(trail_angle);
+        float trail_persp = 1.0 / (1.0 + trail_z * 0.5);
+        vec2 trail_proj = vec2(trail_x, pos.y) * trail_persp + center;
+        trail += smoothstep(point_size * 0.8, 0.0, length(uv - trail_proj)) * (1.0 - float(i) / 6.0);
+    }
+    vec3 color = vec3(0.02) + point_color * point + point_color * trail * 0.3;
+    color += vec3(0.0, 0.1, 0.2) * (1.0 - depth_val) * 0.3;
+    fragColor = vec4(color, 1.0);
+}
+'''
+
+DATAMOSH_SHADER = '''
+#version 330
+uniform sampler2D u_image;
+uniform sampler2D u_depth;
+uniform float u_time;
+uniform float u_glitch_intensity;
+uniform vec2 u_resolution;
+in vec2 v_texcoord;
+out vec4 fragColor;
+
+float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float hash11(float p) { return fract(sin(p * 127.1) * 43758.5453); }
+
+void main() {
+    vec2 uv = v_texcoord;
+    float depth_val = texture(u_depth, uv).r;
+    float block_size = 0.02 + 0.03 * hash11(floor(u_time * 3.0));
+    vec2 block = floor(uv / block_size) * block_size;
+    float block_hash = hash(block + floor(u_time * 5.0));
+    vec2 glitch_uv = uv;
+    if (block_hash > 0.7 && u_glitch_intensity > 0.3) glitch_uv.x += (hash(block) - 0.5) * 0.2 * u_glitch_intensity;
+    if (block_hash > 0.85 && block_hash < 0.9) glitch_uv.y = block.y + (uv.y - block.y) * 0.3;
+    if (depth_val > 0.5) {
+        glitch_uv += vec2(sin(u_time * 10.0 + uv.y * 50.0), cos(u_time * 8.0 + uv.x * 40.0)) * 0.01 * u_glitch_intensity * depth_val;
+    }
+    glitch_uv = clamp(glitch_uv, 0.0, 1.0);
+    vec3 color;
+    color.r = texture(u_image, glitch_uv + vec2(0.003 * u_glitch_intensity, 0.0)).r;
+    color.g = texture(u_image, glitch_uv).g;
+    color.b = texture(u_image, glitch_uv - vec2(0.003 * u_glitch_intensity, 0.0)).b;
+    if (hash(block * 2.0 + floor(u_time * 8.0)) > 0.92) color = vec3(1.0) - color;
+    color += sin(uv.y * u_resolution.y * 1.5 + u_time * 30.0) * 0.03 * u_glitch_intensity;
+    if (hash(block * 3.0 + floor(u_time * 6.0)) > 0.95) color = color.gbr;
+    color += (hash(uv * u_resolution + u_time * 100.0) - 0.5) * 0.1 * u_glitch_intensity;
+    fragColor = vec4(color, 1.0);
+}
+'''
+
+
+# ==================== RENDERING ====================
+
+def create_context_and_textures(width, height, img, depth, mask=None):
+    """Create OpenGL context and load textures."""
+    ctx = moderngl.create_standalone_context()
+    fbo = ctx.framebuffer(color_attachments=[ctx.texture((width, height), 4)])
+
+    vertices = np.array([
+        -1.0, -1.0, 0.0, 0.0,
+         1.0, -1.0, 1.0, 0.0,
+        -1.0,  1.0, 0.0, 1.0,
+         1.0,  1.0, 1.0, 1.0,
+    ], dtype='f4')
+
+    img_tex = ctx.texture((width, height), 3, np.array(img).tobytes())
+    img_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
+
+    depth_tex = ctx.texture((width, height), 1, np.array(depth).tobytes())
+    depth_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
+
+    mask_tex = None
+    if mask is not None:
+        mask_tex = ctx.texture((width, height), 1, np.array(mask).tobytes())
+        mask_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
+
+    return ctx, fbo, vertices, img_tex, depth_tex, mask_tex
+
+
+def render_effect(effect, image_path, depth_path, mask_path, output_path, duration, fps):
+    """Render the specified effect."""
+    img = Image.open(image_path).convert("RGB")
+    width, height = img.size
+
+    depth = Image.open(depth_path).convert("L").resize((width, height), Image.Resampling.LANCZOS)
+
+    mask = None
+    if mask_path:
+        mask = Image.open(mask_path).convert("L").resize((width, height), Image.Resampling.LANCZOS)
+        mask = mask.transpose(Image.FLIP_TOP_BOTTOM)
+
+    img = img.transpose(Image.FLIP_TOP_BOTTOM)
+    depth = depth.transpose(Image.FLIP_TOP_BOTTOM)
+
+    ctx, fbo, vertices, img_tex, depth_tex, mask_tex = create_context_and_textures(
+        width, height, img, depth, mask
+    )
+
+    # Select shader and uniforms based on effect
+    shader_map = {
+        'parallax': PARALLAX_ZOOM_SHADER,
+        'pan': PARALLAX_PAN_SHADER,
+        'hologram': HOLOGRAM_SHADER,
+        'rutt-etra': RUTT_ETRA_SHADER,
+        'particles': PARTICLES_SHADER,
+        'chromatic': CHROMATIC_SHADER,
+        'pixelsort': PIXELSORT_SHADER,
+        'pointcloud': POINTCLOUD_SHADER,
+        'datamosh': DATAMOSH_SHADER,
+    }
+
+    prog = ctx.program(vertex_shader=VERTEX_SHADER, fragment_shader=shader_map[effect])
+
+    vbo = ctx.buffer(vertices)
+    vao = ctx.vertex_array(prog, [(vbo, '2f 2f', 'in_vert', 'in_texcoord')])
+
+    # Bind textures
+    img_tex.use(0)
+    depth_tex.use(1)
+    prog['u_image'].value = 0
+    prog['u_depth'].value = 1
+
+    if mask_tex and 'u_mask' in prog:
+        mask_tex.use(2)
+        prog['u_mask'].value = 2
+
+    if 'u_resolution' in prog:
+        prog['u_resolution'].value = (float(width), float(height))
+
+    if effect == 'rutt-etra':
+        prog['u_num_lines'].value = 60.0
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        num_frames = int(fps * duration)
+        print(f"Rendering {effect} - {num_frames} frames...")
+
+        for frame_idx in range(num_frames):
+            t = frame_idx / max(num_frames - 1, 1)
+
+            # Set per-frame uniforms based on effect
+            if effect == 'parallax':
+                if t < 0.4:
+                    progress = t / 0.4
+                else:
+                    progress = 1.0
+                prog['u_progress'].value = progress
+
+            elif effect == 'pan':
+                ease_t = t * 2 * np.pi
+                cam_x = np.sin(ease_t) * 0.5
+                cam_y = np.sin(ease_t * 2) * 0.25
+                zoom = 1.0 + 0.08 * (np.sin(ease_t * 0.5) * 0.5 + 0.5)
+                prog['u_camera_offset'].value = (cam_x, cam_y)
+                prog['u_zoom'].value = zoom
+
+            elif effect == 'hologram':
+                prog['u_time'].value = frame_idx / fps
+
+            elif effect == 'rutt-etra':
+                prog['u_displace_strength'].value = 0.5 + 0.5 * np.sin(t * np.pi * 2)
+
+            elif effect == 'particles':
+                prog['u_time'].value = frame_idx / fps
+                disperse = (t / 0.6) ** 2 if t < 0.6 else 1.0
+                prog['u_disperse'].value = disperse
+
+            elif effect == 'chromatic':
+                prog['u_time'].value = frame_idx / fps
+                if t < 0.2:
+                    intensity = t / 0.2
+                elif t > 0.8:
+                    intensity = (1.0 - t) / 0.2
+                else:
+                    intensity = 1.0
+                prog['u_intensity'].value = intensity
+
+            elif effect == 'pixelsort':
+                prog['u_time'].value = frame_idx / fps
+                prog['u_sort_amount'].value = (np.sin(t * np.pi * 4) * 0.5 + 0.5) * 1.5
+
+            elif effect == 'pointcloud':
+                prog['u_rotation'].value = np.sin(t * np.pi * 2) * 0.4
+
+            elif effect == 'datamosh':
+                prog['u_time'].value = frame_idx / fps
+                base_intensity = 0.3 + 0.7 * abs(np.sin(t * np.pi * 6))
+                if np.random.random() > 0.9:
+                    base_intensity = 1.0
+                prog['u_glitch_intensity'].value = base_intensity
+
+            fbo.use()
+            ctx.clear(0.0, 0.0, 0.0, 1.0)
+            vao.render(moderngl.TRIANGLE_STRIP)
+
+            data = fbo.read(components=4)
+            frame_img = Image.frombytes('RGBA', (width, height), data)
+            frame_img = frame_img.transpose(Image.FLIP_TOP_BOTTOM)
+            frame_img.save(os.path.join(tmpdir, f'frame_{frame_idx:04d}.png'))
+
+            if (frame_idx + 1) % fps == 0:
+                print(f"  {(frame_idx + 1) // fps}s / {int(duration)}s")
+
+        print("Encoding video...")
+        subprocess.run([
+            'ffmpeg', '-y', '-framerate', str(fps),
+            '-i', os.path.join(tmpdir, 'frame_%04d.png'),
+            '-c:v', 'libx265', '-crf', '22', '-preset', 'fast',
+            '-tag:v', 'hvc1', '-pix_fmt', 'yuv420p', output_path
+        ], check=True, capture_output=True)
+
+        print(f"Done! Saved to {output_path} ({os.path.getsize(output_path) / 1024:.1f} KB)")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Image-based VJ effects using depth maps and masks',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''
+Effects:
+  parallax    TikTok-style 3D zoom
+  pan         Camera parallax pan with figure-8 motion
+  hologram    Sci-fi hologram scanning (requires mask)
+  rutt-etra   Classic 70s video synth scanlines
+  particles   Person dissolves into particles (requires mask)
+  chromatic   RGB channels explode from edges (requires mask)
+  pixelsort   Horizontal glitch streaks
+  pointcloud  3D point cloud with trails
+  datamosh    Block displacement chaos
+
+Examples:
+  depth-effects parallax photo.jpg depth.png output.mp4
+  depth-effects hologram photo.jpg depth.png mask.png output.mp4
+'''
+    )
+    parser.add_argument('effect', choices=[
+        'parallax', 'pan', 'hologram', 'rutt-etra', 'particles',
+        'chromatic', 'pixelsort', 'pointcloud', 'datamosh'
+    ])
+    parser.add_argument('image', help='Input image')
+    parser.add_argument('depth', help='Depth map (grayscale, bright=near)')
+    parser.add_argument('mask_or_output', help='Mask image OR output path')
+    parser.add_argument('output', nargs='?', help='Output video path (if mask provided)')
+    parser.add_argument('--duration', type=float, default=4.0, help='Duration in seconds')
+    parser.add_argument('--fps', type=int, default=30, help='Frames per second')
+
+    args = parser.parse_args()
+
+    # Determine if mask was provided
+    mask_required = args.effect in ['hologram', 'particles', 'chromatic']
+
+    if args.output:
+        mask_path = args.mask_or_output
+        output_path = args.output
+    else:
+        if mask_required:
+            parser.error(f"Effect '{args.effect}' requires a mask. Usage: depth-effects {args.effect} image depth mask output.mp4")
+        mask_path = None
+        output_path = args.mask_or_output
+
+    render_effect(
+        args.effect, args.image, args.depth, mask_path, output_path,
+        args.duration, args.fps
+    )
+
+
+if __name__ == '__main__':
+    main()
