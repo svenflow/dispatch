@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Qwen3-TTS Voice Design wrapper
+# Generate speech with custom voice styles described in natural language
+#
+# Usage:
+#   speak-qwen "Hello world" --style "An excited child"
+#   speak-qwen "News report" --style "A serious anchor" -o /tmp/news.wav
+#   speak-qwen "Good morning" --style "A warm barista" --play
+
+QWEN_TTS_DIR="$HOME/code/qwen3-tts-apple-silicon"
+
+if [ ! -d "$QWEN_TTS_DIR" ]; then
+    echo "Error: Qwen3-TTS not installed at $QWEN_TTS_DIR" >&2
+    echo "Run: cd ~/code && git clone https://github.com/kapi2800/qwen3-tts-apple-silicon.git" >&2
+    exit 1
+fi
+
+cd "$QWEN_TTS_DIR"
+source .venv/bin/activate
+exec python qwen-tts "$@"

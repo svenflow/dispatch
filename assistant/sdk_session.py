@@ -100,6 +100,7 @@ class SDKSession:
         cwd: str,
         session_type: str = "individual",
         source: str = "imessage",
+        model: str = "opus",
     ):
         self.chat_id = chat_id
         self.contact_name = contact_name
@@ -107,6 +108,7 @@ class SDKSession:
         self.cwd = cwd
         self.session_type = session_type
         self.source = source
+        self.model = model
 
         self._client: Optional[ClaudeSDKClient] = None
         self._message_queue: asyncio.Queue[str] = asyncio.Queue()
@@ -148,28 +150,52 @@ class SDKSession:
         self._log.info(f"SESSION_START | resume={resume_session_id} | tier={self.tier}")
         log.info(f"[{self.contact_name}] SDK session started (resume={resume_session_id})")
 
+    async def _kill_subprocess(self):
+        """Kill the Claude CLI subprocess to prevent zombies.
+
+        Called from both stop() and _run_loop's finally block to ensure
+        the subprocess is terminated when the session ends or crashes.
+        """
+        if not self._client:
+            return
+
+        try:
+            transport = getattr(self._client, '_transport', None)
+            if transport:
+                process = getattr(transport, '_process', None)
+                if process and process.returncode is None:
+                    self._log.info("SUBPROCESS_KILL | Terminating Claude CLI subprocess")
+                    process.terminate()
+                    # Give it a moment to terminate gracefully
+                    try:
+                        await asyncio.wait_for(process.wait(), timeout=2.0)
+                    except asyncio.TimeoutError:
+                        process.kill()  # Force kill if terminate didn't work
+                        self._log.warning("SUBPROCESS_KILL | Had to force kill")
+        except Exception as e:
+            self._log.warning(f"SUBPROCESS_KILL_ERROR | {e}")
+        finally:
+            self._client = None
+
     async def stop(self):
-        """Stop the session by cancelling its task.
+        """Stop the session by cancelling its task and killing the subprocess.
 
-        IMPORTANT: We intentionally do NOT call client.disconnect().
-        The SDK client uses anyio internally, and anyio's cancel scopes
-        propagate CancelledError to ALL tasks in the event loop, not just
-        the calling task. This crashes the main daemon loop.
-
-        Instead, we just abandon the client. The underlying Claude CLI
-        subprocess will terminate when its stdin/stdout pipes close
-        (which happens when the client object gets garbage collected).
+        We explicitly kill the subprocess to prevent zombie sessions from
+        continuing to run after restart. The SDK's disconnect() method can
+        cause anyio cancel scope issues, so we terminate the subprocess directly.
         """
         self.running = False
-        # Don't call disconnect - just abandon the client to avoid anyio cancel scope leaks
-        self._client = None
 
+        # First cancel the task to stop the receive loop
         if self._task:
             self._task.cancel()
             try:
                 await self._task
             except asyncio.CancelledError:
                 pass
+
+        await self._kill_subprocess()
+
         self._log.info(f"SESSION_STOP | turns={self.turn_count}")
         log.info(f"[{self.contact_name}] SDK session stopped (turns={self.turn_count})")
 
@@ -218,12 +244,17 @@ class SDKSession:
         receiver = asyncio.create_task(self._receive_loop())
         try:
             while self.running:
+                # Check if receiver crashed
+                if receiver.done():
+                    self._log.warning("RECEIVER_CRASHED | Exiting main loop")
+                    break
+
                 try:
                     msg = await asyncio.wait_for(
-                        self._message_queue.get(), timeout=3600
+                        self._message_queue.get(), timeout=30
                     )
                 except asyncio.TimeoutError:
-                    continue  # 1-hour idle, keep waiting
+                    continue  # Check receiver health every 30s
 
                 self.last_activity = datetime.now()
                 self._log.info(f"IN | {msg}")
@@ -254,6 +285,8 @@ class SDKSession:
                 await receiver
             except asyncio.CancelledError:
                 pass
+            # Kill subprocess to prevent zombies when receiver crashes
+            await self._kill_subprocess()
 
     async def _receive_loop(self):
         """Background receiver: continuously handle all messages from the SDK.
@@ -276,7 +309,12 @@ class SDKSession:
             self._error_count += 1
             self._log.error(f"RECEIVER_ERROR #{self._error_count} | {e}")
             log.error(f"[{self.contact_name}] Receiver error: {e}")
-            if self._error_count >= 3:
+            # Buffer overflow is fatal - the SDK connection is broken
+            error_str = str(e).lower()
+            if "buffer" in error_str or "1048576" in error_str:
+                self._log.error("RECEIVER_FATAL | Buffer overflow - marking session dead")
+                self.running = False
+            elif self._error_count >= 3:
                 self._log.error("RECEIVER_DEAD | Stopping session")
                 self.running = False
 
@@ -329,7 +367,7 @@ class SDKSession:
             allowed_tools=tools,
             permission_mode=perm_mode,
             setting_sources=["project"],  # Load CLAUDE.md + skills from cwd
-            model="opus",
+            model=self.model,
             fallback_model="sonnet",  # Only triggers on 529 (server overloaded), not normal usage
             max_turns=turn_limit,
             extra_args={"session-id": fresh_session_id},  # Force fresh session

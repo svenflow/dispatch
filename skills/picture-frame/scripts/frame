@@ -1,0 +1,420 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["pillow", "bleak"]
+# ///
+"""
+Bloomin8 E-Ink Picture Frame CLI
+
+Usage:
+    frame status              - Show device info
+    frame upload <file>       - Upload and display image (preserves orientation, center crops)
+    frame upload <file> --no-show  - Upload without displaying
+    frame upload <file> --portrait - Force portrait orientation
+    frame upload <file> --landscape - Force landscape orientation
+    frame show <path>         - Show image already on device
+    frame next                - Show next image in gallery
+    frame list                - List images in default gallery
+    frame clear               - Clear screen to white
+    frame sleep               - Put device to sleep
+    frame reboot              - Reboot device
+    frame wake                - Wake device via Bluetooth (works even when WiFi disconnected)
+    frame whistle             - Single keep-alive ping (prevents sleep for ~2 min)
+    frame download <path> <dest> - Download image from device
+
+Notes:
+    - Screen is 1200x1600 (can be portrait or landscape depending on mounting)
+    - By default, landscape photos stay landscape, portrait photos stay portrait
+    - Images are center-cropped to fill the screen without letterboxing
+    - Landscape photos are rotated so you can turn the frame sideways to view
+    - For persistent keep-alive, see ~/dispatch/config.local.yaml (bloomin8.keepalive_enabled)
+"""
+
+import sys
+import json
+import asyncio
+import subprocess
+import tempfile
+from pathlib import Path
+from PIL import Image, ExifTags
+
+DEVICE_IP = "10.10.10.37"
+BASE_URL = f"http://{DEVICE_IP}"
+TIMEOUT = 30
+
+# Bluetooth config for wake
+BT_MAC = "F4:90:32:19:2F:50"
+WAKE_CHARACTERISTIC = "0000f001-0000-1000-8000-00805f9b34fb"
+WAKE_PAYLOAD = bytes([0x01])
+
+# Screen dimensions
+SCREEN_SHORT = 1200
+SCREEN_LONG = 1600
+
+
+def curl_get(endpoint: str, timeout: int = TIMEOUT) -> dict | str:
+    """GET request via curl subprocess."""
+    url = f"{BASE_URL}{endpoint}"
+    result = subprocess.run(
+        ["curl", "-s", "--connect-timeout", str(timeout), url],
+        capture_output=True,
+        text=True
+    )
+    if result.returncode != 0:
+        raise ConnectionError(f"curl failed: {result.stderr}")
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return result.stdout
+
+
+def curl_post(endpoint: str, json_data: dict = None, timeout: int = TIMEOUT) -> dict | str:
+    """POST request via curl subprocess."""
+    url = f"{BASE_URL}{endpoint}"
+    cmd = ["curl", "-s", "--connect-timeout", str(timeout), "-X", "POST", url]
+    if json_data:
+        cmd.extend(["-H", "Content-Type: application/json", "-d", json.dumps(json_data)])
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise ConnectionError(f"curl failed: {result.stderr}")
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return result.stdout
+
+
+def curl_upload(filepath: Path, filename: str, show_now: bool = True) -> dict:
+    """Upload file via curl subprocess."""
+    url = f"{BASE_URL}/upload?filename={filename}&gallery=default&show_now={'true' if show_now else 'false'}"
+    result = subprocess.run(
+        ["curl", "-s", "--connect-timeout", "60", "-X", "POST", url,
+         "-F", f"file=@{filepath}"],
+        capture_output=True,
+        text=True
+    )
+    if result.returncode != 0:
+        raise ConnectionError(f"curl upload failed: {result.stderr}")
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return {"raw": result.stdout}
+
+
+def curl_download(remote_path: str, local_path: Path) -> bool:
+    """Download file via curl subprocess."""
+    url = f"{BASE_URL}{remote_path}"
+    result = subprocess.run(
+        ["curl", "-s", "--connect-timeout", str(TIMEOUT), "-o", str(local_path), url],
+        capture_output=True
+    )
+    return result.returncode == 0 and local_path.exists()
+
+
+async def wake_ble():
+    """Wake the device using Bluetooth Low Energy."""
+    from bleak import BleakClient, BleakScanner
+
+    print(f"Scanning for Bloomin8 device ({BT_MAC})...")
+
+    try:
+        device = await BleakScanner.find_device_by_address(BT_MAC, timeout=10.0)
+        if not device:
+            print(f"Could not find device {BT_MAC}")
+            print("Make sure Bluetooth is enabled and device is in range (~30ft)")
+            return False
+
+        print(f"Found device: {device.name}")
+        print("Connecting...")
+
+        async with BleakClient(device) as client:
+            print("Connected! Sending wake signal...")
+            await client.write_gatt_char(WAKE_CHARACTERISTIC, WAKE_PAYLOAD)
+            print("Wake signal sent!")
+
+        print("Waiting for device to reconnect to WiFi...")
+        await asyncio.sleep(3)
+
+        # Verify via curl
+        try:
+            info = curl_get("/deviceInfo", timeout=5)
+            if isinstance(info, dict):
+                print("Device is online!")
+                return True
+        except:
+            print("Device woke up but not yet on WiFi. Try again in a few seconds.")
+
+        return True
+
+    except Exception as e:
+        print(f"BLE wake failed: {e}")
+        return False
+
+
+def wake():
+    """Wake the device using Bluetooth."""
+    return asyncio.run(wake_ble())
+
+
+def status():
+    """Get device status."""
+    info = curl_get("/deviceInfo")
+    if not isinstance(info, dict):
+        print(f"Unexpected response: {info}")
+        return
+
+    print(f"Device: {info['name']}")
+    print(f"Version: {info['version']}")
+    print(f"Battery: {info['battery']}%")
+    print(f"Screen: {info['width']}x{info['height']}")
+    print(f"WiFi RSSI: {info['sta_rssi']} dBm")
+    print(f"Current image: {info['image']}")
+    print(f"Gallery: {info['gallery']}")
+    print(f"Free space: {info['free_size'] / 1024 / 1024 / 1024:.1f} GB")
+    print(f"Max idle: {info['max_idle']}s")
+
+
+def apply_exif_rotation(img: Image.Image) -> Image.Image:
+    """Apply EXIF rotation to get correct orientation."""
+    try:
+        for orientation_key in ExifTags.TAGS.keys():
+            if ExifTags.TAGS[orientation_key] == 'Orientation':
+                break
+        exif = img._getexif()
+        if exif is not None:
+            orientation_value = exif.get(orientation_key)
+            if orientation_value == 3:
+                img = img.rotate(180, expand=True)
+            elif orientation_value == 6:
+                img = img.rotate(270, expand=True)
+            elif orientation_value == 8:
+                img = img.rotate(90, expand=True)
+    except (AttributeError, KeyError, IndexError):
+        pass
+    return img
+
+
+def center_crop_to_ratio(img: Image.Image, ratio_w: int, ratio_h: int) -> Image.Image:
+    """Center crop image to match target aspect ratio."""
+    img_width, img_height = img.size
+    target_ratio = ratio_w / ratio_h
+    img_ratio = img_width / img_height
+
+    if img_ratio > target_ratio:
+        new_width = int(img_height * target_ratio)
+        left = (img_width - new_width) // 2
+        img = img.crop((left, 0, left + new_width, img_height))
+    elif img_ratio < target_ratio:
+        new_height = int(img_width / target_ratio)
+        top = (img_height - new_height) // 2
+        img = img.crop((0, top, img_width, top + new_height))
+
+    return img
+
+
+def prepare_image(filepath: Path, force_orientation: str = None) -> tuple[Path, bool]:
+    """
+    Prepare image for the e-ink frame.
+    Returns tuple of (path to processed image, is_landscape).
+    """
+    img = Image.open(filepath)
+
+    if img.mode in ('RGBA', 'P'):
+        img = img.convert('RGB')
+
+    img = apply_exif_rotation(img)
+
+    width, height = img.size
+    is_landscape = width > height
+
+    if force_orientation == 'portrait':
+        use_landscape = False
+    elif force_orientation == 'landscape':
+        use_landscape = True
+    else:
+        use_landscape = is_landscape
+
+    print(f"Image: {width}x{height} ({'landscape' if is_landscape else 'portrait'})")
+
+    if use_landscape:
+        print("Processing as LANDSCAPE (rotate frame clockwise to view)")
+        img = center_crop_to_ratio(img, 4, 3)
+        img = img.resize((SCREEN_LONG, SCREEN_SHORT), Image.Resampling.LANCZOS)
+        img = img.rotate(90, expand=True)
+        print(f"Output: {img.size[0]}x{img.size[1]} (rotated for landscape viewing)")
+    else:
+        print("Processing as PORTRAIT")
+        img = center_crop_to_ratio(img, 3, 4)
+        img = img.resize((SCREEN_SHORT, SCREEN_LONG), Image.Resampling.LANCZOS)
+        print(f"Output: {img.size[0]}x{img.size[1]}")
+
+    temp_path = Path(tempfile.gettempdir()) / f"frame_upload_{filepath.stem}.jpg"
+    img.save(temp_path, "JPEG", quality=95)
+
+    return temp_path, use_landscape
+
+
+def upload(filepath: str, show_now: bool = True, force_orientation: str = None):
+    """Upload an image to the device."""
+    path = Path(filepath).expanduser().resolve()
+    if not path.exists():
+        print(f"Error: File not found: {path}")
+        sys.exit(1)
+
+    prepared_path, is_landscape = prepare_image(path, force_orientation=force_orientation)
+    filename = path.stem + ".jpg"  # Always upload as jpg
+
+    print(f"Uploading {filename}...")
+
+    result = curl_upload(prepared_path, filename, show_now)
+
+    if result.get("status") == 0:
+        print(f"Uploaded: {result.get('path')}")
+        if show_now:
+            print("Displaying now...")
+            if is_landscape:
+                print(">>> ROTATE FRAME CLOCKWISE to view landscape photo correctly")
+    else:
+        print(f"Upload failed: {result}")
+        sys.exit(1)
+
+
+def show(image_path: str):
+    """Show a specific image on the device."""
+    if not image_path.startswith("/"):
+        image_path = f"/gallerys/default/{image_path}"
+
+    print(f"Showing: {image_path}")
+    result = curl_post("/show", {"image": image_path})
+    if isinstance(result, dict) and result.get("status") == "ok":
+        print("OK - display updating")
+    else:
+        print(f"Response: {result}")
+
+
+def next_image():
+    """Show next image in gallery."""
+    print("Showing next image...")
+    result = curl_post("/showNext")
+    print(f"Response: {result}")
+
+
+def list_images():
+    """List images in default gallery."""
+    info = curl_get("/deviceInfo")
+    if isinstance(info, dict):
+        print(f"Current gallery: {info['gallery']}")
+        print(f"Current image: {info['image']}")
+
+    galleries = curl_get("/gallery/list")
+    if isinstance(galleries, list):
+        print(f"\nGalleries: {[g['name'] for g in galleries]}")
+
+
+def clear():
+    """Clear screen to white."""
+    print("Clearing screen...")
+    result = curl_post("/clearScreen")
+    print(f"Response: {result}")
+
+
+def sleep_device():
+    """Put device to sleep."""
+    print("Putting device to sleep...")
+    result = curl_post("/sleep")
+    print(f"Response: {result}")
+
+
+def reboot():
+    """Reboot the device."""
+    print("Rebooting device...")
+    result = curl_post("/reboot")
+    print(f"Response: {result}")
+
+
+def whistle():
+    """Send keep-alive ping to prevent sleep."""
+    result = curl_get("/whistle", timeout=5)
+    if isinstance(result, dict) and result.get("status") == "ok":
+        print("Whistle sent - device will stay awake")
+    else:
+        print(f"Response: {result}")
+
+
+def download(remote_path: str, local_path: str):
+    """Download an image from the device."""
+    if not remote_path.startswith("/"):
+        remote_path = f"/gallerys/default/{remote_path}"
+
+    dest = Path(local_path).expanduser().resolve()
+    print(f"Downloading {remote_path} to {dest}...")
+
+    if curl_download(remote_path, dest):
+        print(f"Downloaded: {dest}")
+        # Show file info
+        result = subprocess.run(["file", str(dest)], capture_output=True, text=True)
+        print(result.stdout.strip())
+    else:
+        print("Download failed")
+        sys.exit(1)
+
+
+def main():
+    if len(sys.argv) < 2:
+        print(__doc__)
+        sys.exit(1)
+
+    cmd = sys.argv[1].lower()
+
+    if cmd == "wake":
+        wake()
+        return
+
+    try:
+        if cmd == "status":
+            status()
+        elif cmd == "upload":
+            if len(sys.argv) < 3:
+                print("Usage: frame upload <file> [--no-show] [--portrait|--landscape]")
+                sys.exit(1)
+            show_now = "--no-show" not in sys.argv
+            force_orientation = None
+            if "--portrait" in sys.argv:
+                force_orientation = "portrait"
+            elif "--landscape" in sys.argv:
+                force_orientation = "landscape"
+            upload(sys.argv[2], show_now=show_now, force_orientation=force_orientation)
+        elif cmd == "show":
+            if len(sys.argv) < 3:
+                print("Usage: frame show <image_path>")
+                sys.exit(1)
+            show(sys.argv[2])
+        elif cmd == "next":
+            next_image()
+        elif cmd == "list":
+            list_images()
+        elif cmd == "clear":
+            clear()
+        elif cmd == "sleep":
+            sleep_device()
+        elif cmd == "reboot":
+            reboot()
+        elif cmd == "whistle":
+            whistle()
+        elif cmd == "download":
+            if len(sys.argv) < 4:
+                print("Usage: frame download <remote_path> <local_path>")
+                sys.exit(1)
+            download(sys.argv[2], sys.argv[3])
+        else:
+            print(f"Unknown command: {cmd}")
+            print(__doc__)
+            sys.exit(1)
+    except ConnectionError as e:
+        print(f"Error: Could not connect to device at {DEVICE_IP}")
+        print(f"Details: {e}")
+        print("Device may be asleep. Run 'frame wake' to wake it via Bluetooth.")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,170 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "google-genai>=1.0.0",
+#     "pillow>=10.0.0",
+# ]
+# ///
+"""
+Gemini CLI - Chat with Google's Gemini models
+
+Usage:
+    gemini "your prompt here"
+    gemini -m gemini-2.5-pro "prompt"
+    gemini -i image.jpg "what's in this image?"
+    gemini -i image1.jpg -i image2.jpg "compare these"
+    echo "prompt" | gemini
+    gemini -s  # start interactive session
+"""
+
+import argparse
+import os
+import sys
+from pathlib import Path
+
+# Load API key from secrets
+secrets_path = Path.home() / ".claude" / "secrets.env"
+if secrets_path.exists():
+    for line in secrets_path.read_text().splitlines():
+        if line.startswith("GEMINI_API_KEY=") or line.startswith("GOOGLE_AI_API_KEY="):
+            os.environ["GEMINI_API_KEY"] = line.split("=", 1)[1].strip().strip('"\'')
+            break
+
+from google import genai
+from google.genai import types
+
+
+def load_media(path: str) -> types.Part:
+    """Load an image or video file and return as Part for Gemini."""
+    path = Path(path).expanduser()
+    if not path.exists():
+        raise FileNotFoundError(f"File not found: {path}")
+
+    # Read the file and determine mime type
+    suffix = path.suffix.lower()
+    mime_types = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".gif": "image/gif",
+        ".webp": "image/webp",
+        # Video formats
+        ".mp4": "video/mp4",
+        ".mov": "video/quicktime",
+        ".avi": "video/x-msvideo",
+        ".webm": "video/webm",
+        ".mkv": "video/x-matroska",
+    }
+    mime_type = mime_types.get(suffix, "image/jpeg")
+
+    with open(path, "rb") as f:
+        data = f.read()
+
+    return types.Part.from_bytes(data=data, mime_type=mime_type)
+
+
+# Keep old name for compatibility
+def load_image(path: str) -> types.Part:
+    """Load an image file and return as Part for Gemini."""
+    return load_media(path)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Chat with Gemini")
+    parser.add_argument("prompt", nargs="*", help="The prompt to send")
+    parser.add_argument("-m", "--model", default="gemini-2.5-flash",
+                        help="Model to use (default: gemini-2.5-flash)")
+    parser.add_argument("-i", "--image", action="append", dest="images",
+                        help="Image file(s) to include (can be used multiple times)")
+    parser.add_argument("-s", "--session", action="store_true",
+                        help="Start interactive session")
+    parser.add_argument("--list-models", action="store_true",
+                        help="List available models")
+    parser.add_argument("-v", "--verbose", action="store_true",
+                        help="Show token usage")
+    args = parser.parse_args()
+
+    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_AI_API_KEY")
+    if not api_key:
+        print("Error: GEMINI_API_KEY not found in ~/.claude/secrets.env", file=sys.stderr)
+        sys.exit(1)
+
+    client = genai.Client(api_key=api_key)
+
+    if args.list_models:
+        print("Available Gemini models:")
+        for model in client.models.list():
+            print(f"  - {model.name}")
+        return
+
+    if args.session:
+        # Interactive session
+        print(f"Gemini interactive session ({args.model})")
+        print("Type 'quit' or Ctrl+D to exit\n")
+
+        chat = client.chats.create(model=args.model)
+
+        while True:
+            try:
+                user_input = input("You: ").strip()
+                if user_input.lower() in ("quit", "exit", "q"):
+                    break
+                if not user_input:
+                    continue
+
+                response = chat.send_message(user_input)
+                print(f"\nGemini: {response.text}\n")
+
+            except EOFError:
+                break
+            except KeyboardInterrupt:
+                print()
+                break
+
+        print("Session ended.")
+        return
+
+    # Build prompt
+    if args.prompt:
+        prompt_text = " ".join(args.prompt)
+    elif not sys.stdin.isatty():
+        prompt_text = sys.stdin.read().strip()
+    else:
+        print("Error: No prompt provided. Use -s for interactive session.", file=sys.stderr)
+        sys.exit(1)
+
+    # Build contents list
+    contents = []
+
+    # Add images if provided
+    if args.images:
+        for img_path in args.images:
+            try:
+                img_part = load_image(img_path)
+                contents.append(img_part)
+                if args.verbose:
+                    print(f"Loaded image: {img_path}", file=sys.stderr)
+            except FileNotFoundError as e:
+                print(f"Error: {e}", file=sys.stderr)
+                sys.exit(1)
+
+    # Add text prompt
+    contents.append(prompt_text)
+
+    # Generate response
+    response = client.models.generate_content(
+        model=args.model,
+        contents=contents
+    )
+
+    print(response.text)
+
+    if args.verbose and hasattr(response, 'usage_metadata'):
+        usage = response.usage_metadata
+        print(f"\n[Tokens: {usage.prompt_token_count} in / {usage.candidates_token_count} out]",
+              file=sys.stderr)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,14 @@
+{
+  "name": "deals-skill",
+  "version": "1.0.0",
+  "description": "Claude Code skill: search and compare deals across 10 electronics retailers",
+  "dependencies": {
+    "better-sqlite3": "^11.0.0",
+    "cheerio": "^1.0.0",
+    "playwright": "^1.40.0"
+  },
+  "scripts": {
+    "search": "node scripts/deals.cjs search",
+    "health": "node scripts/deals.cjs health"
+  }
+}

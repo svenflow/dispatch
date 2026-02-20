@@ -1,0 +1,405 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "numpy",
+#     "pillow",
+#     "moderngl",
+# ]
+# ///
+"""
+Render TRIPPY 3-channel Gray-Scott reaction-diffusion to video.
+
+Features:
+- 3 separate species (RGB channels) with cross-reactions
+- Spatially varying parameters (style maps)
+- Animated hue rotation
+- Psychedelic color mapping
+- Optional anisotropic diffusion
+
+Usage:
+    render-rd-trippy output.mov
+    render-rd-trippy output.mov --mode vortex
+    render-rd-trippy output.mov --mode rgb-species
+"""
+
+import argparse
+import os
+import subprocess
+import sys
+import tempfile
+
+import moderngl
+import numpy as np
+from PIL import Image
+
+
+def render_rd_trippy(
+    output_path: str,
+    width: int = 1080,
+    height: int = 1080,
+    fps: int = 30,
+    duration: float = 15.0,
+    iterations: int = 15,
+    mode: str = "rgb-species",  # rgb-species, vortex, style-map
+    hq: bool = True,
+):
+    """Render trippy 3-channel reaction diffusion."""
+
+    ctx = moderngl.create_standalone_context()
+
+    # 4-channel texture: r=A1, g=B1, b=A2/B2, a=extra
+    tex_a = ctx.texture((width, height), 4, dtype='f4')
+    tex_b = ctx.texture((width, height), 4, dtype='f4')
+    fbo_a = ctx.framebuffer(color_attachments=[tex_a])
+    fbo_b = ctx.framebuffer(color_attachments=[tex_b])
+
+    tex_out = ctx.texture((width, height), 4)
+    fbo_out = ctx.framebuffer(color_attachments=[tex_out])
+
+    vertex_shader = '''
+    #version 330
+    in vec2 in_position;
+    out vec2 v_texcoord;
+    void main() {
+        gl_Position = vec4(in_position, 0.0, 1.0);
+        v_texcoord = in_position * 0.5 + 0.5;
+    }
+    '''
+
+    # Initialize with RGB seeds
+    init_shader = '''
+    #version 330
+    uniform vec2 u_resolution;
+    in vec2 v_texcoord;
+    out vec4 fragColor;
+
+    float hash(vec2 p) {
+        return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+    }
+
+    void main() {
+        vec2 uv = v_texcoord;
+        vec2 center = uv - 0.5;
+        float dist = length(center);
+        float angle = atan(center.y, center.x);
+
+        // 3 species: r=A, g=B1, b=B2
+        // A is substrate, B1 and B2 are competing catalysts
+        float a = 1.0;
+        float b1 = 0.0;
+        float b2 = 0.0;
+
+        // Seed B1 in one sector, B2 in another
+        float sector = mod(angle + 3.14159, 6.28318) / 6.28318 * 3.0;
+
+        // Ring of seeds
+        if (dist > 0.08 && dist < 0.15) {
+            if (sector < 1.0) {
+                b1 = hash(floor(gl_FragCoord.xy / 5.0)) > 0.7 ? 1.0 : 0.0;
+            } else if (sector < 2.0) {
+                b2 = hash(floor(gl_FragCoord.xy / 5.0) + 100.0) > 0.7 ? 1.0 : 0.0;
+            } else {
+                float h = hash(floor(gl_FragCoord.xy / 5.0) + 200.0);
+                b1 = h > 0.85 ? 1.0 : 0.0;
+                b2 = h < 0.15 ? 1.0 : 0.0;
+            }
+        }
+
+        // Center seed - both species
+        if (dist < 0.03) {
+            b1 = 0.5;
+            b2 = 0.5;
+        }
+
+        // Random scattered seeds
+        vec2 cell = floor(gl_FragCoord.xy / 12.0);
+        float h = hash(cell);
+        if (h > 0.995 && dist < 0.4) {
+            if (hash(cell + 50.0) > 0.5) b1 = 1.0;
+            else b2 = 1.0;
+        }
+
+        fragColor = vec4(a, b1, b2, 1.0);
+    }
+    '''
+
+    # 3-species reaction-diffusion with competition
+    sim_shader = '''
+    #version 330
+    uniform vec2 u_resolution;
+    uniform sampler2D u_state;
+    uniform float u_time;
+    uniform int u_mode;  // 0=rgb-species, 1=vortex, 2=style-map
+    in vec2 v_texcoord;
+    out vec4 fragColor;
+
+    void main() {
+        vec2 texel = 1.0 / u_resolution;
+        vec2 uv = v_texcoord;
+        vec2 center = uv - 0.5;
+        float dist = length(center);
+        float angle = atan(center.y, center.x);
+
+        // Diffusion rates
+        float dA = 1.0;
+        float dB1 = 0.5;
+        float dB2 = 0.45;  // Slightly different for asymmetry
+        float dt = 1.0;
+
+        // Spatially varying parameters for trippy effects
+        float feed, kill1, kill2;
+
+        if (u_mode == 2) {  // style-map
+            // Different patterns in different regions
+            float zone = sin(angle * 3.0 + u_time * 0.1) * 0.5 + 0.5;
+            feed = mix(0.03, 0.06, zone);
+            kill1 = mix(0.055, 0.065, 1.0 - zone);
+            kill2 = mix(0.058, 0.068, zone);
+        } else if (u_mode == 1) {  // vortex - swirling parameters
+            float swirl = sin(dist * 15.0 - angle * 2.0 + u_time * 0.5) * 0.5 + 0.5;
+            feed = mix(0.035, 0.055, swirl);
+            kill1 = 0.062;
+            kill2 = 0.064;
+        } else {  // rgb-species - competing species
+            feed = 0.042;
+            kill1 = 0.061;
+            kill2 = 0.063;
+        }
+
+        // Get current state
+        vec4 current = texture(u_state, uv);
+        float a = current.r;
+        float b1 = current.g;
+        float b2 = current.b;
+
+        // Anisotropic diffusion - slight directional bias
+        float aniso = 0.1;
+        vec2 dir = normalize(center + 0.001);
+
+        // Laplacian with 3x3 kernel
+        vec4 laplacian = vec4(0.0);
+        for (int dy = -1; dy <= 1; dy++) {
+            for (int dx = -1; dx <= 1; dx++) {
+                if (dx == 0 && dy == 0) continue;
+                vec2 offset = vec2(float(dx), float(dy)) * texel;
+                float weight = (abs(dx) + abs(dy) == 1) ? 0.2 : 0.05;
+
+                // Anisotropic: weight by alignment with radial direction
+                if (u_mode == 1) {  // vortex mode
+                    vec2 offsetDir = normalize(vec2(float(dx), float(dy)));
+                    float alignment = dot(offsetDir, vec2(-dir.y, dir.x));  // tangential
+                    weight *= 1.0 + alignment * aniso;
+                }
+
+                laplacian += texture(u_state, uv + offset) * weight;
+            }
+        }
+        laplacian -= current;
+
+        // Reactions: A + 2B1 -> 3B1, A + 2B2 -> 3B2
+        // With cross-inhibition between B1 and B2
+        float reaction1 = a * b1 * b1;
+        float reaction2 = a * b2 * b2;
+
+        // Cross-inhibition term - species compete
+        float inhibit = 0.3;
+        float b1_inhibited = b1 * (1.0 - inhibit * b2);
+        float b2_inhibited = b2 * (1.0 - inhibit * b1);
+
+        // Gray-Scott updates
+        float newA = a + dt * (dA * laplacian.r - reaction1 - reaction2 + feed * (1.0 - a));
+        float newB1 = b1 + dt * (dB1 * laplacian.g + reaction1 - (kill1 + feed) * b1_inhibited);
+        float newB2 = b2 + dt * (dB2 * laplacian.b + reaction2 - (kill2 + feed) * b2_inhibited);
+
+        fragColor = vec4(clamp(newA, 0.0, 1.0), clamp(newB1, 0.0, 1.0), clamp(newB2, 0.0, 1.0), 1.0);
+    }
+    '''
+
+    # Psychedelic display shader
+    display_shader = '''
+    #version 330
+    uniform sampler2D u_state;
+    uniform float u_time;
+    in vec2 v_texcoord;
+    out vec4 fragColor;
+
+    vec3 hsl2rgb(vec3 c) {
+        vec3 rgb = clamp(abs(mod(c.x * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
+        return c.z + c.y * (rgb - 0.5) * (1.0 - abs(2.0 * c.z - 1.0));
+    }
+
+    void main() {
+        vec2 uv = v_texcoord;
+        vec4 state = texture(u_state, uv);
+        float a = state.r;
+        float b1 = state.g;
+        float b2 = state.b;
+
+        // Edge detection for both species
+        vec2 texel = 1.0 / textureSize(u_state, 0);
+        vec4 dx = texture(u_state, uv + vec2(texel.x, 0.0)) - texture(u_state, uv - vec2(texel.x, 0.0));
+        vec4 dy = texture(u_state, uv + vec2(0.0, texel.y)) - texture(u_state, uv - vec2(0.0, texel.y));
+        float edge1 = length(vec2(dx.g, dy.g)) * 3.0;
+        float edge2 = length(vec2(dx.b, dy.b)) * 3.0;
+
+        // Hue based on which species dominates, rotating over time
+        float hueOffset = u_time * 0.05;  // Slow rotation
+        float hue1 = 0.0 + hueOffset;   // Red-ish
+        float hue2 = 0.55 + hueOffset;  // Cyan-ish
+
+        // Mix based on concentration
+        float totalB = b1 + b2 + 0.001;
+        float ratio = b1 / totalB;
+        float hue = mix(hue2, hue1, ratio);
+        hue = fract(hue);
+
+        // Saturation from total concentration
+        float sat = smoothstep(0.0, 0.5, totalB);
+
+        // Lightness from concentration + edges
+        float light = 0.1 + totalB * 0.6 + (edge1 + edge2) * 0.3;
+        light = clamp(light, 0.0, 0.95);
+
+        vec3 color = hsl2rgb(vec3(hue, sat * 0.9 + 0.1, light));
+
+        // Add interference pattern where species meet
+        float interference = b1 * b2 * 4.0;
+        color += vec3(0.2, 0.1, 0.3) * interference;
+
+        // Pulsing glow
+        float pulse = sin(u_time * 2.0) * 0.5 + 0.5;
+        color += vec3(0.05, 0.02, 0.08) * pulse * totalB;
+
+        // Subtle edge glow
+        color += vec3(1.0, 0.8, 0.5) * edge1 * 0.3;
+        color += vec3(0.5, 0.8, 1.0) * edge2 * 0.3;
+
+        // Vignette
+        float vignette = 1.0 - length(uv - 0.5) * 0.4;
+        color *= vignette;
+
+        fragColor = vec4(color, 1.0);
+    }
+    '''
+
+    try:
+        prog_init = ctx.program(vertex_shader=vertex_shader, fragment_shader=init_shader)
+        prog_sim = ctx.program(vertex_shader=vertex_shader, fragment_shader=sim_shader)
+        prog_display = ctx.program(vertex_shader=vertex_shader, fragment_shader=display_shader)
+    except Exception as e:
+        print(f"Shader compilation error:\n{e}", file=sys.stderr)
+        sys.exit(1)
+
+    vertices = np.array([-1.0, -1.0, 1.0, -1.0, -1.0, 1.0, 1.0, 1.0], dtype='f4')
+    vbo = ctx.buffer(vertices)
+    vao_init = ctx.simple_vertex_array(prog_init, vbo, 'in_position')
+    vao_sim = ctx.simple_vertex_array(prog_sim, vbo, 'in_position')
+    vao_display = ctx.simple_vertex_array(prog_display, vbo, 'in_position')
+
+    mode_map = {"rgb-species": 0, "vortex": 1, "style-map": 2}
+    mode_val = mode_map.get(mode, 0)
+
+    if 'u_resolution' in prog_init:
+        prog_init['u_resolution'].value = (float(width), float(height))
+    prog_sim['u_resolution'].value = (float(width), float(height))
+    prog_sim['u_mode'].value = mode_val
+
+    # Initialize
+    fbo_a.use()
+    vao_init.render(moderngl.TRIANGLE_STRIP)
+
+    tex_a.use(0)
+    tex_b.use(1)
+    prog_sim['u_state'] = 0
+    prog_display['u_state'] = 0
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        num_frames = int(fps * duration)
+        print(f"Rendering {num_frames} frames at {width}x{height}...")
+        print(f"Mode: {mode} (trippy 3-channel RD)")
+
+        current_fbo = fbo_a
+        current_tex = tex_a
+        other_fbo = fbo_b
+        other_tex = tex_b
+
+        for frame_idx in range(num_frames):
+            time = frame_idx / fps
+            prog_sim['u_time'].value = time
+            prog_display['u_time'].value = time
+
+            for _ in range(iterations):
+                current_tex.use(0)
+                other_fbo.use()
+                vao_sim.render(moderngl.TRIANGLE_STRIP)
+                current_fbo, other_fbo = other_fbo, current_fbo
+                current_tex, other_tex = other_tex, current_tex
+
+            current_tex.use(0)
+            fbo_out.use()
+            ctx.clear(0.0, 0.0, 0.0, 1.0)
+            vao_display.render(moderngl.TRIANGLE_STRIP)
+
+            data = fbo_out.read(components=4)
+            img = Image.frombytes('RGBA', (width, height), data)
+            img = img.transpose(Image.FLIP_TOP_BOTTOM)
+
+            frame_path = os.path.join(tmpdir, f'frame_{frame_idx:04d}.png')
+            img.save(frame_path)
+
+            if (frame_idx + 1) % fps == 0:
+                print(f"  {frame_idx + 1}/{num_frames} frames ({(frame_idx + 1) / fps:.0f}s)")
+
+        print("Encoding video with ffmpeg...")
+
+        is_mov = output_path.lower().endswith('.mov')
+        if hq:
+            ffmpeg_cmd = [
+                'ffmpeg', '-y', '-framerate', str(fps),
+                '-i', os.path.join(tmpdir, 'frame_%04d.png'),
+                '-c:v', 'libx265', '-b:v', '50M', '-maxrate', '60M', '-bufsize', '120M',
+                '-preset', 'slow', '-tag:v', 'hvc1', '-pix_fmt', 'yuv420p', '-movflags', '+faststart',
+            ]
+            if is_mov:
+                ffmpeg_cmd.extend(['-brand', 'qt'])
+            ffmpeg_cmd.append(output_path)
+        else:
+            ffmpeg_cmd = [
+                'ffmpeg', '-y', '-framerate', str(fps),
+                '-i', os.path.join(tmpdir, 'frame_%04d.png'),
+                '-c:v', 'libx265', '-crf', '26', '-preset', 'fast',
+                '-tag:v', 'hvc1', '-pix_fmt', 'yuv420p', output_path
+            ]
+
+        result = subprocess.run(ffmpeg_cmd, capture_output=True)
+        if result.returncode != 0:
+            print(f"ffmpeg error:\n{result.stderr.decode()}", file=sys.stderr)
+            sys.exit(1)
+
+        file_size = os.path.getsize(output_path)
+        print(f"Done! Output: {output_path} ({file_size / 1024 / 1024:.1f} MB)")
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Render trippy 3-channel reaction-diffusion')
+    parser.add_argument('output', help='Output video path')
+    parser.add_argument('--width', type=int, default=1080)
+    parser.add_argument('--height', type=int, default=1080)
+    parser.add_argument('--fps', type=int, default=30)
+    parser.add_argument('--duration', type=float, default=15.0)
+    parser.add_argument('--iterations', type=int, default=15)
+    parser.add_argument('--mode', choices=['rgb-species', 'vortex', 'style-map'], default='rgb-species',
+                       help='Trippy mode: rgb-species (competing), vortex (swirl params), style-map (spatial variation)')
+    parser.add_argument('--fast', action='store_true')
+
+    args = parser.parse_args()
+
+    render_rd_trippy(
+        args.output, args.width, args.height, args.fps, args.duration,
+        args.iterations, args.mode, hq=not args.fast,
+    )
+
+
+if __name__ == '__main__':
+    main()

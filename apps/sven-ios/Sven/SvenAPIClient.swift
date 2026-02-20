@@ -5,12 +5,44 @@ import Security
 class SvenAPIClient {
     static let shared = SvenAPIClient()
 
-    // Use localhost for simulator, Tailscale IP for real device
+    // Server URL key for UserDefaults
+    private static let serverURLKey = "sven_server_url"
+
+    // Default URLs for different environments
     #if targetEnvironment(simulator)
-    private let baseURL = "http://localhost:8080"
+    private static let defaultURL = "http://localhost:8080"
     #else
-    private let baseURL = "http://100.127.42.15:8080"
+    private static let defaultURL = "http://localhost:8080"  // User must configure via settings
     #endif
+
+    // Get the configured server URL (or default)
+    var baseURL: String {
+        UserDefaults.standard.string(forKey: SvenAPIClient.serverURLKey) ?? SvenAPIClient.defaultURL
+    }
+
+    // Get/set the server URL
+    static var serverURL: String {
+        get {
+            UserDefaults.standard.string(forKey: serverURLKey) ?? defaultURL
+        }
+        set {
+            var url = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            // Ensure it has http:// prefix
+            if !url.hasPrefix("http://") && !url.hasPrefix("https://") {
+                url = "http://" + url
+            }
+            // Remove trailing slash
+            if url.hasSuffix("/") {
+                url = String(url.dropLast())
+            }
+            UserDefaults.standard.set(url, forKey: serverURLKey)
+        }
+    }
+
+    // Check if server URL has been configured
+    static var isServerConfigured: Bool {
+        UserDefaults.standard.string(forKey: serverURLKey) != nil
+    }
 
     // Keychain key for device token
     private let tokenKeychainKey = "com.sven.deviceToken"
@@ -149,6 +181,58 @@ class SvenAPIClient {
 
         guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
             throw APIError.serverError(statusCode: 0, message: "Failed to restart session")
+        }
+    }
+
+    /// Register APNs device token with the backend
+    func registerAPNsToken(_ apnsToken: String) async throws {
+        let deviceToken = getOrCreateDeviceToken()
+        guard let url = URL(string: "\(baseURL)/register-apns") else {
+            throw APIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 10
+
+        let body: [String: String] = [
+            "device_token": deviceToken,
+            "apns_token": apnsToken
+        ]
+
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (_, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            throw APIError.serverError(statusCode: 0, message: "Failed to register APNs token")
+        }
+    }
+
+    /// Send feedback (like/dislike) for a message
+    func sendFeedback(messageId: String, type: String) async throws {
+        guard let url = URL(string: "\(baseURL)/feedback") else {
+            throw APIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 10
+
+        let body: [String: String] = [
+            "message_id": messageId,
+            "feedback_type": type,
+            "token": getOrCreateDeviceToken()
+        ]
+
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (_, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            throw APIError.serverError(statusCode: 0, message: "Failed to send feedback")
         }
     }
 

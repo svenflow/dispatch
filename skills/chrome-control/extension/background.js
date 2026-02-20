@@ -326,11 +326,15 @@ async function executeInTab(tabId, action, params) {
     const response = await chrome.tabs.sendMessage(tabId, { action, params });
     if (response.success) {
       return response.result;
-    } else {
-      throw new Error(response.error);
     }
+    // App-level error (element not found, etc.) - no re-injection needed
+    throw new Error(response.error);
   } catch (error) {
-    // Content script might not be loaded, inject it
+    // Only re-inject for communication failures (content script not loaded)
+    if (!error.message?.includes('Could not establish connection') &&
+        !error.message?.includes('Receiving end does not exist')) {
+      throw error;
+    }
     await chrome.scripting.executeScript({
       target: { tabId },
       files: ['content.js']
@@ -714,107 +718,106 @@ async function iframeClick(tabId, selector) {
     };
     findFrame(frameTree.frameTree);
 
-    if (targetFrameId) {
-      const isolatedWorld = await chrome.debugger.sendCommand({ tabId }, 'Page.createIsolatedWorld', {
-        frameId: targetFrameId,
-        worldName: 'chromeControlClickWorld',
-        grantUniveralAccess: true
-      });
+    // Use iframe if found, otherwise fall back to main frame (for CSP-protected pages like Google Cloud Console)
+    const useFrameId = targetFrameId || frameTree.frameTree.frame.id;
 
-      // More robust click: dispatch full mouse event sequence + focus + click
-      // Also supports text:XXX selector to click by text content
-      const script = `
-        const selector = '${selector.replace(/'/g, "\\'")}';
-        let el = null;
+    const isolatedWorld = await chrome.debugger.sendCommand({ tabId }, 'Page.createIsolatedWorld', {
+      frameId: useFrameId,
+      worldName: 'chromeControlClickWorld',
+      grantUniveralAccess: true
+    });
 
-        // Check if it's a text selector
-        if (selector.startsWith('text:')) {
-          const searchText = selector.substring(5).toLowerCase();
-          const allClickable = document.querySelectorAll('button, [role="button"], input[type="submit"], a, [onclick]');
-          for (const candidate of allClickable) {
-            const text = (candidate.textContent || candidate.value || '').toLowerCase().trim();
-            if (text.includes(searchText)) {
-              el = candidate;
-              break;
-            }
+    // More robust click: dispatch full mouse event sequence + focus + click
+    // Also supports text:XXX selector to click by text content
+    const script = `
+      const selector = '${selector.replace(/'/g, "\\'")}';
+      let el = null;
+
+      // Check if it's a text selector
+      if (selector.startsWith('text:')) {
+        const searchText = selector.substring(5).toLowerCase();
+        const allClickable = document.querySelectorAll('button, [role="button"], input[type="submit"], a, [onclick]');
+        for (const candidate of allClickable) {
+          const text = (candidate.textContent || candidate.value || '').toLowerCase().trim();
+          if (text.includes(searchText)) {
+            el = candidate;
+            break;
           }
-        } else {
-          el = document.querySelector(selector);
         }
-
-        if (el) {
-          // Focus first
-          el.focus();
-
-          // Get element center for coordinates
-          const rect = el.getBoundingClientRect();
-          const x = rect.left + rect.width / 2;
-          const y = rect.top + rect.height / 2;
-
-          // Create proper mouse event options
-          const eventInit = {
-            bubbles: true,
-            cancelable: true,
-            view: window,
-            clientX: x,
-            clientY: y,
-            screenX: x,
-            screenY: y,
-            button: 0,
-            buttons: 1
-          };
-
-          // Dispatch full mouse event sequence
-          el.dispatchEvent(new MouseEvent('mouseenter', eventInit));
-          el.dispatchEvent(new MouseEvent('mouseover', eventInit));
-          el.dispatchEvent(new MouseEvent('mousemove', eventInit));
-          el.dispatchEvent(new MouseEvent('mousedown', { ...eventInit, buttons: 1 }));
-          el.dispatchEvent(new MouseEvent('mouseup', { ...eventInit, buttons: 0 }));
-          el.dispatchEvent(new MouseEvent('click', { ...eventInit, buttons: 0 }));
-
-          // Also try the native click as backup
-          el.click();
-
-          JSON.stringify({
-            success: true,
-            text: el.textContent.trim().substring(0, 50),
-            tagName: el.tagName,
-            type: el.type || null,
-            id: el.id || null,
-            className: el.className || null
-          });
-        } else {
-          // Try to find buttons with similar text
-          const allButtons = Array.from(document.querySelectorAll('button, [role="button"], input[type="submit"], a'));
-          const buttonTexts = allButtons.map(b => b.textContent?.trim().substring(0, 30) || b.value || '').filter(t => t);
-          JSON.stringify({
-            success: false,
-            error: 'element not found: ' + selector,
-            availableButtons: buttonTexts.slice(0, 10)
-          });
-        }
-      `;
-
-      const result = await chrome.debugger.sendCommand({ tabId }, 'Runtime.evaluate', {
-        expression: script,
-        contextId: isolatedWorld.executionContextId,
-        returnByValue: true
-      });
-
-      await chrome.debugger.detach({ tabId });
-
-      let parsedResult;
-      try {
-        parsedResult = JSON.parse(result?.result?.value || '{}');
-      } catch {
-        parsedResult = { raw: result?.result?.value };
+      } else {
+        el = document.querySelector(selector);
       }
 
-      return { clicked: parsedResult.success !== false, result: parsedResult };
-    } else {
-      await chrome.debugger.detach({ tabId });
-      return { clicked: false, error: 'iframe not found' };
+      if (el) {
+        // Focus first
+        el.focus();
+
+        // Get element center for coordinates
+        const rect = el.getBoundingClientRect();
+        const x = rect.left + rect.width / 2;
+        const y = rect.top + rect.height / 2;
+
+        // Create proper mouse event options
+        const eventInit = {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+          clientX: x,
+          clientY: y,
+          screenX: x,
+          screenY: y,
+          button: 0,
+          buttons: 1
+        };
+
+        // Dispatch full mouse event sequence
+        el.dispatchEvent(new MouseEvent('mouseenter', eventInit));
+        el.dispatchEvent(new MouseEvent('mouseover', eventInit));
+        el.dispatchEvent(new MouseEvent('mousemove', eventInit));
+        el.dispatchEvent(new MouseEvent('mousedown', { ...eventInit, buttons: 1 }));
+        el.dispatchEvent(new MouseEvent('mouseup', { ...eventInit, buttons: 0 }));
+        el.dispatchEvent(new MouseEvent('click', { ...eventInit, buttons: 0 }));
+
+        // Also try the native click as backup
+        el.click();
+
+        JSON.stringify({
+          success: true,
+          text: el.textContent.trim().substring(0, 50),
+          tagName: el.tagName,
+          type: el.type || null,
+          id: el.id || null,
+          className: el.className || null,
+          usedMainFrame: !${targetFrameId ? 'true' : 'false'}
+        });
+      } else {
+        // Try to find buttons with similar text
+        const allButtons = Array.from(document.querySelectorAll('button, [role="button"], input[type="submit"], a'));
+        const buttonTexts = allButtons.map(b => b.textContent?.trim().substring(0, 30) || b.value || '').filter(t => t);
+        JSON.stringify({
+          success: false,
+          error: 'element not found: ' + selector,
+          availableButtons: buttonTexts.slice(0, 10)
+        });
+      }
+    `;
+
+    const result = await chrome.debugger.sendCommand({ tabId }, 'Runtime.evaluate', {
+      expression: script,
+      contextId: isolatedWorld.executionContextId,
+      returnByValue: true
+    });
+
+    await chrome.debugger.detach({ tabId });
+
+    let parsedResult;
+    try {
+      parsedResult = JSON.parse(result?.result?.value || '{}');
+    } catch {
+      parsedResult = { raw: result?.result?.value };
     }
+
+    return { clicked: parsedResult.success !== false, result: parsedResult, usedMainFrame: !targetFrameId };
   } catch (error) {
     try { await chrome.debugger.detach({ tabId }); } catch {}
     return { clicked: false, error: error.message };

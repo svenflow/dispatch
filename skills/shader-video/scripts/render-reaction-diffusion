@@ -1,0 +1,390 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "numpy",
+#     "pillow",
+#     "moderngl",
+# ]
+# ///
+"""
+Render Gray-Scott reaction-diffusion to video using ping-pong buffers.
+
+This is a specialized renderer that:
+1. Runs many simulation steps per frame (iterations)
+2. Uses ping-pong framebuffers to store state between iterations
+3. Supports proper Laplacian diffusion
+
+Usage:
+    render-reaction-diffusion output.mov
+    render-reaction-diffusion output.mov --duration 10 --iterations 20
+"""
+
+import argparse
+import os
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+import moderngl
+import numpy as np
+from PIL import Image
+
+
+def render_reaction_diffusion(
+    output_path: str,
+    width: int = 1080,
+    height: int = 1080,
+    fps: int = 30,
+    duration: float = 10.0,
+    iterations: int = 20,  # Simulation steps per frame
+    feed: float = 0.055,
+    kill: float = 0.062,
+    hq: bool = True,
+):
+    """Render Gray-Scott reaction diffusion with ping-pong buffers."""
+
+    # Create headless context
+    ctx = moderngl.create_standalone_context()
+
+    # Create two framebuffers for ping-pong (state A and state B)
+    # Each stores: r=chemical_A, g=chemical_B
+    tex_a = ctx.texture((width, height), 4, dtype='f4')
+    tex_b = ctx.texture((width, height), 4, dtype='f4')
+    fbo_a = ctx.framebuffer(color_attachments=[tex_a])
+    fbo_b = ctx.framebuffer(color_attachments=[tex_b])
+
+    # Output framebuffer for final coloring
+    tex_out = ctx.texture((width, height), 4)
+    fbo_out = ctx.framebuffer(color_attachments=[tex_out])
+
+    # Vertex shader for fullscreen quad
+    vertex_shader = '''
+    #version 330
+    in vec2 in_position;
+    out vec2 v_texcoord;
+    void main() {
+        gl_Position = vec4(in_position, 0.0, 1.0);
+        v_texcoord = in_position * 0.5 + 0.5;
+    }
+    '''
+
+    # Initialize shader - sets up initial state
+    init_shader = '''
+    #version 330
+    uniform vec2 u_resolution;
+    in vec2 v_texcoord;
+    out vec4 fragColor;
+
+    float hash(vec2 p) {
+        return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+    }
+
+    void main() {
+        vec2 uv = v_texcoord;
+        vec2 center = uv - 0.5;
+        float dist = length(center);
+
+        // Start with A=1 everywhere
+        float a = 1.0;
+        float b = 0.0;
+
+        // Multiple seed circles
+        for (int i = 0; i < 7; i++) {
+            float angle = float(i) * 0.897597; // Golden angle
+            float r = 0.08 + 0.04 * float(i % 4);
+            vec2 seed = vec2(cos(angle), sin(angle)) * r;
+            if (length(center - seed) < 0.025) {
+                b = 1.0;
+            }
+        }
+
+        // Center seed
+        if (dist < 0.04) {
+            b = 1.0;
+        }
+
+        // Random seeds
+        vec2 cell = floor(gl_FragCoord.xy / 8.0);
+        if (hash(cell) > 0.997 && dist < 0.35) {
+            b = 1.0;
+        }
+
+        fragColor = vec4(a, b, 0.0, 1.0);
+    }
+    '''
+
+    # Simulation shader - one step of Gray-Scott
+    sim_shader = f'''
+    #version 330
+    uniform vec2 u_resolution;
+    uniform sampler2D u_state;
+    uniform float u_feed;
+    uniform float u_kill;
+    in vec2 v_texcoord;
+    out vec4 fragColor;
+
+    void main() {{
+        vec2 texel = 1.0 / u_resolution;
+        vec2 uv = v_texcoord;
+
+        // Parameters
+        float dA = 1.0;
+        float dB = 0.5;
+        float feed = u_feed;
+        float kill = u_kill;
+        float dt = 1.0;
+
+        // Get current state
+        vec4 current = texture(u_state, uv);
+        float a = current.r;
+        float b = current.g;
+
+        // Laplacian with 3x3 kernel
+        // Adjacent: 0.2, Diagonal: 0.05, Center: -1.0
+        vec4 laplacian = vec4(0.0);
+
+        // Adjacent neighbors
+        laplacian += texture(u_state, uv + vec2(-texel.x, 0.0)) * 0.2;
+        laplacian += texture(u_state, uv + vec2(texel.x, 0.0)) * 0.2;
+        laplacian += texture(u_state, uv + vec2(0.0, -texel.y)) * 0.2;
+        laplacian += texture(u_state, uv + vec2(0.0, texel.y)) * 0.2;
+
+        // Diagonal neighbors
+        laplacian += texture(u_state, uv + vec2(-texel.x, -texel.y)) * 0.05;
+        laplacian += texture(u_state, uv + vec2(texel.x, -texel.y)) * 0.05;
+        laplacian += texture(u_state, uv + vec2(-texel.x, texel.y)) * 0.05;
+        laplacian += texture(u_state, uv + vec2(texel.x, texel.y)) * 0.05;
+
+        laplacian -= current;
+
+        // Reaction: A + 2B -> 3B
+        float reaction = a * b * b;
+
+        // Gray-Scott update
+        float newA = a + dt * (dA * laplacian.r - reaction + feed * (1.0 - a));
+        float newB = b + dt * (dB * laplacian.g + reaction - (kill + feed) * b);
+
+        newA = clamp(newA, 0.0, 1.0);
+        newB = clamp(newB, 0.0, 1.0);
+
+        fragColor = vec4(newA, newB, 0.0, 1.0);
+    }}
+    '''
+
+    # Display shader - colorize the state
+    display_shader = '''
+    #version 330
+    uniform sampler2D u_state;
+    in vec2 v_texcoord;
+    out vec4 fragColor;
+
+    void main() {
+        vec2 uv = v_texcoord;
+        vec4 state = texture(u_state, uv);
+        float a = state.r;
+        float b = state.g;
+
+        // Color based on chemical B concentration
+        // Background (low B): deep teal/dark blue
+        // Patterns (high B): bright cyan/seafoam
+
+        vec3 bgColor = vec3(0.02, 0.08, 0.12);    // Deep ocean
+        vec3 midColor = vec3(0.05, 0.25, 0.35);   // Dark teal
+        vec3 patternColor = vec3(0.2, 0.8, 0.7);  // Bright cyan/seafoam
+        vec3 brightColor = vec3(0.6, 0.95, 0.85); // Bright highlight
+
+        vec3 color;
+        if (b < 0.1) {
+            color = mix(bgColor, midColor, b / 0.1);
+        } else if (b < 0.3) {
+            color = mix(midColor, patternColor, (b - 0.1) / 0.2);
+        } else {
+            color = mix(patternColor, brightColor, clamp((b - 0.3) / 0.4, 0.0, 1.0));
+        }
+
+        // Edge glow for definition at pattern boundaries
+        vec2 texel = 1.0 / textureSize(u_state, 0);
+        float dx = texture(u_state, uv + vec2(texel.x, 0.0)).g - texture(u_state, uv - vec2(texel.x, 0.0)).g;
+        float dy = texture(u_state, uv + vec2(0.0, texel.y)).g - texture(u_state, uv - vec2(0.0, texel.y)).g;
+        float edge = length(vec2(dx, dy)) * 4.0;
+
+        // Add bright edge glow
+        color += vec3(0.3, 0.6, 0.5) * edge;
+
+        // Inner glow on the patterns
+        color += vec3(0.1, 0.2, 0.15) * pow(b, 1.5);
+
+        // Subtle vignette
+        float vignette = 1.0 - length(uv - 0.5) * 0.3;
+        color *= vignette;
+
+        fragColor = vec4(color, 1.0);
+    }
+    '''
+
+    # Compile shaders
+    try:
+        prog_init = ctx.program(vertex_shader=vertex_shader, fragment_shader=init_shader)
+        prog_sim = ctx.program(vertex_shader=vertex_shader, fragment_shader=sim_shader)
+        prog_display = ctx.program(vertex_shader=vertex_shader, fragment_shader=display_shader)
+    except Exception as e:
+        print(f"Shader compilation error:\n{e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Create fullscreen quad
+    vertices = np.array([-1.0, -1.0, 1.0, -1.0, -1.0, 1.0, 1.0, 1.0], dtype='f4')
+    vbo = ctx.buffer(vertices)
+    vao_init = ctx.simple_vertex_array(prog_init, vbo, 'in_position')
+    vao_sim = ctx.simple_vertex_array(prog_sim, vbo, 'in_position')
+    vao_display = ctx.simple_vertex_array(prog_display, vbo, 'in_position')
+
+    # Set initial uniforms (only if they exist - GLSL compiler may optimize out unused)
+    if 'u_resolution' in prog_init:
+        prog_init['u_resolution'].value = (float(width), float(height))
+    prog_sim['u_resolution'].value = (float(width), float(height))
+    prog_sim['u_feed'].value = feed
+    prog_sim['u_kill'].value = kill
+
+    # Initialize state
+    fbo_a.use()
+    vao_init.render(moderngl.TRIANGLE_STRIP)
+
+    # Setup texture samplers
+    tex_a.use(0)
+    tex_b.use(1)
+    prog_sim['u_state'] = 0
+    prog_display['u_state'] = 0
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        num_frames = int(fps * duration)
+        print(f"Rendering {num_frames} frames at {width}x{height}...")
+        print(f"Parameters: feed={feed}, kill={kill}, {iterations} iterations/frame")
+
+        # Current state in fbo_a
+        current_fbo = fbo_a
+        current_tex = tex_a
+        other_fbo = fbo_b
+        other_tex = tex_b
+
+        for frame_idx in range(num_frames):
+            # Run multiple simulation iterations per frame
+            for _ in range(iterations):
+                # Bind current state as texture, render to other
+                current_tex.use(0)
+                other_fbo.use()
+                vao_sim.render(moderngl.TRIANGLE_STRIP)
+
+                # Swap
+                current_fbo, other_fbo = other_fbo, current_fbo
+                current_tex, other_tex = other_tex, current_tex
+
+            # Render display shader
+            current_tex.use(0)
+            fbo_out.use()
+            ctx.clear(0.0, 0.0, 0.0, 1.0)
+            vao_display.render(moderngl.TRIANGLE_STRIP)
+
+            # Read and save frame
+            data = fbo_out.read(components=4)
+            img = Image.frombytes('RGBA', (width, height), data)
+            img = img.transpose(Image.FLIP_TOP_BOTTOM)
+
+            frame_path = os.path.join(tmpdir, f'frame_{frame_idx:04d}.png')
+            img.save(frame_path)
+
+            if (frame_idx + 1) % fps == 0:
+                print(f"  {frame_idx + 1}/{num_frames} frames ({(frame_idx + 1) / fps:.0f}s)")
+
+        print("Encoding video with ffmpeg...")
+
+        is_mov = output_path.lower().endswith('.mov')
+
+        if hq:
+            ffmpeg_cmd = [
+                'ffmpeg', '-y',
+                '-framerate', str(fps),
+                '-i', os.path.join(tmpdir, 'frame_%04d.png'),
+                '-c:v', 'libx265',
+                '-b:v', '50M',
+                '-maxrate', '60M',
+                '-bufsize', '120M',
+                '-preset', 'slow',
+                '-tag:v', 'hvc1',
+                '-pix_fmt', 'yuv420p',
+                '-movflags', '+faststart',
+            ]
+            if is_mov:
+                ffmpeg_cmd.extend(['-brand', 'qt'])
+            ffmpeg_cmd.append(output_path)
+        else:
+            ffmpeg_cmd = [
+                'ffmpeg', '-y',
+                '-framerate', str(fps),
+                '-i', os.path.join(tmpdir, 'frame_%04d.png'),
+                '-c:v', 'libx265',
+                '-crf', '26',
+                '-preset', 'fast',
+                '-tag:v', 'hvc1',
+                '-pix_fmt', 'yuv420p',
+                output_path
+            ]
+
+        result = subprocess.run(ffmpeg_cmd, capture_output=True)
+        if result.returncode != 0:
+            print(f"ffmpeg error:\n{result.stderr.decode()}", file=sys.stderr)
+            sys.exit(1)
+
+        file_size = os.path.getsize(output_path)
+        print(f"Done! Output: {output_path} ({file_size / 1024 / 1024:.1f} MB)")
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Render Gray-Scott reaction-diffusion to video')
+    parser.add_argument('output', help='Output video path (.mov recommended for iMessage)')
+    parser.add_argument('--width', type=int, default=1080, help='Video width (default: 1080)')
+    parser.add_argument('--height', type=int, default=1080, help='Video height (default: 1080)')
+    parser.add_argument('--fps', type=int, default=30, help='Frames per second (default: 30)')
+    parser.add_argument('--duration', type=float, default=10.0, help='Duration in seconds (default: 10)')
+    parser.add_argument('--iterations', type=int, default=20, help='Simulation steps per frame (default: 20)')
+    parser.add_argument('--feed', type=float, default=0.055, help='Feed rate F (default: 0.055)')
+    parser.add_argument('--kill', type=float, default=0.062, help='Kill rate K (default: 0.062)')
+    parser.add_argument('--fast', action='store_true', help='Fast encoding (lower quality)')
+
+    # Preset patterns
+    parser.add_argument('--preset', choices=['mitosis', 'coral', 'maze', 'spots', 'waves'],
+                       help='Use preset feed/kill values')
+
+    args = parser.parse_args()
+
+    # Apply presets
+    presets = {
+        'mitosis': (0.0367, 0.0649),  # Cell division pattern
+        'coral': (0.0545, 0.062),     # Coral-like branches
+        'maze': (0.029, 0.057),       # Labyrinthine patterns
+        'spots': (0.035, 0.065),      # Isolated spots
+        'waves': (0.014, 0.054),      # Soliton waves
+    }
+
+    feed = args.feed
+    kill = args.kill
+    if args.preset:
+        feed, kill = presets[args.preset]
+        print(f"Using preset '{args.preset}': feed={feed}, kill={kill}")
+
+    render_reaction_diffusion(
+        args.output,
+        args.width,
+        args.height,
+        args.fps,
+        args.duration,
+        args.iterations,
+        feed,
+        kill,
+        hq=not args.fast,
+    )
+
+
+if __name__ == '__main__':
+    main()

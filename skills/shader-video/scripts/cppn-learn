@@ -1,0 +1,422 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "torch",
+#     "torchvision",
+#     "pillow",
+#     "numpy",
+# ]
+# ///
+"""
+CPPN Image Learning CLI
+
+Train a Compositional Pattern Producing Network to approximate an image,
+then generate animated variations by morphing through latent space.
+
+Usage:
+    cppn-learn train <image> <output_model> [--epochs 2000] [--hidden 256] [--layers 8]
+    cppn-learn animate <model> <output_video> [--duration 6] [--fps 30]
+    cppn-learn render <model> <output_image> [--width 512] [--height 512]
+    cppn-learn blend <model1> <model2> <output_video> [--duration 6] [--fps 30]
+"""
+
+import argparse
+import math
+import sys
+from pathlib import Path
+
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from PIL import Image
+
+
+class SIREN(nn.Module):
+    """Sinusoidal Representation Network - better for learning images than standard MLPs."""
+
+    def __init__(self, in_features, hidden_features, hidden_layers, out_features,
+                 latent_dim=8, omega_0=30.0):
+        super().__init__()
+        self.latent_dim = latent_dim
+        self.omega_0 = omega_0
+
+        # Input: x, y, r + latent vector
+        self.input_layer = nn.Linear(3 + latent_dim, hidden_features)
+
+        self.hidden_layers = nn.ModuleList([
+            nn.Linear(hidden_features, hidden_features)
+            for _ in range(hidden_layers)
+        ])
+
+        self.output_layer = nn.Linear(hidden_features, out_features)
+
+        # SIREN initialization
+        self._init_weights()
+
+    def _init_weights(self):
+        with torch.no_grad():
+            # First layer
+            self.input_layer.weight.uniform_(-1 / (3 + self.latent_dim),
+                                              1 / (3 + self.latent_dim))
+            # Hidden layers
+            for layer in self.hidden_layers:
+                layer.weight.uniform_(-math.sqrt(6 / layer.in_features) / self.omega_0,
+                                       math.sqrt(6 / layer.in_features) / self.omega_0)
+            # Output layer
+            self.output_layer.weight.uniform_(-math.sqrt(6 / self.output_layer.in_features) / self.omega_0,
+                                               math.sqrt(6 / self.output_layer.in_features) / self.omega_0)
+
+    def forward(self, coords, latent):
+        # coords: (N, 3) - x, y, r
+        # latent: (latent_dim,) or (N, latent_dim)
+        if latent.dim() == 1:
+            latent = latent.unsqueeze(0).expand(coords.shape[0], -1)
+
+        x = torch.cat([coords, latent], dim=-1)
+        x = torch.sin(self.omega_0 * self.input_layer(x))
+
+        for layer in self.hidden_layers:
+            x = torch.sin(self.omega_0 * layer(x))
+
+        x = self.output_layer(x)
+        x = torch.sigmoid(x)  # Output in [0, 1]
+        return x
+
+
+def create_coordinate_grid(width, height, device='cpu'):
+    """Create normalized coordinate grid with x, y, r."""
+    y_coords = torch.linspace(-1, 1, height, device=device)
+    x_coords = torch.linspace(-1, 1, width, device=device)
+    yy, xx = torch.meshgrid(y_coords, x_coords, indexing='ij')
+    rr = torch.sqrt(xx**2 + yy**2)
+
+    coords = torch.stack([xx, yy, rr], dim=-1)
+    return coords.reshape(-1, 3)
+
+
+def load_image(path, max_size=256):
+    """Load and preprocess image."""
+    img = Image.open(path).convert('RGB')
+
+    # Resize while maintaining aspect ratio
+    w, h = img.size
+    scale = max_size / max(w, h)
+    new_w, new_h = int(w * scale), int(h * scale)
+    img = img.resize((new_w, new_h), Image.LANCZOS)
+
+    # Convert to tensor
+    arr = np.array(img).astype(np.float32) / 255.0
+    return torch.from_numpy(arr), new_w, new_h
+
+
+def train_cppn(image_path, output_path, epochs=2000, hidden=256, layers=8,
+               latent_dim=8, lr=1e-4, device='cpu'):
+    """Train CPPN to approximate an image."""
+    print(f"Loading image: {image_path}")
+    img_tensor, width, height = load_image(image_path)
+    img_tensor = img_tensor.to(device)
+    target = img_tensor.reshape(-1, 3)
+
+    print(f"Image size: {width}x{height}")
+    print(f"Training CPPN: {hidden} hidden units, {layers} layers, {latent_dim}D latent")
+
+    # Create model
+    model = SIREN(
+        in_features=3,
+        hidden_features=hidden,
+        hidden_layers=layers,
+        out_features=3,
+        latent_dim=latent_dim
+    ).to(device)
+
+    # Create coordinate grid
+    coords = create_coordinate_grid(width, height, device)
+
+    # Training latent (will be saved with model)
+    base_latent = torch.zeros(latent_dim, device=device)
+
+    optimizer = optim.Adam(model.parameters(), lr=lr)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, epochs)
+
+    best_loss = float('inf')
+
+    for epoch in range(epochs):
+        optimizer.zero_grad()
+
+        output = model(coords, base_latent)
+        loss = nn.functional.mse_loss(output, target)
+
+        loss.backward()
+        optimizer.step()
+        scheduler.step()
+
+        if loss.item() < best_loss:
+            best_loss = loss.item()
+
+        if (epoch + 1) % 100 == 0 or epoch == 0:
+            psnr = -10 * math.log10(loss.item())
+            print(f"Epoch {epoch+1}/{epochs} | Loss: {loss.item():.6f} | PSNR: {psnr:.2f} dB")
+
+    # Save model
+    save_dict = {
+        'model_state': model.state_dict(),
+        'config': {
+            'hidden': hidden,
+            'layers': layers,
+            'latent_dim': latent_dim,
+            'width': width,
+            'height': height,
+        },
+        'base_latent': base_latent.cpu(),
+    }
+    torch.save(save_dict, output_path)
+    print(f"\nModel saved to: {output_path}")
+    print(f"Final PSNR: {-10 * math.log10(best_loss):.2f} dB")
+
+
+def render_frame(model, coords, latent, width, height):
+    """Render a single frame from the CPPN."""
+    with torch.no_grad():
+        output = model(coords, latent)
+        img = output.reshape(height, width, 3).cpu().numpy()
+        img = (img * 255).clip(0, 255).astype(np.uint8)
+        return Image.fromarray(img)
+
+
+def animate_cppn(model_path, output_path, duration=6, fps=30, width=None, height=None):
+    """Generate animation by morphing through latent space."""
+    import subprocess
+    import tempfile
+
+    print(f"Loading model: {model_path}")
+    checkpoint = torch.load(model_path, map_location='cpu', weights_only=False)
+    config = checkpoint['config']
+    base_latent = checkpoint['base_latent']
+
+    # Use original dimensions or override
+    w = width or config['width']
+    h = height or config['height']
+
+    model = SIREN(
+        in_features=3,
+        hidden_features=config['hidden'],
+        hidden_layers=config['layers'],
+        out_features=3,
+        latent_dim=config['latent_dim']
+    )
+    model.load_state_dict(checkpoint['model_state'])
+    model.eval()
+
+    coords = create_coordinate_grid(w, h)
+
+    num_frames = duration * fps
+    print(f"Rendering {num_frames} frames at {w}x{h}...")
+
+    # Create random target latents for morphing
+    latent_dim = config['latent_dim']
+    num_keyframes = 4
+    keyframes = [base_latent]
+    for _ in range(num_keyframes - 1):
+        # Small perturbations from base
+        keyframes.append(base_latent + torch.randn(latent_dim) * 0.5)
+    keyframes.append(base_latent)  # Loop back
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        for i in range(num_frames):
+            t = i / num_frames
+
+            # Smooth interpolation between keyframes
+            segment = t * (len(keyframes) - 1)
+            idx = int(segment)
+            frac = segment - idx
+
+            # Smoothstep for easing
+            frac = frac * frac * (3 - 2 * frac)
+
+            latent = keyframes[idx] * (1 - frac) + keyframes[min(idx + 1, len(keyframes) - 1)] * frac
+
+            frame = render_frame(model, coords, latent, w, h)
+            frame.save(f"{tmpdir}/frame_{i:04d}.png")
+
+            if (i + 1) % fps == 0:
+                print(f"  {i+1}/{num_frames} frames ({(i+1)//fps}s)")
+
+        # Encode video
+        print("Encoding video...")
+        subprocess.run([
+            'ffmpeg', '-y', '-framerate', str(fps),
+            '-i', f'{tmpdir}/frame_%04d.png',
+            '-c:v', 'libx265', '-preset', 'medium',
+            '-crf', '26', '-tag:v', 'hvc1',
+            '-pix_fmt', 'yuv420p',
+            output_path
+        ], check=True, capture_output=True)
+
+    size_kb = Path(output_path).stat().st_size / 1024
+    print(f"Done! Output: {output_path} ({size_kb:.1f} KB)")
+
+
+def render_image(model_path, output_path, width=None, height=None):
+    """Render a single image from the trained CPPN."""
+    checkpoint = torch.load(model_path, map_location='cpu', weights_only=False)
+    config = checkpoint['config']
+    base_latent = checkpoint['base_latent']
+
+    w = width or config['width']
+    h = height or config['height']
+
+    model = SIREN(
+        in_features=3,
+        hidden_features=config['hidden'],
+        hidden_layers=config['layers'],
+        out_features=3,
+        latent_dim=config['latent_dim']
+    )
+    model.load_state_dict(checkpoint['model_state'])
+    model.eval()
+
+    coords = create_coordinate_grid(w, h)
+    frame = render_frame(model, coords, base_latent, w, h)
+    frame.save(output_path)
+    print(f"Saved: {output_path}")
+
+
+def blend_cppns(model1_path, model2_path, output_path, duration=6, fps=30, width=256, height=256):
+    """Blend between two CPPN models by interpolating weights."""
+    import subprocess
+    import tempfile
+
+    print(f"Loading models...")
+    cp1 = torch.load(model1_path, map_location='cpu', weights_only=False)
+    cp2 = torch.load(model2_path, map_location='cpu', weights_only=False)
+
+    config1 = cp1['config']
+    config2 = cp2['config']
+
+    # Ensure compatible architectures
+    if config1['hidden'] != config2['hidden'] or config1['layers'] != config2['layers']:
+        print("Warning: Models have different architectures. Using model1's architecture.")
+
+    # Create model
+    model = SIREN(
+        in_features=3,
+        hidden_features=config1['hidden'],
+        hidden_layers=config1['layers'],
+        out_features=3,
+        latent_dim=config1['latent_dim']
+    )
+
+    # Get state dicts
+    state1 = cp1['model_state']
+    state2 = cp2['model_state']
+    latent1 = cp1['base_latent']
+    latent2 = cp2['base_latent']
+
+    coords = create_coordinate_grid(width, height)
+
+    num_frames = duration * fps
+    print(f"Rendering {num_frames} frames at {width}x{height}...")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        for i in range(num_frames):
+            # Smooth back-and-forth blend
+            t = i / num_frames
+            # Ping-pong: go 0->1->0
+            blend = 0.5 - 0.5 * math.cos(2 * math.pi * t)
+            # Smoothstep for extra smoothness
+            blend = blend * blend * (3 - 2 * blend)
+
+            # Interpolate model weights
+            blended_state = {}
+            for key in state1.keys():
+                blended_state[key] = state1[key] * (1 - blend) + state2[key] * blend
+
+            model.load_state_dict(blended_state)
+            model.eval()
+
+            # Also interpolate latent
+            latent = latent1 * (1 - blend) + latent2 * blend
+
+            frame = render_frame(model, coords, latent, width, height)
+            frame.save(f"{tmpdir}/frame_{i:04d}.png")
+
+            if (i + 1) % fps == 0:
+                print(f"  {i+1}/{num_frames} frames ({(i+1)//fps}s)")
+
+        # Encode video
+        print("Encoding video...")
+        subprocess.run([
+            'ffmpeg', '-y', '-framerate', str(fps),
+            '-i', f'{tmpdir}/frame_%04d.png',
+            '-c:v', 'libx265', '-preset', 'medium',
+            '-crf', '26', '-tag:v', 'hvc1',
+            '-pix_fmt', 'yuv420p',
+            output_path
+        ], check=True, capture_output=True)
+
+    size_kb = Path(output_path).stat().st_size / 1024
+    print(f"Done! Output: {output_path} ({size_kb:.1f} KB)")
+
+
+def main():
+    parser = argparse.ArgumentParser(description='CPPN Image Learning')
+    subparsers = parser.add_subparsers(dest='command', required=True)
+
+    # Train command
+    train_parser = subparsers.add_parser('train', help='Train CPPN on an image')
+    train_parser.add_argument('image', help='Input image path')
+    train_parser.add_argument('output', help='Output model path (.pt)')
+    train_parser.add_argument('--epochs', type=int, default=2000)
+    train_parser.add_argument('--hidden', type=int, default=256)
+    train_parser.add_argument('--layers', type=int, default=8)
+    train_parser.add_argument('--latent-dim', type=int, default=8)
+    train_parser.add_argument('--lr', type=float, default=1e-4)
+
+    # Animate command
+    anim_parser = subparsers.add_parser('animate', help='Generate latent space animation')
+    anim_parser.add_argument('model', help='Trained model path (.pt)')
+    anim_parser.add_argument('output', help='Output video path (.mp4)')
+    anim_parser.add_argument('--duration', type=int, default=6)
+    anim_parser.add_argument('--fps', type=int, default=30)
+    anim_parser.add_argument('--width', type=int)
+    anim_parser.add_argument('--height', type=int)
+
+    # Render command
+    render_parser = subparsers.add_parser('render', help='Render single image')
+    render_parser.add_argument('model', help='Trained model path (.pt)')
+    render_parser.add_argument('output', help='Output image path')
+    render_parser.add_argument('--width', type=int)
+    render_parser.add_argument('--height', type=int)
+
+    # Blend command
+    blend_parser = subparsers.add_parser('blend', help='Blend between two CPPN models')
+    blend_parser.add_argument('model1', help='First model path (.pt)')
+    blend_parser.add_argument('model2', help='Second model path (.pt)')
+    blend_parser.add_argument('output', help='Output video path (.mp4)')
+    blend_parser.add_argument('--duration', type=int, default=6)
+    blend_parser.add_argument('--fps', type=int, default=30)
+    blend_parser.add_argument('--width', type=int, default=256)
+    blend_parser.add_argument('--height', type=int, default=256)
+
+    args = parser.parse_args()
+
+    device = 'mps' if torch.backends.mps.is_available() else 'cpu'
+    print(f"Using device: {device}")
+
+    if args.command == 'train':
+        train_cppn(args.image, args.output, args.epochs, args.hidden,
+                   args.layers, args.latent_dim, args.lr, device)
+    elif args.command == 'animate':
+        animate_cppn(args.model, args.output, args.duration, args.fps,
+                     args.width, args.height)
+    elif args.command == 'render':
+        render_image(args.model, args.output, args.width, args.height)
+    elif args.command == 'blend':
+        blend_cppns(args.model1, args.model2, args.output, args.duration, args.fps,
+                    args.width, args.height)
+
+
+if __name__ == '__main__':
+    main()

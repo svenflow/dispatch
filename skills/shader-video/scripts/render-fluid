@@ -1,0 +1,451 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "numpy",
+#     "pillow",
+#     "moderngl",
+# ]
+# ///
+"""
+Render 2D Navier-Stokes fluid simulation with smoke/dye visualization.
+
+Based on Jos Stam's stable fluids algorithm with GPU implementation.
+"""
+
+import argparse
+import os
+import subprocess
+import sys
+import tempfile
+import math
+
+import moderngl
+import numpy as np
+from PIL import Image
+
+
+def render_fluid(
+    output_path: str,
+    width: int = 1080,
+    height: int = 1080,
+    fps: int = 30,
+    duration: float = 15.0,
+    viscosity: float = 0.0001,
+    diffusion: float = 0.0001,
+    hq: bool = True,
+):
+    """Render 2D fluid simulation."""
+
+    ctx = moderngl.create_standalone_context()
+
+    # We need: velocity (2 component), pressure (1), divergence (1), dye (3 for RGB)
+    # Simplified: velocity texture, dye texture
+    vel_a = ctx.texture((width, height), 2, dtype='f4')
+    vel_b = ctx.texture((width, height), 2, dtype='f4')
+    dye_a = ctx.texture((width, height), 4, dtype='f4')
+    dye_b = ctx.texture((width, height), 4, dtype='f4')
+    pressure = ctx.texture((width, height), 1, dtype='f4')
+    divergence = ctx.texture((width, height), 1, dtype='f4')
+
+    fbo_vel_a = ctx.framebuffer(color_attachments=[vel_a])
+    fbo_vel_b = ctx.framebuffer(color_attachments=[vel_b])
+    fbo_dye_a = ctx.framebuffer(color_attachments=[dye_a])
+    fbo_dye_b = ctx.framebuffer(color_attachments=[dye_b])
+    fbo_pressure = ctx.framebuffer(color_attachments=[pressure])
+    fbo_divergence = ctx.framebuffer(color_attachments=[divergence])
+
+    tex_out = ctx.texture((width, height), 4)
+    fbo_out = ctx.framebuffer(color_attachments=[tex_out])
+
+    vertex_shader = '''
+    #version 330
+    in vec2 in_position;
+    out vec2 v_texcoord;
+    void main() {
+        gl_Position = vec4(in_position, 0.0, 1.0);
+        v_texcoord = in_position * 0.5 + 0.5;
+    }
+    '''
+
+    # Clear shader
+    clear_shader = '''
+    #version 330
+    out vec4 fragColor;
+    void main() { fragColor = vec4(0.0); }
+    '''
+
+    # Add force/dye at point
+    add_force_shader = '''
+    #version 330
+    uniform vec2 u_resolution;
+    uniform vec2 u_point;
+    uniform vec2 u_force;
+    uniform float u_radius;
+    uniform sampler2D u_vel;
+    in vec2 v_texcoord;
+    out vec2 fragColor;
+
+    void main() {
+        vec2 vel = texture(u_vel, v_texcoord).xy;
+        vec2 pos = gl_FragCoord.xy;
+        float dist = length(pos - u_point);
+        float influence = exp(-dist * dist / (u_radius * u_radius));
+        vel += u_force * influence;
+        fragColor = vel;
+    }
+    '''
+
+    add_dye_shader = '''
+    #version 330
+    uniform vec2 u_resolution;
+    uniform vec2 u_point;
+    uniform vec3 u_color;
+    uniform float u_radius;
+    uniform sampler2D u_dye;
+    in vec2 v_texcoord;
+    out vec4 fragColor;
+
+    void main() {
+        vec4 dye = texture(u_dye, v_texcoord);
+        vec2 pos = gl_FragCoord.xy;
+        float dist = length(pos - u_point);
+        float influence = exp(-dist * dist / (u_radius * u_radius));
+        dye.rgb += u_color * influence;
+        fragColor = dye;
+    }
+    '''
+
+    # Advection
+    advect_shader = '''
+    #version 330
+    uniform vec2 u_resolution;
+    uniform sampler2D u_vel;
+    uniform sampler2D u_source;
+    uniform float u_dt;
+    uniform float u_dissipation;
+    in vec2 v_texcoord;
+    out vec4 fragColor;
+
+    void main() {
+        vec2 texel = 1.0 / u_resolution;
+        vec2 vel = texture(u_vel, v_texcoord).xy;
+
+        // Trace back
+        vec2 pos = v_texcoord - vel * texel * u_dt;
+
+        // Bilinear sample
+        vec4 result = texture(u_source, pos);
+        result *= u_dissipation;
+
+        fragColor = result;
+    }
+    '''
+
+    # Divergence
+    div_shader = '''
+    #version 330
+    uniform vec2 u_resolution;
+    uniform sampler2D u_vel;
+    in vec2 v_texcoord;
+    out float fragColor;
+
+    void main() {
+        vec2 texel = 1.0 / u_resolution;
+
+        float vL = texture(u_vel, v_texcoord - vec2(texel.x, 0.0)).x;
+        float vR = texture(u_vel, v_texcoord + vec2(texel.x, 0.0)).x;
+        float vB = texture(u_vel, v_texcoord - vec2(0.0, texel.y)).y;
+        float vT = texture(u_vel, v_texcoord + vec2(0.0, texel.y)).y;
+
+        float div = 0.5 * (vR - vL + vT - vB);
+        fragColor = div;
+    }
+    '''
+
+    # Pressure solve (Jacobi iteration)
+    pressure_shader = '''
+    #version 330
+    uniform vec2 u_resolution;
+    uniform sampler2D u_pressure;
+    uniform sampler2D u_divergence;
+    in vec2 v_texcoord;
+    out float fragColor;
+
+    void main() {
+        vec2 texel = 1.0 / u_resolution;
+
+        float pL = texture(u_pressure, v_texcoord - vec2(texel.x, 0.0)).r;
+        float pR = texture(u_pressure, v_texcoord + vec2(texel.x, 0.0)).r;
+        float pB = texture(u_pressure, v_texcoord - vec2(0.0, texel.y)).r;
+        float pT = texture(u_pressure, v_texcoord + vec2(0.0, texel.y)).r;
+
+        float div = texture(u_divergence, v_texcoord).r;
+
+        float p = (pL + pR + pB + pT - div) * 0.25;
+        fragColor = p;
+    }
+    '''
+
+    # Gradient subtract
+    gradient_shader = '''
+    #version 330
+    uniform vec2 u_resolution;
+    uniform sampler2D u_vel;
+    uniform sampler2D u_pressure;
+    in vec2 v_texcoord;
+    out vec2 fragColor;
+
+    void main() {
+        vec2 texel = 1.0 / u_resolution;
+
+        float pL = texture(u_pressure, v_texcoord - vec2(texel.x, 0.0)).r;
+        float pR = texture(u_pressure, v_texcoord + vec2(texel.x, 0.0)).r;
+        float pB = texture(u_pressure, v_texcoord - vec2(0.0, texel.y)).r;
+        float pT = texture(u_pressure, v_texcoord + vec2(0.0, texel.y)).r;
+
+        vec2 vel = texture(u_vel, v_texcoord).xy;
+        vel -= 0.5 * vec2(pR - pL, pT - pB);
+
+        fragColor = vel;
+    }
+    '''
+
+    # Display
+    display_shader = '''
+    #version 330
+    uniform sampler2D u_dye;
+    in vec2 v_texcoord;
+    out vec4 fragColor;
+
+    void main() {
+        vec3 dye = texture(u_dye, v_texcoord).rgb;
+
+        // Dark background with vibrant dye
+        vec3 color = dye;
+
+        // Add some glow
+        color += dye * 0.2;
+
+        // Tone mapping
+        color = color / (1.0 + color);
+
+        // Vignette
+        float vignette = 1.0 - length(v_texcoord - 0.5) * 0.4;
+        color *= vignette;
+
+        fragColor = vec4(color, 1.0);
+    }
+    '''
+
+    try:
+        prog_clear = ctx.program(vertex_shader=vertex_shader, fragment_shader=clear_shader)
+        prog_add_force = ctx.program(vertex_shader=vertex_shader, fragment_shader=add_force_shader)
+        prog_add_dye = ctx.program(vertex_shader=vertex_shader, fragment_shader=add_dye_shader)
+        prog_advect = ctx.program(vertex_shader=vertex_shader, fragment_shader=advect_shader)
+        prog_div = ctx.program(vertex_shader=vertex_shader, fragment_shader=div_shader)
+        prog_pressure = ctx.program(vertex_shader=vertex_shader, fragment_shader=pressure_shader)
+        prog_gradient = ctx.program(vertex_shader=vertex_shader, fragment_shader=gradient_shader)
+        prog_display = ctx.program(vertex_shader=vertex_shader, fragment_shader=display_shader)
+    except Exception as e:
+        print(f"Shader compilation error:\n{e}", file=sys.stderr)
+        sys.exit(1)
+
+    vertices = np.array([-1.0, -1.0, 1.0, -1.0, -1.0, 1.0, 1.0, 1.0], dtype='f4')
+    vbo = ctx.buffer(vertices)
+
+    vao_clear = ctx.simple_vertex_array(prog_clear, vbo, 'in_position')
+    vao_add_force = ctx.simple_vertex_array(prog_add_force, vbo, 'in_position')
+    vao_add_dye = ctx.simple_vertex_array(prog_add_dye, vbo, 'in_position')
+    vao_advect = ctx.simple_vertex_array(prog_advect, vbo, 'in_position')
+    vao_div = ctx.simple_vertex_array(prog_div, vbo, 'in_position')
+    vao_pressure = ctx.simple_vertex_array(prog_pressure, vbo, 'in_position')
+    vao_gradient = ctx.simple_vertex_array(prog_gradient, vbo, 'in_position')
+    vao_display = ctx.simple_vertex_array(prog_display, vbo, 'in_position')
+
+    # Initialize
+    fbo_vel_a.use()
+    vao_clear.render(moderngl.TRIANGLE_STRIP)
+    fbo_vel_b.use()
+    vao_clear.render(moderngl.TRIANGLE_STRIP)
+    fbo_dye_a.use()
+    vao_clear.render(moderngl.TRIANGLE_STRIP)
+    fbo_dye_b.use()
+    vao_clear.render(moderngl.TRIANGLE_STRIP)
+    fbo_pressure.use()
+    vao_clear.render(moderngl.TRIANGLE_STRIP)
+
+    if 'u_resolution' in prog_add_force:
+        prog_add_force['u_resolution'].value = (float(width), float(height))
+    if 'u_resolution' in prog_add_dye:
+        prog_add_dye['u_resolution'].value = (float(width), float(height))
+    prog_advect['u_resolution'].value = (float(width), float(height))
+    prog_div['u_resolution'].value = (float(width), float(height))
+    if 'u_resolution' in prog_pressure:
+        prog_pressure['u_resolution'].value = (float(width), float(height))
+    prog_gradient['u_resolution'].value = (float(width), float(height))
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        num_frames = int(fps * duration)
+        print(f"Rendering {num_frames} frames at {width}x{height}...")
+
+        current_vel = vel_a
+        other_vel = vel_b
+        current_vel_fbo = fbo_vel_a
+        other_vel_fbo = fbo_vel_b
+        current_dye = dye_a
+        other_dye = dye_b
+        current_dye_fbo = fbo_dye_a
+        other_dye_fbo = fbo_dye_b
+
+        for frame_idx in range(num_frames):
+            t = frame_idx / fps
+
+            # Add swirling forces and colorful dye
+            # Multiple injection points that move
+            for i in range(3):
+                angle = t * 0.5 + i * 2.094  # 120 degrees apart
+                radius = 200 + 100 * math.sin(t * 0.3 + i)
+                px = width/2 + radius * math.cos(angle)
+                py = height/2 + radius * math.sin(angle)
+
+                # Tangential force (creates swirl)
+                fx = -math.sin(angle) * 300
+                fy = math.cos(angle) * 300
+
+                # Add force
+                current_vel.use(0)
+                prog_add_force['u_vel'] = 0
+                prog_add_force['u_point'].value = (px, py)
+                prog_add_force['u_force'].value = (fx, fy)
+                prog_add_force['u_radius'].value = 50.0
+                other_vel_fbo.use()
+                vao_add_force.render(moderngl.TRIANGLE_STRIP)
+                current_vel, other_vel = other_vel, current_vel
+                current_vel_fbo, other_vel_fbo = other_vel_fbo, current_vel_fbo
+
+                # Add dye - different color per source
+                colors = [(1.0, 0.3, 0.1), (0.1, 1.0, 0.3), (0.3, 0.1, 1.0)]
+                current_dye.use(0)
+                prog_add_dye['u_dye'] = 0
+                prog_add_dye['u_point'].value = (px, py)
+                prog_add_dye['u_color'].value = colors[i]
+                prog_add_dye['u_radius'].value = 40.0
+                other_dye_fbo.use()
+                vao_add_dye.render(moderngl.TRIANGLE_STRIP)
+                current_dye, other_dye = other_dye, current_dye
+                current_dye_fbo, other_dye_fbo = other_dye_fbo, current_dye_fbo
+
+            # Advect velocity
+            current_vel.use(0)
+            prog_advect['u_vel'] = 0
+            prog_advect['u_source'] = 0
+            prog_advect['u_dt'].value = 1.0
+            prog_advect['u_dissipation'].value = 0.99
+            other_vel_fbo.use()
+            vao_advect.render(moderngl.TRIANGLE_STRIP)
+            current_vel, other_vel = other_vel, current_vel
+            current_vel_fbo, other_vel_fbo = other_vel_fbo, current_vel_fbo
+
+            # Compute divergence
+            current_vel.use(0)
+            prog_div['u_vel'] = 0
+            fbo_divergence.use()
+            vao_div.render(moderngl.TRIANGLE_STRIP)
+
+            # Pressure solve (Jacobi iterations)
+            fbo_pressure.use()
+            vao_clear.render(moderngl.TRIANGLE_STRIP)  # Clear pressure
+
+            divergence.use(1)
+            prog_pressure['u_divergence'] = 1
+            for _ in range(20):  # Jacobi iterations
+                pressure.use(0)
+                prog_pressure['u_pressure'] = 0
+                fbo_pressure.use()
+                vao_pressure.render(moderngl.TRIANGLE_STRIP)
+
+            # Gradient subtract
+            current_vel.use(0)
+            pressure.use(1)
+            prog_gradient['u_vel'] = 0
+            prog_gradient['u_pressure'] = 1
+            other_vel_fbo.use()
+            vao_gradient.render(moderngl.TRIANGLE_STRIP)
+            current_vel, other_vel = other_vel, current_vel
+            current_vel_fbo, other_vel_fbo = other_vel_fbo, current_vel_fbo
+
+            # Advect dye
+            current_vel.use(0)
+            current_dye.use(1)
+            prog_advect['u_vel'] = 0
+            prog_advect['u_source'] = 1
+            prog_advect['u_dt'].value = 1.0
+            prog_advect['u_dissipation'].value = 0.995
+            other_dye_fbo.use()
+            vao_advect.render(moderngl.TRIANGLE_STRIP)
+            current_dye, other_dye = other_dye, current_dye
+            current_dye_fbo, other_dye_fbo = other_dye_fbo, current_dye_fbo
+
+            # Display
+            current_dye.use(0)
+            prog_display['u_dye'] = 0
+            fbo_out.use()
+            vao_display.render(moderngl.TRIANGLE_STRIP)
+
+            data = fbo_out.read(components=4)
+            img = Image.frombytes('RGBA', (width, height), data)
+            img = img.transpose(Image.FLIP_TOP_BOTTOM)
+
+            frame_path = os.path.join(tmpdir, f'frame_{frame_idx:04d}.png')
+            img.save(frame_path)
+
+            if (frame_idx + 1) % fps == 0:
+                print(f"  {frame_idx + 1}/{num_frames} frames ({(frame_idx + 1) / fps:.0f}s)")
+
+        print("Encoding video with ffmpeg...")
+
+        is_mov = output_path.lower().endswith('.mov')
+        if hq:
+            ffmpeg_cmd = [
+                'ffmpeg', '-y', '-framerate', str(fps),
+                '-i', os.path.join(tmpdir, 'frame_%04d.png'),
+                '-c:v', 'libx265', '-b:v', '50M', '-maxrate', '60M', '-bufsize', '120M',
+                '-preset', 'slow', '-tag:v', 'hvc1', '-pix_fmt', 'yuv420p', '-movflags', '+faststart',
+            ]
+            if is_mov:
+                ffmpeg_cmd.extend(['-brand', 'qt'])
+            ffmpeg_cmd.append(output_path)
+        else:
+            ffmpeg_cmd = [
+                'ffmpeg', '-y', '-framerate', str(fps),
+                '-i', os.path.join(tmpdir, 'frame_%04d.png'),
+                '-c:v', 'libx265', '-crf', '26', '-preset', 'fast',
+                '-tag:v', 'hvc1', '-pix_fmt', 'yuv420p', output_path
+            ]
+
+        result = subprocess.run(ffmpeg_cmd, capture_output=True)
+        if result.returncode != 0:
+            print(f"ffmpeg error:\n{result.stderr.decode()}", file=sys.stderr)
+            sys.exit(1)
+
+        file_size = os.path.getsize(output_path)
+        print(f"Done! Output: {output_path} ({file_size / 1024 / 1024:.1f} MB)")
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Render 2D fluid simulation')
+    parser.add_argument('output', help='Output video path')
+    parser.add_argument('--width', type=int, default=1080)
+    parser.add_argument('--height', type=int, default=1080)
+    parser.add_argument('--fps', type=int, default=30)
+    parser.add_argument('--duration', type=float, default=15.0)
+    parser.add_argument('--fast', action='store_true')
+
+    args = parser.parse_args()
+
+    render_fluid(args.output, args.width, args.height, args.fps, args.duration, hq=not args.fast)
+
+
+if __name__ == '__main__':
+    main()

@@ -1,0 +1,199 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+"""
+CLI to communicate with Blender MCP addon socket server.
+Requires the addon.py to be installed and running in Blender.
+
+Usage:
+  blender-socket scene          # Get scene info
+  blender-socket object <name>  # Get object info
+  blender-socket screenshot     # Take viewport screenshot
+  blender-socket exec <code>    # Execute python code
+  blender-socket raw <json>     # Send raw JSON command
+"""
+
+import socket
+import json
+import sys
+import os
+import argparse
+import tempfile
+import base64
+
+DEFAULT_HOST = "localhost"
+DEFAULT_PORT = 9876
+
+
+def send_command(command: dict, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> dict:
+    """Send a command to the Blender socket server and return the response."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(180.0)  # Match addon timeout
+
+    try:
+        sock.connect((host, port))
+        sock.sendall(json.dumps(command).encode('utf-8'))
+
+        # Receive response in chunks
+        chunks = []
+        while True:
+            try:
+                chunk = sock.recv(8192)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+
+                # Try to parse as complete JSON
+                try:
+                    data = b''.join(chunks)
+                    return json.loads(data.decode('utf-8'))
+                except json.JSONDecodeError:
+                    continue
+            except socket.timeout:
+                break
+
+        if chunks:
+            data = b''.join(chunks)
+            return json.loads(data.decode('utf-8'))
+        else:
+            return {"status": "error", "message": "No response received"}
+
+    except ConnectionRefusedError:
+        return {"status": "error", "message": "Connection refused - is Blender MCP addon running?"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+    finally:
+        sock.close()
+
+
+def cmd_scene(args):
+    """Get scene info."""
+    result = send_command({"type": "get_scene_info", "params": {}})
+    print(json.dumps(result, indent=2))
+
+
+def cmd_object(args):
+    """Get object info."""
+    result = send_command({"type": "get_object_info", "params": {"name": args.name}})
+    print(json.dumps(result, indent=2))
+
+
+def cmd_screenshot(args):
+    """Take viewport screenshot."""
+    filepath = args.output or os.path.join(tempfile.gettempdir(), "blender_screenshot.png")
+    result = send_command({
+        "type": "get_viewport_screenshot",
+        "params": {
+            "max_size": args.size,
+            "filepath": filepath,
+            "format": "png"
+        }
+    })
+
+    if result.get("status") == "success" and result.get("result", {}).get("success"):
+        print(f"Screenshot saved: {filepath}")
+        print(f"Size: {result['result']['width']}x{result['result']['height']}")
+    else:
+        print(json.dumps(result, indent=2))
+
+
+def cmd_exec(args):
+    """Execute python code in Blender."""
+    code = args.code
+
+    # If code looks like a file path, read it
+    if os.path.exists(code):
+        with open(code) as f:
+            code = f.read()
+
+    result = send_command({"type": "execute_code", "params": {"code": code}})
+
+    if result.get("status") == "success":
+        res = result.get("result", {})
+        if res.get("executed"):
+            output = res.get("result", "")
+            if output:
+                print(output)
+            else:
+                print("Code executed successfully (no output)")
+        else:
+            print(json.dumps(result, indent=2))
+    else:
+        print(f"Error: {result.get('message', 'Unknown error')}")
+
+
+def cmd_raw(args):
+    """Send raw JSON command."""
+    try:
+        command = json.loads(args.json)
+    except json.JSONDecodeError as e:
+        print(f"Invalid JSON: {e}")
+        sys.exit(1)
+
+    result = send_command(command)
+    print(json.dumps(result, indent=2))
+
+
+def cmd_status(args):
+    """Check if Blender socket server is running."""
+    result = send_command({"type": "get_scene_info", "params": {}})
+    if result.get("status") == "success":
+        scene = result.get("result", {})
+        print(f"✓ Connected to Blender")
+        print(f"  Scene: {scene.get('name', 'Unknown')}")
+        print(f"  Objects: {scene.get('object_count', 0)}")
+        print(f"  Materials: {scene.get('materials_count', 0)}")
+    else:
+        print(f"✗ Not connected: {result.get('message', 'Unknown error')}")
+        sys.exit(1)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Communicate with Blender MCP socket server")
+    parser.add_argument("--host", default=DEFAULT_HOST, help="Socket host")
+    parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="Socket port")
+
+    subparsers = parser.add_subparsers(dest="command", help="Commands")
+
+    # status
+    status_parser = subparsers.add_parser("status", help="Check server status")
+    status_parser.set_defaults(func=cmd_status)
+
+    # scene
+    scene_parser = subparsers.add_parser("scene", help="Get scene info")
+    scene_parser.set_defaults(func=cmd_scene)
+
+    # object
+    obj_parser = subparsers.add_parser("object", help="Get object info")
+    obj_parser.add_argument("name", help="Object name")
+    obj_parser.set_defaults(func=cmd_object)
+
+    # screenshot
+    ss_parser = subparsers.add_parser("screenshot", help="Take viewport screenshot")
+    ss_parser.add_argument("-o", "--output", help="Output file path")
+    ss_parser.add_argument("-s", "--size", type=int, default=800, help="Max size in pixels")
+    ss_parser.set_defaults(func=cmd_screenshot)
+
+    # exec
+    exec_parser = subparsers.add_parser("exec", help="Execute python code")
+    exec_parser.add_argument("code", help="Python code or path to .py file")
+    exec_parser.set_defaults(func=cmd_exec)
+
+    # raw
+    raw_parser = subparsers.add_parser("raw", help="Send raw JSON command")
+    raw_parser.add_argument("json", help="JSON command")
+    raw_parser.set_defaults(func=cmd_raw)
+
+    args = parser.parse_args()
+
+    if not args.command:
+        parser.print_help()
+        sys.exit(1)
+
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

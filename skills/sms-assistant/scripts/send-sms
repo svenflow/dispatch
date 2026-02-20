@@ -4,7 +4,8 @@ send-sms - Unified CLI for sending iMessage/SMS
 
 Usage:
     send-sms <chat_id> "message"              # Send text
-    send-sms <chat_id> --image /path/to.png   # Send image
+    send-sms <chat_id> --image /path/to.png   # Send single image
+    send-sms <chat_id> --image img1.png --image img2.png  # Send multiple images
     send-sms <chat_id> --file /path/to.pdf    # Send any file (PDF, doc, etc)
     send-sms <chat_id> "caption" --image /path/to.png  # Send both
 
@@ -15,6 +16,7 @@ Chat ID:
 Examples:
     send-sms +16175551234 "Hello!"
     send-sms +16175551234 --image /tmp/photo.png
+    send-sms +16175551234 --image photo1.png --image photo2.png --image photo3.png
     send-sms +16175551234 --file /tmp/document.pdf
     send-sms b3d258b9a4de447ca412eb335c82a077 "Hello group!"
 """
@@ -32,6 +34,61 @@ from pathlib import Path
 def is_group_chat_id(identifier: str) -> bool:
     """Check if identifier looks like a group chat ID (hex string 20+ chars)."""
     return bool(re.match(r'^[a-f0-9]{20,}$', identifier.lower()))
+
+
+def looks_like_filepath(message: str) -> bool:
+    """
+    Detect if message looks like a filepath that should have used --image/--file.
+
+    Returns True if message appears to be a filepath, False otherwise.
+    """
+    msg = message.strip()
+
+    # Skip if empty or very short
+    if len(msg) < 4:
+        return False
+
+    # Skip URLs - they have paths but are valid text messages
+    if msg.startswith(('http://', 'https://', 'ftp://', 'file://')):
+        return False
+
+    # Patterns that strongly indicate a filepath:
+    # 1. Starts with absolute path indicators
+    if msg.startswith('/') or msg.startswith('~/'):
+        # Check for common file extensions to be extra sure
+        file_extensions = (
+            '.png', '.jpg', '.jpeg', '.gif', '.webp', '.heic', '.heif',  # images
+            '.mov', '.mp4', '.avi', '.mkv', '.m4v', '.webm',  # video
+            '.mp3', '.wav', '.m4a', '.aac', '.flac',  # audio
+            '.pdf', '.doc', '.docx', '.txt', '.rtf',  # documents
+            '.zip', '.tar', '.gz', '.dmg',  # archives
+            '.py', '.js', '.ts', '.sh', '.json', '.yaml', '.yml',  # code
+        )
+        if any(msg.lower().endswith(ext) for ext in file_extensions):
+            return True
+
+        # Also check if path actually exists on disk
+        expanded = os.path.expanduser(msg)
+        if os.path.exists(expanded):
+            return True
+
+    # 2. Common system paths even without leading slash context
+    system_path_patterns = [
+        r'^/tmp/',
+        r'^/Users/',
+        r'^/var/',
+        r'^/home/',
+        r'^/opt/',
+        r'^~/Documents/',
+        r'^~/Downloads/',
+        r'^~/Pictures/',
+        r'^~/Desktop/',
+    ]
+    for pattern in system_path_patterns:
+        if re.match(pattern, msg):
+            return True
+
+    return False
 
 
 def send_text_individual(phone: str, message: str) -> bool:
@@ -282,9 +339,11 @@ Examples:
     )
     parser.add_argument("chat_id", help="Phone number or group chat UUID")
     parser.add_argument("message", nargs="?", default="", help="Message text (optional if sending image/file)")
-    parser.add_argument("--image", "-i", help="Path to image file to send")
+    parser.add_argument("--image", "-i", action="append", help="Path to image file to send (can be specified multiple times)")
     parser.add_argument("--file", "-f", help="Path to any file to send (PDF, doc, etc)")
     parser.add_argument("--group", "-g", action="store_true", help="Force group chat mode")
+    parser.add_argument("--allow-raw-filepath", action="store_true",
+                        help="Allow sending filepath as text (normally rejected)")
 
     args = parser.parse_args()
 
@@ -292,9 +351,11 @@ Examples:
     if not args.message and not args.image and not args.file:
         parser.error("Must provide either a message, --image, or --file")
 
-    if args.image and not os.path.exists(args.image):
-        print(f"ERROR: Image file not found: {args.image}", file=sys.stderr)
-        sys.exit(1)
+    if args.image:
+        for img in args.image:
+            if not os.path.exists(img):
+                print(f"ERROR: Image file not found: {img}", file=sys.stderr)
+                sys.exit(1)
 
     if args.file and not os.path.exists(args.file):
         print(f"ERROR: File not found: {args.file}", file=sys.stderr)
@@ -314,6 +375,19 @@ Examples:
         print("       Example: \"Hello!\" not \"Hello\\!\"", file=sys.stderr)
         sys.exit(2)
 
+    # REJECT messages that look like filepaths - Claude probably meant --image/--file
+    if args.message and not args.allow_raw_filepath and looks_like_filepath(args.message):
+        print("ERROR: Message looks like a filepath!", file=sys.stderr)
+        print(f"       Got: \"{args.message}\"", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("       To SEND THE FILE, use:", file=sys.stderr)
+        print(f"         send-sms {args.chat_id} --image \"{args.message}\"", file=sys.stderr)
+        print(f"         send-sms {args.chat_id} --file \"{args.message}\"", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("       To send path as TEXT:", file=sys.stderr)
+        print(f"         send-sms {args.chat_id} \"{args.message}\" --allow-raw-filepath", file=sys.stderr)
+        sys.exit(3)
+
     success = True
 
     # Send text if provided
@@ -323,12 +397,15 @@ Examples:
         else:
             success = send_text_individual(args.chat_id, args.message)
 
-    # Send image if provided
+    # Send images if provided (can be multiple)
     if args.image and success:
-        if is_group:
-            success = send_image_group(args.chat_id, args.image)
-        else:
-            success = send_image_individual(args.chat_id, args.image)
+        for img_path in args.image:
+            if is_group:
+                success = send_image_group(args.chat_id, img_path)
+            else:
+                success = send_image_individual(args.chat_id, img_path)
+            if not success:
+                break
 
     # Send file if provided
     if args.file and success:

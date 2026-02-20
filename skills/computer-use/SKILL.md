@@ -1,316 +1,179 @@
 ---
 name: computer-use
-description: Parse screenshots and interact with UI elements. Use for screen automation on macOS, Chrome, or iOS Simulator. Trigger words - parse screen, click element, annotate image, computer use.
+description: Analyze and interact with screen UI via vision and accessibility APIs. Use for clicking buttons, finding elements, reading text on screen, and automating macOS, Chrome, or iOS Simulator. Trigger words - see screen, look at screen, what do you see, what's on screen, read screen, find button, click button, tap element, locate element, screen automation, computer use, vision, OCR, screenshot, control computer, interact with UI, mouse click, navigate app.
 ---
 
 # Computer Use Skill
 
-Parse screenshots into structured UI elements and interact with them. Works with macOS native apps, Chrome browser, and iOS Simulator.
+Analyze screens and interact with UI elements. Works with macOS native apps, Chrome browser, and iOS Simulator.
 
 ## Prerequisites
 
-This skill requires OmniParser to be installed locally:
-
-### 1. Clone OmniParser
+Requires OmniParser for vision-based parsing:
 
 ```bash
+# Clone OmniParser
 git clone https://github.com/microsoft/OmniParser.git ~/code/OmniParser
-```
 
-### 2. Download Model Weights (~2GB)
-
-```bash
-# Install huggingface CLI if needed
-uv pip install huggingface_hub
-
-# Download weights
+# Download weights (~2GB)
 cd ~/code/OmniParser
+uv pip install huggingface_hub
 for f in icon_detect/{train_args.yaml,model.pt,model.yaml} icon_caption/{config.json,generation_config.json,model.safetensors}; do
   huggingface-cli download microsoft/OmniParser-v2.0 "$f" --local-dir weights
 done
 mv weights/icon_caption weights/icon_caption_florence
 ```
 
-### 3. Verify Setup
-
+Also install Peekaboo for native macOS accessibility:
 ```bash
-ls ~/code/OmniParser/weights/
-# Should show: icon_caption_florence  icon_detect
+brew install steipete/tap/peekaboo
 ```
-
-**Note:** The server uses ~2GB RAM when running. It auto-shuts down after 10 minutes idle.
 
 ---
 
-## parse-image CLI
+## see CLI
 
-The core tool for screen parsing. Uses OmniParser (YOLOv8 + Florence-2) to detect text and icons.
+The unified tool for screen analysis and interaction.
 
-### Basic Usage
+### Analyze Screen
 
 ```bash
-# Parse a screenshot (text output)
-~/.claude/skills/computer-use/scripts/parse-image screenshot.png
+# Live screen capture (runs both Peekaboo + OmniParser in parallel)
+~/.claude/skills/computer-use/scripts/see
 
-# JSON output with full element data
-~/.claude/skills/computer-use/scripts/parse-image screenshot.png --json
+# Analyze specific app
+~/.claude/skills/computer-use/scripts/see --app Chrome
 
-# Save annotated image with numbered boxes
-~/.claude/skills/computer-use/scripts/parse-image screenshot.png --output annotated.png
+# Analyze existing image file (OmniParser only)
+~/.claude/skills/computer-use/scripts/see --image /path/to/screenshot.png
 
-# Both JSON and annotated image
-~/.claude/skills/computer-use/scripts/parse-image screenshot.png --json --output annotated.png
+# JSON output
+~/.claude/skills/computer-use/scripts/see --json
+
+# Verbose mode (shows timing)
+~/.claude/skills/computer-use/scripts/see -v
 ```
 
-### Performance
+### Click Elements
 
-- **First call:** ~12s (server boot + model load + inference)
-- **Subsequent calls:** ~3-4s (inference only, models warm)
-- **Server auto-shutdown:** 10 minutes idle
+```bash
+# Click Peekaboo element by ID
+~/.claude/skills/computer-use/scripts/see click p_elem_42
 
-### CLI Options
-
-```
-parse-image <image> [options]
-
-Arguments:
-  image              Path to screenshot (PNG, JPG)
-
-Options:
-  --json             Output structured JSON
-  --output, -o PATH  Save annotated image
-  --no-caption       Skip icon captioning (faster, ~1s)
-  --verbose, -v      Show detailed progress
-  --status           Check if server is running
-  --stop             Stop the background server
+# Click at specific coordinates
+~/.claude/skills/computer-use/scripts/see click --coords 500,300
 ```
 
-### Output Formats
+### Two Engines
 
-**Text (default):**
-```
-Text Box 0: Settings
-  bbox: [0.120, 0.050, 0.080, 0.020]
-  center_pixels: [192, 65]
-Icon Box 15: A gear icon
-  bbox: [0.450, 0.050, 0.030, 0.030]
-  center_pixels: [540, 108]
+| Engine | Prefix | Speed | Best For |
+|--------|--------|-------|----------|
+| **Peekaboo** | `p_*` | ~1s | Native macOS apps (uses Accessibility API) |
+| **OmniParser** | `o_*` | ~4s warm, ~14s cold | Web content, custom UI, images |
 
-Total elements: 47
-Inference time: 3420ms
-```
+When analyzing live screens, both run in parallel. When using `--image`, only OmniParser runs.
 
-**JSON (--json):**
+### Output Format
+
 ```json
 {
-  "elements": [
-    {
-      "id": 0,
-      "type": "text",
-      "content": "Settings",
-      "bbox": [0.12, 0.05, 0.08, 0.02],
-      "bbox_pixels": [144, 54, 96, 22],
-      "center": [0.16, 0.06],
-      "center_pixels": [192, 65],
-      "clickable": false
-    },
-    {
-      "id": 15,
-      "type": "icon",
-      "content": "A gear icon",
-      "bbox": [0.45, 0.05, 0.03, 0.03],
-      "bbox_pixels": [540, 54, 36, 32],
-      "center": [0.465, 0.066],
-      "center_pixels": [558, 71],
-      "clickable": true
-    }
-  ],
-  "annotated_image": "base64...",
-  "source_image": {"width": 1200, "height": 800},
-  "model": "omniparse",
-  "inference_time_ms": 3420,
-  "element_count": 47
+  "peekaboo": {
+    "elements": [
+      {"id": "p_elem_42", "label": "Settings", "role": "button", "is_actionable": true}
+    ],
+    "element_count": 450,
+    "elapsed_ms": 1200
+  },
+  "omniparser": {
+    "elements": [
+      {"id": "o_15", "content": "A gear icon", "type": "icon", "center_pixels": [558, 71], "clickable": true}
+    ],
+    "element_count": 196,
+    "elapsed_ms": 4200
+  }
 }
 ```
 
-### Coordinate System
-
-- **Origin:** Top-left corner (0, 0)
-- **bbox:** `[x, y, width, height]` as ratios (0.0-1.0)
-- **bbox_pixels:** Same in absolute pixels
-- **center_pixels:** Ready to use with click tools
-
 ---
 
-## macOS Native Apps
+## Platform-Specific Workflows
 
-For automating Finder, System Settings, or any native macOS app.
-
-### Workflow
+### macOS Native Apps
 
 ```bash
-# 1. Take screenshot
-screencapture -x /tmp/screen.png
+# 1. Analyze screen
+~/.claude/skills/computer-use/scripts/see --json > /tmp/screen.json
 
-# 2. Parse and save annotated image
-~/.claude/skills/computer-use/scripts/parse-image /tmp/screen.png --json --output /tmp/annotated.png > /tmp/elements.json
+# 2. Click Peekaboo element (preferred for native apps)
+~/.claude/skills/computer-use/scripts/see click p_elem_42
 
-# 3. Find target element (example: find "Settings")
-jq '.elements[] | select(.content | test("Settings"; "i"))' /tmp/elements.json
-
-# 4. Click using center_pixels (Retina: divide by 2)
-# If screen is Retina (3840x2160 logical = 1920x1080 physical):
-# center_pixels [558, 71] → cliclick coords [279, 35]
-cliclick c:279,35
-
-# 5. Verify by taking another screenshot
-screencapture -x /tmp/screen2.png
+# Or click by coordinates (Retina: divide OmniParser pixels by 2)
+~/.claude/skills/computer-use/scripts/see click --coords 279,35
 ```
 
-### Retina Display Handling
-
-macOS Retina displays have 2x scaling. Screenshots are full resolution but cliclick uses logical coordinates.
+### Chrome Browser
 
 ```bash
-# Get screen info
-system_profiler SPDisplaysDataType | grep Resolution
+# 1. Analyze
+~/.claude/skills/computer-use/scripts/see --app Chrome --json > /tmp/chrome.json
 
-# For Retina: divide center_pixels by 2
-# center_pixels: [558, 71] → cliclick: c:279,35
-```
-
-### Screenshot Options
-
-```bash
-# Full screen (no sound)
-screencapture -x /tmp/screen.png
-
-# Specific region (x,y,w,h in logical pixels)
-screencapture -x -R0,0,800,600 /tmp/region.png
-
-# Specific window (by window ID)
-screencapture -x -l$(osascript -e 'tell app "Finder" to id of window 1') /tmp/finder.png
-
-# Interactive window selection
-screencapture -x -w /tmp/window.png
-```
-
----
-
-## Chrome Browser
-
-For automating web pages in Chrome.
-
-### Workflow
-
-```bash
-# 1. Take Chrome screenshot
-~/.claude/skills/chrome-control/scripts/chrome screenshot /tmp/chrome.png
-
-# 2. Parse
-~/.claude/skills/computer-use/scripts/parse-image /tmp/chrome.png --json > /tmp/elements.json
-
-# 3. Find element
-jq '.elements[] | select(.content | test("Submit"; "i"))' /tmp/elements.json
-
-# 4. Click using Chrome extension (not cliclick!)
-# Chrome click uses viewport coordinates (no Retina adjustment needed)
+# 2. Click using Chrome extension (NOT cliclick)
 ~/.claude/skills/chrome-control/scripts/chrome click 558 71
 ```
 
-### Important: Use Chrome Extension for Clicks
+**Important:** Always use `chrome click` for Chrome, not `see click` or cliclick.
 
-**Never use cliclick for Chrome.** The Chrome extension handles:
-- Correct coordinate mapping
-- Shadow DOM elements
-- iframes
-- Viewport scrolling
+### iOS Simulator
 
 ```bash
-# CORRECT - use chrome CLI
-~/.claude/skills/chrome-control/scripts/chrome click 558 71
-
-# WRONG - don't use cliclick for Chrome
-cliclick c:279,35  # Will click wrong location
-```
-
----
-
-## iOS Simulator
-
-For automating iOS apps in Simulator.
-
-### Workflow
-
-```bash
-# 1. Take Simulator screenshot
+# 1. Capture and analyze
 xcrun simctl io booted screenshot /tmp/sim.png
+~/.claude/skills/computer-use/scripts/see --image /tmp/sim.png --json > /tmp/sim.json
 
-# 2. Parse
-~/.claude/skills/computer-use/scripts/parse-image /tmp/sim.png --json > /tmp/elements.json
-
-# 3. Find element
-jq '.elements[] | select(.content | test("Continue"; "i"))' /tmp/elements.json
-
-# 4. Tap using simctl
-# Simulator uses points, not pixels. Divide by device scale factor.
-# iPhone 15 Pro: 3x scale, so pixels / 3
-# center_pixels: [558, 1200] → tap: [186, 400]
+# 2. Tap (divide pixels by scale factor: 3x for iPhone 15, 2x for iPad)
 xcrun simctl io booted tap 186 400
 ```
 
-### Device Scale Factors
+---
 
-| Device | Scale | Conversion |
-|--------|-------|------------|
-| iPhone SE | 2x | pixels / 2 |
-| iPhone 15 | 3x | pixels / 3 |
-| iPhone 15 Pro Max | 3x | pixels / 3 |
-| iPad | 2x | pixels / 2 |
+## Coordinate Systems
 
-### Simulator Commands
-
-```bash
-# List booted simulators
-xcrun simctl list devices booted
-
-# Screenshot specific device
-xcrun simctl io "iPhone 15 Pro" screenshot /tmp/sim.png
-
-# Tap at coordinates (in points)
-xcrun simctl io booted tap 186 400
-
-# Type text
-xcrun simctl io booted input text "Hello"
-
-# Press button
-xcrun simctl io booted press home
-```
+| Platform | Coordinates | Conversion |
+|----------|-------------|------------|
+| macOS (cliclick) | Logical pixels | OmniParser pixels / 2 (Retina) |
+| Chrome | Viewport pixels | Use as-is with `chrome click` |
+| iOS Simulator | Points | OmniParser pixels / scale (2x or 3x) |
 
 ---
 
 ## Server Management
 
-The parse-image CLI manages a background server automatically. Manual control:
+OmniParser runs as a background daemon (models stay in RAM for fast inference):
 
 ```bash
-# Check server status
+# Check status
+~/.claude/skills/computer-use/scripts/see --status   # via see
+# or
 ~/.claude/skills/computer-use/scripts/parse-image --status
 
 # Stop server (reclaim ~2GB RAM)
 ~/.claude/skills/computer-use/scripts/parse-image --stop
 
-# View server logs
+# View logs
 tail -f /tmp/omniparser-server.log
 ```
 
 ### Server Details
 
 - **Port:** 8765 (localhost only)
-- **Auto-shutdown:** 10 minutes idle
-- **PID file:** /tmp/omniparser-server.pid
-- **Log file:** /tmp/omniparser-server.log
+- **Auto-shutdown:** 12 hours idle
 - **Memory:** ~2GB (YOLO + Florence-2 models)
+- **First call:** ~10-30s (server boot + model load)
+- **Subsequent calls:** ~4s (inference only)
+
+### Troubleshooting
+
+**Server hangs on startup:** If OmniParser hangs for 2+ minutes on startup, it may be stuck on a PaddleOCR connectivity check. The `parse-image` script sets `PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True` automatically to bypass this.
 
 ---
 
@@ -319,34 +182,26 @@ tail -f /tmp/omniparser-server.log
 ### Finding Elements
 
 ```bash
-# Search by exact text
-jq '.elements[] | select(.content == "Settings")' /tmp/elements.json
+# Get JSON output
+~/.claude/skills/computer-use/scripts/see --json > /tmp/screen.json
 
-# Search by partial text (case-insensitive)
-jq '.elements[] | select(.content | test("sett"; "i"))' /tmp/elements.json
+# Search OmniParser elements by text
+jq '.omniparser.elements[] | select(.content | test("Settings"; "i"))' /tmp/screen.json
 
-# Get only clickable elements
-jq '.elements[] | select(.clickable == true)' /tmp/elements.json
+# Get clickable elements only
+jq '.omniparser.elements[] | select(.clickable == true)' /tmp/screen.json
 
-# Get elements near a region (center_x between 0.4-0.6)
-jq '.elements[] | select(.center[0] > 0.4 and .center[0] < 0.6)' /tmp/elements.json
+# Search Peekaboo elements
+jq '.peekaboo.elements[] | select(.label | test("Settings"; "i"))' /tmp/screen.json
 ```
 
 ### Debugging
 
 ```bash
-# Verbose mode shows timing
-~/.claude/skills/computer-use/scripts/parse-image /tmp/screen.png -v
+# Verbose mode shows timing for each engine
+~/.claude/skills/computer-use/scripts/see -v
 
-# Save annotated image to see what was detected
-~/.claude/skills/computer-use/scripts/parse-image /tmp/screen.png --output /tmp/debug.png
-open /tmp/debug.png
-```
-
-### Performance Optimization
-
-```bash
-# Skip captioning for faster results (~1s vs ~4s)
-# Icons will be labeled "icon_0", "icon_1", etc.
-~/.claude/skills/computer-use/scripts/parse-image /tmp/screen.png --no-caption
+# Save annotated image
+~/.claude/skills/computer-use/scripts/see --output /tmp/debug/
+open /tmp/debug/omniparser_annotated.png
 ```

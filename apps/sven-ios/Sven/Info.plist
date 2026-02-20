@@ -15,7 +15,7 @@
     <key>CFBundleIdentifier</key>
     <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
     <key>CFBundleVersion</key>
-    <string>31</string>
+    <string>43</string>
     <key>CFBundleShortVersionString</key>
     <string>1.0</string>
     <key>CFBundlePackageType</key>
@@ -46,9 +46,13 @@
     </dict>
     <key>NSAppTransportSecurity</key>
     <dict>
+        <key>NSAllowsLocalNetworking</key>
+        <true/>
+        <key>NSAllowsArbitraryLoads</key>
+        <true/>
         <key>NSExceptionDomains</key>
         <dict>
-            <key>100.127.42.15</key>
+            <key>100.91.58.120</key>
             <dict>
                 <key>NSExceptionAllowsInsecureHTTPLoads</key>
                 <true/>

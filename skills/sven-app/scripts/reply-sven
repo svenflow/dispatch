@@ -28,6 +28,7 @@ from pathlib import Path
 DB_PATH = Path.home() / "dispatch" / "state" / "sven-messages.db"
 AUDIO_DIR = Path.home() / "dispatch" / "state" / "sven-audio"
 TTS_SCRIPT = Path.home() / ".claude" / "skills" / "tts" / "scripts" / "speak"
+PUSH_SCRIPT = Path.home() / ".claude" / "skills" / "sven-app" / "scripts" / "send-push"
 
 
 def init_db():
@@ -120,6 +121,24 @@ def main():
         print(f"Audio generated: {audio_path}")
     else:
         print("Audio generation failed, message stored without audio")
+
+    # Send push notification
+    if PUSH_SCRIPT.exists():
+        try:
+            # Truncate for preview
+            preview = message[:100] + "..." if len(message) > 100 else message
+            result = subprocess.run(
+                [str(PUSH_SCRIPT), message_id, preview],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            if result.returncode == 0:
+                print(f"Push notification sent")
+            else:
+                print(f"Push notification failed: {result.stderr}", file=sys.stderr)
+        except Exception as e:
+            print(f"Push notification error: {e}", file=sys.stderr)
 
 
 if __name__ == "__main__":

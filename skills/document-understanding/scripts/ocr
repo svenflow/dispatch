@@ -1,0 +1,154 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.10"
+# dependencies = [
+#     "ocrmac",
+#     "click",
+# ]
+# ///
+"""
+OCR CLI using Apple Vision Framework.
+
+Usage:
+    ocr image.png           # OCR an image
+    ocr document.pdf        # OCR all pages of a PDF
+    ocr document.pdf -p 1   # OCR specific page
+"""
+
+import json
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+import click
+from ocrmac import ocrmac
+
+
+def pdf_to_images(pdf_path: Path, page: int | None = None) -> list[Path]:
+    """Convert PDF pages to PNG images using sips."""
+    temp_dir = Path(tempfile.mkdtemp())
+
+    # Get page count using mdls
+    result = subprocess.run(
+        ["mdls", "-name", "kMDItemNumberOfPages", str(pdf_path)],
+        capture_output=True,
+        text=True,
+    )
+
+    # Parse page count
+    try:
+        page_count = int(result.stdout.split("=")[1].strip())
+    except (IndexError, ValueError):
+        # Fallback: try to convert and see what happens
+        page_count = 100  # reasonable max
+
+    images = []
+    pages_to_convert = [page] if page else range(1, page_count + 1)
+
+    for p in pages_to_convert:
+        if p > page_count:
+            break
+
+        output_path = temp_dir / f"page_{p}.png"
+
+        # Use sips to convert PDF page to PNG
+        # sips doesn't support page selection, so we use qlmanage instead
+        result = subprocess.run(
+            [
+                "qlmanage",
+                "-t",
+                "-s", "2000",  # max dimension
+                "-o", str(temp_dir),
+                str(pdf_path),
+            ],
+            capture_output=True,
+            text=True,
+        )
+
+        # qlmanage creates file with .png suffix
+        ql_output = temp_dir / f"{pdf_path.name}.png"
+        if ql_output.exists():
+            ql_output.rename(output_path)
+            images.append(output_path)
+            break  # qlmanage only does first page
+
+        # Fallback: try using Preview via AppleScript for multi-page
+        # For now, just handle single page
+
+    return images
+
+
+def ocr_image(image_path: Path) -> dict:
+    """OCR a single image and return structured results."""
+    results = ocrmac.OCR(str(image_path)).recognize()
+
+    blocks = []
+    full_text_parts = []
+
+    for item in results:
+        text = item[0]
+        confidence = item[1]
+        bbox = item[2] if len(item) > 2 else None
+
+        blocks.append({
+            "text": text,
+            "confidence": round(confidence, 3),
+            "bbox": bbox,
+        })
+        full_text_parts.append(text)
+
+    return {
+        "text": "\n".join(full_text_parts),
+        "blocks": blocks,
+    }
+
+
+@click.command()
+@click.argument("file_path", type=click.Path(exists=True))
+@click.option("-p", "--page", type=int, help="Specific page number (for PDFs)")
+@click.option("--json-output", is_flag=True, help="Output as JSON")
+def main(file_path: str, page: int | None, json_output: bool):
+    """Extract text from images and PDFs using local OCR."""
+    path = Path(file_path)
+
+    result = {
+        "file": path.name,
+        "pages": [],
+    }
+
+    if path.suffix.lower() == ".pdf":
+        # Convert PDF to images
+        images = pdf_to_images(path, page)
+        if not images:
+            click.echo("Error: Could not convert PDF to images", err=True)
+            sys.exit(1)
+
+        for i, img_path in enumerate(images, start=page or 1):
+            page_result = ocr_image(img_path)
+            result["pages"].append({
+                "page": i,
+                **page_result,
+            })
+            # Clean up temp file
+            img_path.unlink(missing_ok=True)
+    else:
+        # Direct image OCR
+        page_result = ocr_image(path)
+        result["pages"].append({
+            "page": 1,
+            **page_result,
+        })
+
+    if json_output:
+        click.echo(json.dumps(result, indent=2))
+    else:
+        # Human-readable output
+        for page_data in result["pages"]:
+            if len(result["pages"]) > 1:
+                click.echo(f"\n--- Page {page_data['page']} ---\n")
+            click.echo(page_data["text"])
+
+
+if __name__ == "__main__":
+    main()

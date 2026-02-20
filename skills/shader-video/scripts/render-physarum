@@ -1,0 +1,328 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "numpy",
+#     "pillow",
+#     "moderngl",
+# ]
+# ///
+"""
+Render Physarum (slime mold) simulation to video.
+
+Agents sense pheromones with forward sensors, turn toward highest concentration,
+move forward, and deposit pheromones. Creates organic vein-like networks.
+
+Based on Jeff Jones' 2010 paper on Physarum transport networks.
+"""
+
+import argparse
+import os
+import subprocess
+import sys
+import tempfile
+
+import moderngl
+import numpy as np
+from PIL import Image
+
+
+def render_physarum(
+    output_path: str,
+    width: int = 1080,
+    height: int = 1080,
+    fps: int = 30,
+    duration: float = 15.0,
+    iterations: int = 3,
+    num_agents: int = 500000,
+    sensor_angle: float = 0.5,  # radians
+    sensor_dist: float = 9.0,
+    turn_speed: float = 0.4,
+    move_speed: float = 1.0,
+    deposit: float = 1.0,
+    decay: float = 0.95,
+    hq: bool = True,
+):
+    """Render Physarum with agent-based simulation."""
+
+    ctx = moderngl.create_standalone_context()
+
+    # Trail map (pheromone field) - ping pong
+    trail_a = ctx.texture((width, height), 1, dtype='f4')
+    trail_b = ctx.texture((width, height), 1, dtype='f4')
+    fbo_trail_a = ctx.framebuffer(color_attachments=[trail_a])
+    fbo_trail_b = ctx.framebuffer(color_attachments=[trail_b])
+
+    # Agent positions and angles stored in texture
+    # We'll use a simpler approach: store agents in a buffer and update via compute-like fragment shader
+    # Actually, for fragment shader approach, we simulate on the trail map directly
+    # with a simplified model that still produces physarum-like patterns
+
+    tex_out = ctx.texture((width, height), 4)
+    fbo_out = ctx.framebuffer(color_attachments=[tex_out])
+
+    vertex_shader = '''
+    #version 330
+    in vec2 in_position;
+    out vec2 v_texcoord;
+    void main() {
+        gl_Position = vec4(in_position, 0.0, 1.0);
+        v_texcoord = in_position * 0.5 + 0.5;
+    }
+    '''
+
+    # Initialize with random sparse agents
+    init_shader = '''
+    #version 330
+    in vec2 v_texcoord;
+    out float fragColor;
+
+    float hash(vec2 p) {
+        vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+        p3 += dot(p3, p3.yzx + 33.33);
+        return fract((p3.x + p3.y) * p3.z);
+    }
+
+    void main() {
+        // Sparse random initialization - some cells start with pheromone
+        float h = hash(gl_FragCoord.xy);
+        float val = 0.0;
+
+        // Center cluster
+        vec2 center = gl_FragCoord.xy / vec2(1080.0) - 0.5;
+        if (length(center) < 0.3 && h > 0.95) {
+            val = 1.0;
+        }
+
+        // Random scattered points
+        if (h > 0.998) {
+            val = 1.0;
+        }
+
+        fragColor = val;
+    }
+    '''
+
+    # Physarum-inspired update: diffuse, decay, and grow based on local gradients
+    # This is a simplified continuous approximation of the agent-based model
+    # TUNED: much gentler growth to prevent divergence
+    sim_shader = f'''
+    #version 330
+    uniform vec2 u_resolution;
+    uniform sampler2D u_trail;
+    uniform float u_decay;
+    uniform float u_sensor_angle;
+    uniform float u_sensor_dist;
+    in vec2 v_texcoord;
+    out float fragColor;
+
+    float sampleTrail(vec2 uv) {{
+        return texture(u_trail, uv).r;
+    }}
+
+    void main() {{
+        vec2 texel = 1.0 / u_resolution;
+        vec2 uv = v_texcoord;
+
+        float current = sampleTrail(uv);
+
+        // 3x3 blur for diffusion (weighted - center matters more)
+        float sum = 0.0;
+        float weight = 0.0;
+        for (int dy = -1; dy <= 1; dy++) {{
+            for (int dx = -1; dx <= 1; dx++) {{
+                vec2 offset = vec2(float(dx), float(dy)) * texel;
+                float w = (dx == 0 && dy == 0) ? 0.4 : ((abs(dx) + abs(dy) == 1) ? 0.1 : 0.05);
+                sum += sampleTrail(uv + offset) * w;
+                weight += w;
+            }}
+        }}
+        float diffused = sum / weight;
+
+        // Compute gradient to simulate agent movement
+        float gx = sampleTrail(uv + vec2(texel.x, 0.0)) - sampleTrail(uv - vec2(texel.x, 0.0));
+        float gy = sampleTrail(uv + vec2(0.0, texel.y)) - sampleTrail(uv - vec2(0.0, texel.y));
+        float gradMag = length(vec2(gx, gy));
+
+        // Growth term: MUCH gentler - only slight reinforcement at boundaries
+        float growth = 0.0;
+
+        // Only grow in the "sweet spot" concentration range
+        float sweetSpot = smoothstep(0.05, 0.2, diffused) * smoothstep(0.6, 0.3, diffused);
+
+        if (sweetSpot > 0.0) {{
+            // Sample in gradient direction (like agents moving toward pheromone)
+            vec2 gradDir = normalize(vec2(gx, gy) + 0.001);
+            float ahead = sampleTrail(uv + gradDir * texel * u_sensor_dist);
+
+            // Gentle deposit if moving toward higher concentration
+            if (ahead > current * 1.1) {{
+                growth = 0.02 * sweetSpot;  // Much gentler than before
+            }}
+        }}
+
+        // Very subtle edge enhancement
+        growth += gradMag * 0.05 * sweetSpot;
+
+        // Apply decay and growth - decay dominates
+        float result = diffused * u_decay + growth * (1.0 - u_decay);
+
+        // Rare random activation to seed new growth points
+        float hash = fract(sin(dot(gl_FragCoord.xy + vec2(float(int(u_decay * 1000.0))), vec2(12.9898, 78.233))) * 43758.5453);
+        if (hash > 0.99995 && result < 0.05) {{
+            result = 0.3;
+        }}
+
+        fragColor = clamp(result, 0.0, 1.0);
+    }}
+    '''
+
+    # Display shader
+    display_shader = '''
+    #version 330
+    uniform sampler2D u_trail;
+    in vec2 v_texcoord;
+    out vec4 fragColor;
+
+    void main() {
+        float trail = texture(u_trail, v_texcoord).r;
+
+        // Golden/amber color scheme for organic look
+        vec3 bgColor = vec3(0.02, 0.02, 0.03);
+        vec3 trailColor = vec3(1.0, 0.8, 0.3);  // Golden yellow
+        vec3 brightColor = vec3(1.0, 0.95, 0.8);  // Bright core
+
+        vec3 color = bgColor;
+        if (trail > 0.01) {
+            color = mix(bgColor, trailColor, smoothstep(0.0, 0.3, trail));
+            color = mix(color, brightColor, smoothstep(0.5, 0.9, trail));
+        }
+
+        // Add glow
+        color += trailColor * trail * 0.3;
+
+        // Vignette
+        float vignette = 1.0 - length(v_texcoord - 0.5) * 0.4;
+        color *= vignette;
+
+        fragColor = vec4(color, 1.0);
+    }
+    '''
+
+    try:
+        prog_init = ctx.program(vertex_shader=vertex_shader, fragment_shader=init_shader)
+        prog_sim = ctx.program(vertex_shader=vertex_shader, fragment_shader=sim_shader)
+        prog_display = ctx.program(vertex_shader=vertex_shader, fragment_shader=display_shader)
+    except Exception as e:
+        print(f"Shader compilation error:\n{e}", file=sys.stderr)
+        sys.exit(1)
+
+    vertices = np.array([-1.0, -1.0, 1.0, -1.0, -1.0, 1.0, 1.0, 1.0], dtype='f4')
+    vbo = ctx.buffer(vertices)
+    vao_init = ctx.simple_vertex_array(prog_init, vbo, 'in_position')
+    vao_sim = ctx.simple_vertex_array(prog_sim, vbo, 'in_position')
+    vao_display = ctx.simple_vertex_array(prog_display, vbo, 'in_position')
+
+    prog_sim['u_resolution'].value = (float(width), float(height))
+    prog_sim['u_decay'].value = decay
+    if 'u_sensor_angle' in prog_sim:
+        prog_sim['u_sensor_angle'].value = sensor_angle
+    if 'u_sensor_dist' in prog_sim:
+        prog_sim['u_sensor_dist'].value = sensor_dist
+
+    # Initialize
+    fbo_trail_a.use()
+    vao_init.render(moderngl.TRIANGLE_STRIP)
+
+    trail_a.use(0)
+    trail_b.use(1)
+    prog_sim['u_trail'] = 0
+    prog_display['u_trail'] = 0
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        num_frames = int(fps * duration)
+        print(f"Rendering {num_frames} frames at {width}x{height}...")
+        print(f"Physarum params: decay={decay}, sensor_dist={sensor_dist}")
+
+        current_fbo = fbo_trail_a
+        current_tex = trail_a
+        other_fbo = fbo_trail_b
+        other_tex = trail_b
+
+        for frame_idx in range(num_frames):
+            for _ in range(iterations):
+                current_tex.use(0)
+                other_fbo.use()
+                vao_sim.render(moderngl.TRIANGLE_STRIP)
+
+                current_fbo, other_fbo = other_fbo, current_fbo
+                current_tex, other_tex = other_tex, current_tex
+
+            current_tex.use(0)
+            fbo_out.use()
+            ctx.clear(0.0, 0.0, 0.0, 1.0)
+            vao_display.render(moderngl.TRIANGLE_STRIP)
+
+            data = fbo_out.read(components=4)
+            img = Image.frombytes('RGBA', (width, height), data)
+            img = img.transpose(Image.FLIP_TOP_BOTTOM)
+
+            frame_path = os.path.join(tmpdir, f'frame_{frame_idx:04d}.png')
+            img.save(frame_path)
+
+            if (frame_idx + 1) % fps == 0:
+                print(f"  {frame_idx + 1}/{num_frames} frames ({(frame_idx + 1) / fps:.0f}s)")
+
+        print("Encoding video with ffmpeg...")
+
+        is_mov = output_path.lower().endswith('.mov')
+        if hq:
+            ffmpeg_cmd = [
+                'ffmpeg', '-y', '-framerate', str(fps),
+                '-i', os.path.join(tmpdir, 'frame_%04d.png'),
+                '-c:v', 'libx265', '-b:v', '50M', '-maxrate', '60M', '-bufsize', '120M',
+                '-preset', 'slow', '-tag:v', 'hvc1', '-pix_fmt', 'yuv420p', '-movflags', '+faststart',
+            ]
+            if is_mov:
+                ffmpeg_cmd.extend(['-brand', 'qt'])
+            ffmpeg_cmd.append(output_path)
+        else:
+            ffmpeg_cmd = [
+                'ffmpeg', '-y', '-framerate', str(fps),
+                '-i', os.path.join(tmpdir, 'frame_%04d.png'),
+                '-c:v', 'libx265', '-crf', '26', '-preset', 'fast',
+                '-tag:v', 'hvc1', '-pix_fmt', 'yuv420p', output_path
+            ]
+
+        result = subprocess.run(ffmpeg_cmd, capture_output=True)
+        if result.returncode != 0:
+            print(f"ffmpeg error:\n{result.stderr.decode()}", file=sys.stderr)
+            sys.exit(1)
+
+        file_size = os.path.getsize(output_path)
+        print(f"Done! Output: {output_path} ({file_size / 1024 / 1024:.1f} MB)")
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Render Physarum slime mold simulation')
+    parser.add_argument('output', help='Output video path')
+    parser.add_argument('--width', type=int, default=1080)
+    parser.add_argument('--height', type=int, default=1080)
+    parser.add_argument('--fps', type=int, default=30)
+    parser.add_argument('--duration', type=float, default=15.0)
+    parser.add_argument('--iterations', type=int, default=3)
+    parser.add_argument('--decay', type=float, default=0.95)
+    parser.add_argument('--sensor-dist', type=float, default=9.0)
+    parser.add_argument('--fast', action='store_true')
+
+    args = parser.parse_args()
+
+    render_physarum(
+        args.output, args.width, args.height, args.fps, args.duration,
+        args.iterations, decay=args.decay, sensor_dist=args.sensor_dist,
+        hq=not args.fast,
+    )
+
+
+if __name__ == '__main__':
+    main()

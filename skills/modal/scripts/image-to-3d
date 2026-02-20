@@ -1,0 +1,38 @@
+#!/bin/bash
+# CLI wrapper for image-to-3d Modal function
+# Usage: image-to-3d <input.jpg> [output.glb]
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+APP_PATH="$SCRIPT_DIR/image_to_3d_app.py"
+
+INPUT_PATH="$1"
+OUTPUT_PATH="$2"
+
+if [ -z "$INPUT_PATH" ]; then
+    echo "Usage: image-to-3d <input.jpg> [output.glb]"
+    echo ""
+    echo "Generate a 3D model from an image using Modal + TripoSR."
+    echo ""
+    echo "Arguments:"
+    echo "  input.jpg   Input image (PNG/JPG)"
+    echo "  output.glb  Output 3D model (default: input_3d.glb)"
+    exit 1
+fi
+
+if [ ! -f "$INPUT_PATH" ]; then
+    echo "Error: Input file not found: $INPUT_PATH"
+    exit 1
+fi
+
+# Build the command
+CMD="uv run modal run $APP_PATH --input-path \"$INPUT_PATH\""
+
+if [ -n "$OUTPUT_PATH" ]; then
+    CMD="$CMD --output-path \"$OUTPUT_PATH\""
+fi
+
+# Run it
+echo "Running image-to-3d on Modal..."
+eval $CMD

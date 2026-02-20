@@ -212,11 +212,11 @@ export class SearchEngine {
   }
 
   /**
-   * Get cache key for reranking (includes chunk index for cache differentiation)
+   * Get cache key for reranking.
+   * Uses hash of the actual text content to automatically invalidate when content changes.
    */
-  private getRerankCacheKey(query: string, file: string, chunkIdx?: number): string {
-    const chunkSuffix = chunkIdx !== undefined ? `:${chunkIdx}` : "";
-    return `rerank:${hashContent(query)}:${hashContent(file)}${chunkSuffix}`;
+  private getRerankCacheKey(query: string, text: string): string {
+    return `rerank:${hashContent(query)}:${hashContent(text)}`;
   }
 
   /**
@@ -297,9 +297,11 @@ export class SearchEngine {
     const cachedScores = new Map<string, number>();
     const uncachedDocs: { file: string; text: string }[] = [];
 
-    // Check cache for each doc
+    // Check cache for each doc (use text hash to auto-invalidate on content change)
+    const textMap = new Map<string, string>(); // file -> text for cache key lookup
     for (const doc of docs) {
-      const cacheKey = this.getRerankCacheKey(query, doc.file);
+      textMap.set(doc.file, doc.text);
+      const cacheKey = this.getRerankCacheKey(query, doc.text);
       const cached = this.store.getCached(cacheKey);
       if (cached !== null) {
         cachedScores.set(doc.file, parseFloat(cached));
@@ -312,9 +314,10 @@ export class SearchEngine {
     if (uncachedDocs.length > 0) {
       const reranked = await this.rerankFn(query, uncachedDocs);
 
-      // Cache the results
+      // Cache the results (key by text hash, not file path)
       for (const result of reranked) {
-        const cacheKey = this.getRerankCacheKey(query, result.file);
+        const text = textMap.get(result.file) || "";
+        const cacheKey = this.getRerankCacheKey(query, text);
         this.store.setCached(cacheKey, result.score.toString());
         cachedScores.set(result.file, result.score);
       }

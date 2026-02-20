@@ -165,10 +165,16 @@ uvicorn sven_api:app --host 0.0.0.0 --port 8080
 2. [x] Deploy to TestFlight
 3. [x] Set up Tailscale between phone and mac
 4. [x] Fix transcript overwrite bug - switched to Moonshine, accumulates lines
-5. [ ] Create API server on mac (port 8080)
+5. [x] Create API server on mac (port 8080) - ~/dispatch/services/sven-api/server.py
 6. [ ] Add App Attest to iOS app
 7. [ ] Update iOS app to POST to mac
 8. [ ] Test end-to-end flow
+9. [x] Add push notifications (2026-02-11)
+   - APNs key created: X3H9DPHLAM
+   - iOS app: AppDelegate.swift, SvenApp.swift updated
+   - Backend: /register-apns endpoint added
+   - Push script: ~/.claude/skills/sven-app/scripts/send-push
+   - reply-sven now triggers push after storing message
 
 ## Moonshine Integration (2026-02-09)
 

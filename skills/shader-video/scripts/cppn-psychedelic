@@ -1,0 +1,263 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "torch",
+#     "pillow",
+#     "numpy",
+# ]
+# ///
+"""
+Psychedelic CPPN Effects - Coordinate warping and trippy animations.
+
+Usage:
+    cppn-psychedelic <model.pt> <output.mp4> [--effect tunnel|swirl|kaleidoscope|wave|all]
+"""
+
+import argparse
+import math
+import subprocess
+import tempfile
+from pathlib import Path
+
+import numpy as np
+import torch
+import torch.nn as nn
+from PIL import Image
+
+
+class SIREN(nn.Module):
+    """SIREN network matching the training architecture."""
+
+    def __init__(self, hidden_features=256, hidden_layers=8, latent_dim=8, omega_0=30.0):
+        super().__init__()
+        self.latent_dim = latent_dim
+        self.omega_0 = omega_0
+        self.input_layer = nn.Linear(3 + latent_dim, hidden_features)
+        self.hidden_layers = nn.ModuleList([
+            nn.Linear(hidden_features, hidden_features)
+            for _ in range(hidden_layers)
+        ])
+        self.output_layer = nn.Linear(hidden_features, 3)
+
+    def forward(self, coords, latent):
+        if latent.dim() == 1:
+            latent = latent.unsqueeze(0).expand(coords.shape[0], -1)
+        x = torch.cat([coords, latent], dim=-1)
+        x = torch.sin(self.omega_0 * self.input_layer(x))
+        for layer in self.hidden_layers:
+            x = torch.sin(self.omega_0 * layer(x))
+        x = self.output_layer(x)
+        x = torch.sigmoid(x)
+        return x
+
+
+def load_model(model_path):
+    """Load trained CPPN model."""
+    checkpoint = torch.load(model_path, map_location='cpu', weights_only=False)
+    config = checkpoint['config']
+
+    model = SIREN(
+        hidden_features=config['hidden'],
+        hidden_layers=config['layers'],
+        latent_dim=config['latent_dim']
+    )
+    model.load_state_dict(checkpoint['model_state'])
+    model.eval()
+
+    return model, checkpoint['base_latent'], config
+
+
+def create_warped_coords(width, height, time, effect='tunnel'):
+    """Create coordinate grid with psychedelic warping."""
+    y = torch.linspace(-1, 1, height)
+    x = torch.linspace(-1, 1, width)
+    yy, xx = torch.meshgrid(y, x, indexing='ij')
+
+    # Convert to polar
+    r = torch.sqrt(xx**2 + yy**2)
+    theta = torch.atan2(yy, xx)
+
+    if effect == 'tunnel':
+        # Infinite tunnel zoom
+        r_warp = 1.0 / (r + 0.1) - time * 2.0
+        theta_warp = theta + time * 0.5 + r * 2.0  # Spiral twist
+
+        # Back to cartesian with warped coords
+        xx_out = torch.cos(theta_warp) * (r_warp % 2.0 - 1.0)
+        yy_out = torch.sin(theta_warp) * (r_warp % 2.0 - 1.0)
+        rr_out = torch.sqrt(xx_out**2 + yy_out**2)
+
+    elif effect == 'swirl':
+        # Swirling vortex
+        swirl_amount = 3.0 * (1.0 - r) * math.sin(time * 2.0)
+        theta_warp = theta + swirl_amount
+
+        xx_out = torch.cos(theta_warp) * r
+        yy_out = torch.sin(theta_warp) * r
+        rr_out = r
+
+    elif effect == 'kaleidoscope':
+        # Kaleidoscope with rotation
+        num_segments = 8
+        theta_warp = theta + time * 0.5
+        theta_segment = torch.fmod(theta_warp, 2 * math.pi / num_segments)
+        theta_mirror = torch.abs(theta_segment - math.pi / num_segments)
+
+        # Pulsing zoom
+        r_warp = r * (1.0 + 0.3 * math.sin(time * 3.0))
+
+        xx_out = torch.cos(theta_mirror) * r_warp
+        yy_out = torch.sin(theta_mirror) * r_warp
+        rr_out = r_warp
+
+    elif effect == 'wave':
+        # Wavy distortion
+        wave_x = 0.1 * torch.sin(yy * 10.0 + time * 3.0)
+        wave_y = 0.1 * torch.cos(xx * 10.0 + time * 2.0)
+
+        xx_out = xx + wave_x
+        yy_out = yy + wave_y
+        rr_out = torch.sqrt(xx_out**2 + yy_out**2)
+
+    elif effect == 'fractal':
+        # Fractal zoom with rotation
+        scale = 1.0 + 0.5 * math.sin(time)
+        rot = time * 0.3
+
+        # Rotate
+        xx_rot = xx * math.cos(rot) - yy * math.sin(rot)
+        yy_rot = xx * math.sin(rot) + yy * math.cos(rot)
+
+        # Scale and tile
+        xx_out = torch.fmod(xx_rot * scale + 10, 2.0) - 1.0
+        yy_out = torch.fmod(yy_rot * scale + 10, 2.0) - 1.0
+        rr_out = torch.sqrt(xx_out**2 + yy_out**2)
+
+    else:  # 'all' - combine effects
+        # Tunnel base
+        r_warp = 1.0 / (r + 0.2) - time * 1.5
+
+        # Add kaleidoscope
+        num_segments = 6
+        theta_warp = theta + time * 0.3
+        theta_segment = torch.fmod(theta_warp + 10, 2 * math.pi / num_segments)
+        theta_mirror = torch.abs(theta_segment - math.pi / num_segments)
+
+        # Add wave
+        wave = 0.05 * torch.sin(r_warp * 20.0 + time * 4.0)
+        theta_final = theta_mirror + wave
+
+        # Pulsing
+        r_final = (r_warp % 2.0 - 1.0) * (1.0 + 0.2 * math.sin(time * 2.0))
+
+        xx_out = torch.cos(theta_final) * r_final
+        yy_out = torch.sin(theta_final) * r_final
+        rr_out = torch.sqrt(xx_out**2 + yy_out**2)
+
+    coords = torch.stack([xx_out, yy_out, rr_out], dim=-1)
+    return coords.reshape(-1, 3)
+
+
+def render_frame(model, coords, latent, width, height):
+    """Render single frame."""
+    with torch.no_grad():
+        output = model(coords, latent)
+        img = output.reshape(height, width, 3).numpy()
+        img = (img * 255).clip(0, 255).astype(np.uint8)
+        return Image.fromarray(img)
+
+
+def hue_rotate(img_array, angle):
+    """Rotate hue of RGB image."""
+    # Convert to HSV-ish space for hue rotation
+    r, g, b = img_array[..., 0], img_array[..., 1], img_array[..., 2]
+
+    # Simple hue rotation via color matrix
+    cos_a = np.cos(angle)
+    sin_a = np.sin(angle)
+
+    # Rotation matrix for hue
+    r_out = r * (0.299 + 0.701 * cos_a + 0.168 * sin_a) + \
+            g * (0.587 - 0.587 * cos_a + 0.330 * sin_a) + \
+            b * (0.114 - 0.114 * cos_a - 0.497 * sin_a)
+
+    g_out = r * (0.299 - 0.299 * cos_a - 0.328 * sin_a) + \
+            g * (0.587 + 0.413 * cos_a + 0.035 * sin_a) + \
+            b * (0.114 - 0.114 * cos_a + 0.292 * sin_a)
+
+    b_out = r * (0.299 - 0.300 * cos_a + 1.250 * sin_a) + \
+            g * (0.587 - 0.588 * cos_a - 1.050 * sin_a) + \
+            b * (0.114 + 0.886 * cos_a - 0.203 * sin_a)
+
+    result = np.stack([r_out, g_out, b_out], axis=-1)
+    return np.clip(result, 0, 255).astype(np.uint8)
+
+
+def create_psychedelic_video(model_path, output_path, effect='all', duration=6, fps=30, size=512):
+    """Create psychedelic animation."""
+
+    print(f"Loading model: {model_path}")
+    model, base_latent, config = load_model(model_path)
+
+    # Use square output
+    width = height = size
+
+    num_frames = duration * fps
+    print(f"Rendering {num_frames} frames with effect: {effect}")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        for i in range(num_frames):
+            t = i / fps  # Time in seconds
+
+            # Create warped coordinates
+            coords = create_warped_coords(width, height, t, effect)
+
+            # Slight latent variation for extra trippiness
+            latent_noise = torch.randn_like(base_latent) * 0.05 * math.sin(t * 2)
+            latent = base_latent + latent_noise
+
+            frame = render_frame(model, coords, latent, width, height)
+
+            # Add hue rotation for extra psychedelia
+            frame_array = np.array(frame)
+            frame_array = hue_rotate(frame_array, t * 0.5)
+            frame = Image.fromarray(frame_array)
+
+            frame.save(f"{tmpdir}/frame_{i:04d}.png")
+
+            if (i + 1) % fps == 0:
+                print(f"  {i+1}/{num_frames} frames ({(i+1)//fps}s)")
+
+        print("Encoding video...")
+        subprocess.run([
+            'ffmpeg', '-y', '-framerate', str(fps),
+            '-i', f'{tmpdir}/frame_%04d.png',
+            '-c:v', 'libx265', '-preset', 'medium',
+            '-crf', '24', '-tag:v', 'hvc1',
+            '-pix_fmt', 'yuv420p',
+            output_path
+        ], check=True, capture_output=True)
+
+    size_kb = Path(output_path).stat().st_size / 1024
+    print(f"Done! Output: {output_path} ({size_kb:.1f} KB)")
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Psychedelic CPPN Effects')
+    parser.add_argument('model', help='Trained CPPN model (.pt)')
+    parser.add_argument('output', help='Output video (.mp4)')
+    parser.add_argument('--effect', choices=['tunnel', 'swirl', 'kaleidoscope', 'wave', 'fractal', 'all'],
+                        default='all', help='Effect type')
+    parser.add_argument('--duration', type=int, default=6)
+    parser.add_argument('--fps', type=int, default=30)
+    parser.add_argument('--size', type=int, default=512)
+
+    args = parser.parse_args()
+
+    create_psychedelic_video(args.model, args.output, args.effect,
+                             args.duration, args.fps, args.size)
+
+
+if __name__ == '__main__':
+    main()

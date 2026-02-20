@@ -54,7 +54,7 @@ server_state = {
 }
 
 # Config
-IDLE_TIMEOUT = 600  # 10 minutes default
+IDLE_TIMEOUT = 43200  # 12 hours default
 idle_timer = None
 idle_lock = threading.Lock()
 

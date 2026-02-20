@@ -140,12 +140,16 @@ def start_server(verbose: bool = False) -> bool:
         log(f"Starting server from {SERVER_SCRIPT}...", verbose)
 
         # Start server with nohup
+        # Set PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK to bypass PaddleOCR connectivity check
+        env = os.environ.copy()
+        env["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "True"
         with open(LOG_FILE, "w") as log_f:
             subprocess.Popen(
                 ["uv", "run", str(SERVER_SCRIPT), "--port", str(SERVER_PORT)],
                 stdout=log_f,
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
+                env=env,
             )
 
         # Wait for server to be ready

@@ -172,40 +172,67 @@ Shared iCloud notes require accepting invitations before they're accessible via 
 
 ### Accepting Shared Note Invitations
 
-**Correct workflow:**
+**The "Join Note" button is rendered in a web view** - not accessible via axctl or System Events keyboard navigation. You must use **cliclick with pixel coordinates**.
 
-1. **Open Notes app** - `open -a Notes`
-2. **Click "Shared" folder** in the left sidebar
-3. **Look for "Invitations" section** - Pending invitations appear here
-4. **Click on an invitation** - Select it to view details
-5. **Click "View Note" button** - Use keyboard navigation (Tab + Enter) to activate it
-6. **Note appears** - After accepting, the note becomes accessible via AppleScript
+**Workflow:**
 
-### Example: Accepting Invitations
+1. **Open Notes app and click Shared folder**
+2. **Click on the pending invitation** in the notes list
+3. **Find and click the "Join Note" button** using pixel detection (it's orange/gold colored)
+4. **After joining**, the note becomes accessible via AppleScript
+
+### Example: Accepting Invitations with Pixel Detection
 
 ```bash
-# 1. Open Notes app
+# 1. Open Notes and navigate to Shared folder
 osascript -e 'tell application "Notes" to activate'
-
-# 2. Wait for Notes to open
 sleep 1
 
-# 3. Use keyboard to navigate to and accept the invitation
-# Tab to the "View Note" button and press Enter
-osascript -e 'tell application "System Events" to keystroke tab'
-sleep 0.5
-osascript -e 'tell application "System Events" to keystroke tab'
-sleep 0.5
-osascript -e 'tell application "System Events" to keystroke return'
+# 2. Click on Shared folder (adjust coords based on window position)
+# Get window bounds first:
+osascript -e 'tell application "Notes" to get bounds of front window'
+# Returns: left, top, right, bottom in logical coords
 
-# 4. Wait for sync
+# 3. Click on the invitation in the list, then find the Join Note button
+# Take screenshot and find orange button:
+screencapture -x /tmp/notes_screen.png
+
+# 4. Use Python to find the orange "Join Note" button
+uv run --with pillow python3 << 'EOF'
+from PIL import Image
+img = Image.open('/tmp/notes_screen.png')
+# Search for orange pixels (R>220, 140<G<200, B<80) in the right pane
+orange_pixels = []
+for y in range(500, 1500):
+    for x in range(2000, 2800):  # Right pane area
+        r, g, b = img.getpixel((x, y))[:3]
+        if r > 220 and 140 < g < 200 and b < 80:
+            orange_pixels.append((x, y))
+if orange_pixels:
+    center_x = (min(p[0] for p in orange_pixels) + max(p[0] for p in orange_pixels)) // 2
+    center_y = (min(p[1] for p in orange_pixels) + max(p[1] for p in orange_pixels)) // 2
+    print(f"cliclick c:{center_x//2},{center_y//2}")
+EOF
+
+# 5. Click the button with cliclick using the coordinates from above
+cliclick c:1214,633  # Example coords - use actual values from detection
 sleep 2
 
-# 5. Now the note is accessible via AppleScript
+# 6. Now the note is accessible
 osascript -e 'tell application "Notes" to get name of every note'
 ```
 
-### Reading Shared Notes
+### Reading Note Content via Accessibility API
+
+After a note is open in Notes, you can read its content via axctl (faster than AppleScript for large notes):
+
+```bash
+# Read current note content from the UI
+~/dispatch/bin/axctl tree "Notes" 2>&1 | grep -A 5 "AXTextArea"
+# Returns: AXTextArea AXValue='Note content here...'
+```
+
+### Reading Shared Notes via AppleScript
 
 ```bash
 # List all notes (including newly accepted shared notes)
@@ -215,13 +242,35 @@ osascript -e 'tell application "Notes" to get name of every note'
 osascript -e 'tell application "Notes" to get body of note "note name"'
 ```
 
+### SQLite Database Access
+
+Notes are stored in a SQLite database - useful for querying metadata or finding pending invitations:
+
+```bash
+# Database location
+~/Library/Group\ Containers/group.com.apple.notes/NoteStore.sqlite
+
+# List pending invitations (shared notes not yet accepted)
+sqlite3 ~/Library/Group\ Containers/group.com.apple.notes/NoteStore.sqlite "
+SELECT ZTITLE, ZSNIPPET, ZSHAREURL FROM ZICINVITATION;
+"
+
+# List all note titles
+sqlite3 ~/Library/Group\ Containers/group.com.apple.notes/NoteStore.sqlite "
+SELECT ZTITLE, ZTITLE1 FROM ZICCLOUDSYNCINGOBJECT
+WHERE ZTITLE IS NOT NULL OR ZTITLE1 IS NOT NULL;
+"
+```
+
+**Note:** The note body (ZDATA column in ZICNOTEDATA) is stored as compressed binary/protobuf, not plain text.
+
 ### Important Notes
 
-- **"View Note" button is not accessible** - cliclick and System Events cannot find it (it's in a web view)
-- **Keyboard navigation works** - Tab + Enter successfully activates the button
-- **No iCloud re-authentication needed** - If already signed into iCloud on the Mac, no password prompt appears
+- **"Join Note" button is NOT accessible** - It's in a web view, so axctl/System Events can't see it
+- **Keyboard navigation does NOT work** - Tab+Enter won't reach the button
+- **Use pixel detection + cliclick** - Find the orange button by color, click with coordinates
 - **Invitations vs. Accepted notes** - The "Shared" folder count includes pending invitations, but AppleScript only sees accepted notes
-- **Manual navigation required** - You must navigate Notes UI to the Shared folder → Invitations section first
+- **SQLite shows invitation metadata** - ZICINVITATION table has title, snippet, and share URL for pending invitations
 
 ## Limitations
 

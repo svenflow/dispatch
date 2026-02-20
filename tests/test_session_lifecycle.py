@@ -332,3 +332,197 @@ class TestIdleSessionReaping:
         session.last_activity = datetime.now() - timedelta(hours=5)
         killed = await sdk_backend.check_idle_sessions(2.0)
         assert len(killed) == 0
+
+
+@pytest.mark.asyncio
+class TestZombieSessionCleanup:
+    """Test zombie session cleanup on session creation.
+
+    Regression tests for bug: buffer overflow crash leaves orphan subprocess
+    (receiver dies but subprocess keeps running). When creating a new session,
+    we must kill the old subprocess to prevent duplicates.
+    """
+
+    async def test_zombie_cleanup_on_create_session(self, sdk_backend):
+        """Creating a session when dead session exists should kill the zombie subprocess."""
+        # Create first session
+        s1 = await sdk_backend.create_session(
+            "Test User", "test:+15555551234", "admin", source="test"
+        )
+        assert s1.is_alive()
+
+        # Simulate receiver crash: session is in dict, but running=False
+        # (real scenario: buffer overflow kills receiver, subprocess orphaned)
+        s1.running = False
+        # Keep session in dict to simulate the zombie state
+        assert "test:+15555551234" in sdk_backend.sessions
+
+        # Track if _kill_subprocess was called
+        kill_called = False
+        original_kill = s1._kill_subprocess
+
+        async def track_kill():
+            nonlocal kill_called
+            kill_called = True
+            await original_kill()
+
+        s1._kill_subprocess = track_kill
+
+        # Create new session for same chat_id - should clean up zombie
+        s2 = await sdk_backend.create_session(
+            "Test User", "test:+15555551234", "admin", source="test"
+        )
+
+        # Verify zombie was killed and new session created
+        assert kill_called, "Zombie subprocess should have been killed"
+        assert s2.is_alive()
+        assert s2 is not s1, "Should create new session, not return zombie"
+        assert sdk_backend.sessions["test:+15555551234"] is s2
+
+    async def test_zombie_cleanup_on_inject_message(self, sdk_backend):
+        """inject_message creating session should clean up zombie first."""
+        # Create and zombify a session
+        s1 = await sdk_backend.create_session(
+            "Test User", "test:+15555551234", "admin", source="test"
+        )
+        s1.running = False
+
+        # Track kill
+        kill_called = False
+        original_kill = s1._kill_subprocess
+
+        async def track_kill():
+            nonlocal kill_called
+            kill_called = True
+            await original_kill()
+
+        s1._kill_subprocess = track_kill
+
+        # inject_message should trigger zombie cleanup via _create_session_unlocked
+        result = await sdk_backend.inject_message(
+            "Test User", "+15555551234", "hello",
+            tier="admin", source="test",
+        )
+
+        assert result is True
+        assert kill_called, "Zombie subprocess should have been killed during inject"
+
+    async def test_zombie_cleanup_on_create_group_session(self, sdk_backend):
+        """Group session creation should clean up zombie first."""
+        chat_id = "abc123def456"
+
+        # Create and zombify a group session
+        s1 = await sdk_backend.create_group_session(chat_id, "Test Group", source="test")
+        s1.running = False
+
+        kill_called = False
+        original_kill = s1._kill_subprocess
+
+        async def track_kill():
+            nonlocal kill_called
+            kill_called = True
+            await original_kill()
+
+        s1._kill_subprocess = track_kill
+
+        # Create new group session - should clean up zombie
+        s2 = await sdk_backend.create_group_session(chat_id, "Test Group", source="test")
+
+        assert kill_called, "Zombie subprocess should have been killed"
+        assert s2.is_alive()
+        assert s2 is not s1
+
+    async def test_zombie_cleanup_on_create_background_session(self, sdk_backend):
+        """Background session creation should clean up zombie first."""
+        # Create and zombify a background session
+        s1 = await sdk_backend.create_background_session(
+            "Test User", "test:+15555551234", "admin", source="test"
+        )
+        bg_id = "test:+15555551234-bg"
+        assert bg_id in sdk_backend.sessions
+        s1.running = False
+
+        kill_called = False
+        original_kill = s1._kill_subprocess
+
+        async def track_kill():
+            nonlocal kill_called
+            kill_called = True
+            await original_kill()
+
+        s1._kill_subprocess = track_kill
+
+        # Create new bg session - should clean up zombie
+        s2 = await sdk_backend.create_background_session(
+            "Test User", "test:+15555551234", "admin", source="test"
+        )
+
+        assert kill_called, "Zombie subprocess should have been killed"
+        assert s2.is_alive()
+        assert s2 is not s1
+
+    async def test_zombie_cleanup_on_create_master_session(self, sdk_backend):
+        """Master session creation should clean up zombie first."""
+        from assistant.common import MASTER_SESSION
+
+        # Create and zombify master session
+        s1 = await sdk_backend.create_master_session()
+        s1.running = False
+
+        kill_called = False
+        original_kill = s1._kill_subprocess
+
+        async def track_kill():
+            nonlocal kill_called
+            kill_called = True
+            await original_kill()
+
+        s1._kill_subprocess = track_kill
+
+        # Create new master session - should clean up zombie
+        s2 = await sdk_backend.create_master_session()
+
+        assert kill_called, "Zombie subprocess should have been killed"
+        assert s2.is_alive()
+        assert s2 is not s1
+
+    async def test_no_duplicate_sessions_after_zombie_cleanup(self, sdk_backend):
+        """After zombie cleanup, should have exactly 1 session for chat_id."""
+        chat_id = "test:+15555551234"
+
+        # Create and zombify
+        s1 = await sdk_backend.create_session("Test User", chat_id, "admin", source="test")
+        s1.running = False
+
+        # Create new session (triggers cleanup)
+        s2 = await sdk_backend.create_session("Test User", chat_id, "admin", source="test")
+
+        # Should have exactly 1 session
+        assert len([k for k in sdk_backend.sessions.keys() if k == chat_id]) == 1
+        assert sdk_backend.sessions[chat_id] is s2
+
+    async def test_alive_session_not_killed_during_create(self, sdk_backend):
+        """Creating session when alive session exists should return existing, not kill it."""
+        s1 = await sdk_backend.create_session(
+            "Test User", "test:+15555551234", "admin", source="test"
+        )
+        assert s1.is_alive()
+
+        # Track if _kill_subprocess was called
+        kill_called = False
+        original_kill = s1._kill_subprocess
+
+        async def track_kill():
+            nonlocal kill_called
+            kill_called = True
+            await original_kill()
+
+        s1._kill_subprocess = track_kill
+
+        # Try to create again - should return existing, not kill
+        s2 = await sdk_backend.create_session(
+            "Test User", "test:+15555551234", "admin", source="test"
+        )
+
+        assert not kill_called, "Alive session should not be killed"
+        assert s2 is s1, "Should return existing alive session"

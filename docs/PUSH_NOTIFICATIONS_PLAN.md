@@ -322,12 +322,29 @@ Create `~/dispatch/state/sven-push-config.json`:
 
 ## Implementation Order
 
-1. **Apple Developer Portal** - Create APNs key, enable capability
-2. **iOS App** - Add AppDelegate, request permissions, send token to backend
-3. **Backend** - Add /register-apns endpoint to store tokens
-4. **Push Script** - Create send-push script
-5. **Integrate** - Modify reply-sven to call send-push
-6. **Test** - Use Apple Push Notification Console first, then full flow
+1. **Apple Developer Portal** - Create APNs key, enable capability ✅ (2026-02-11)
+   - Key ID: X3H9DPHLAM
+   - Environment: Sandbox & Production
+   - Key saved: ~/.claude/secrets/AuthKey_X3H9DPHLAM.p8
+2. **iOS App** - Add AppDelegate, request permissions, send token to backend ✅ (2026-02-11)
+   - AppDelegate.swift created with push registration
+   - SvenApp.swift updated with @UIApplicationDelegateAdaptor
+   - SvenAPIClient.swift updated with registerAPNsToken method
+   - Sven.entitlements created with aps-environment
+   - Build 36 with push notifications (used Tailscale IP)
+   - Build 38 with local network IP fix (10.10.10.59)
+3. **Backend** - Add /register-apns endpoint to store tokens ✅ (2026-02-11)
+   - Endpoint added to ~/dispatch/services/sven-api/server.py
+   - Stores mapping: device_token -> apns_token
+   - File: ~/dispatch/state/sven-apns-tokens.json
+4. **Push Script** - Create send-push script ✅ (2026-02-11)
+   - ~/.claude/skills/sven-app/scripts/send-push
+   - Config: ~/dispatch/state/sven-push-config.json
+5. **Integrate** - Modify reply-sven to call send-push ✅ (2026-02-11)
+   - Triggers push notification after storing message
+6. **Test** - Deploy to TestFlight and test end-to-end ⏳
+   - Build 36: Push permission alert showed but APNs token not registered (Tailscale not connected)
+   - Build 38: Fixed to use local network IP (10.10.10.59) - awaiting testing
 
 ## Fallback: Polling
 

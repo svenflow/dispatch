@@ -1363,3 +1363,258 @@ func startRecording() {
 
 - **Before:** 300-500ms from tap to recording
 - **After:** <50ms from tap to recording (speech catches up ~100ms later)
+
+## Push Notifications (APNs)
+
+**Complete guide for setting up push notifications, based on real debugging experience.**
+
+### Overview
+
+Push notifications require:
+1. **APNs Key** (from Apple Developer Portal) - authenticates your server
+2. **Entitlements file** (in Xcode project) - tells iOS your app can receive pushes
+3. **AppDelegate** (in Swift code) - registers for push and receives token
+4. **Backend** - stores tokens and sends pushes via APNs HTTP/2 API
+
+### Step 1: Create APNs Key (One-Time Setup)
+
+1. Go to https://developer.apple.com/account/resources/authkeys/add
+2. Enter key name (e.g., "Sven APNs Key")
+3. Check "Apple Push Notifications service (APNs)"
+4. Click Continue → Register → Download
+5. Save the `.p8` file securely (e.g., `~/.claude/secrets/AuthKey_KEYID.p8`)
+6. Note your **Key ID** (10 characters) and **Team ID** (from Membership page)
+
+**CRITICAL:** You can only download the key ONCE. Store it safely!
+
+### Step 2: Enable Push Notifications Capability in App
+
+**This is the most commonly missed step!** Without the entitlements file, iOS will NOT call `didRegisterForRemoteNotificationsWithDeviceToken`.
+
+#### Create Entitlements File
+
+Create `AppName/AppName.entitlements`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>aps-environment</key>
+    <string>development</string>
+</dict>
+</plist>
+```
+
+**Note:** The value `development` is for debug builds. Xcode automatically changes this to `production` when archiving for TestFlight/App Store.
+
+#### Add to project.pbxproj
+
+Add these entries to your project file:
+
+```
+/* In PBXFileReference section */
+A7000001 /* AppName.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = AppName.entitlements; sourceTree = "<group>"; };
+
+/* In PBXGroup children (HelloWorld group) */
+A7000001 /* AppName.entitlements */,
+
+/* In XCBuildConfiguration (BOTH Debug and Release) */
+CODE_SIGN_ENTITLEMENTS = AppName/AppName.entitlements;
+```
+
+### Step 3: Add AppDelegate for Push Registration
+
+SwiftUI apps need an AppDelegate to handle push notification callbacks.
+
+**AppDelegate.swift:**
+
+```swift
+import UIKit
+import UserNotifications
+
+class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+
+    func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
+        UNUserNotificationCenter.current().delegate = self
+        requestNotificationPermission(application: application)
+        return true
+    }
+
+    private func requestNotificationPermission(application: UIApplication) {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
+            print("Notification permission granted: \(granted)")
+            if granted {
+                DispatchQueue.main.async {
+                    application.registerForRemoteNotifications()
+                }
+            }
+        }
+    }
+
+    // MARK: - Remote Notification Registration
+
+    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        // Convert token to hex string
+        let tokenString = deviceToken.map { String(format: "%02.2hhx", $0) }.joined()
+        print("APNs token: \(tokenString)")
+
+        // Send to your backend
+        Task {
+            await YourAPIClient.shared.registerAPNsToken(tokenString)
+        }
+    }
+
+    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+        print("Failed to register for remote notifications: \(error)")
+    }
+
+    // MARK: - Notification Handling (foreground)
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        // Show notification even when app is in foreground
+        completionHandler([.banner, .sound, .badge])
+    }
+}
+```
+
+**Wire up in SwiftUI App:**
+
+```swift
+@main
+struct MyApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+
+    var body: some Scene {
+        WindowGroup {
+            ContentView()
+        }
+    }
+}
+```
+
+### Step 4: Backend Token Registration
+
+Your backend needs an endpoint to store APNs tokens:
+
+```python
+# Example: FastAPI endpoint
+@app.post("/register-apns")
+async def register_apns(request: APNsRegisterRequest):
+    # Map device_token (your app's ID) to apns_token (Apple's push token)
+    apns_tokens[request.device_token] = request.apns_token
+    save_tokens()
+    return {"status": "ok"}
+```
+
+### Step 5: Sending Push Notifications
+
+Use HTTP/2 to send to APNs. Example Python script:
+
+```python
+#!/usr/bin/env -S uv run --script
+# /// script
+# dependencies = ["httpx[http2]", "PyJWT", "cryptography"]
+# ///
+
+import jwt
+import time
+import httpx
+
+def create_apns_jwt(team_id: str, key_id: str, key_path: str) -> str:
+    key = open(key_path).read()
+    return jwt.encode(
+        {"iss": team_id, "iat": int(time.time())},
+        key,
+        algorithm="ES256",
+        headers={"alg": "ES256", "kid": key_id}
+    )
+
+def send_push(apns_token: str, title: str, body: str, config: dict):
+    # TestFlight/App Store = production, Debug = sandbox
+    host = "https://api.push.apple.com"  # or api.sandbox.push.apple.com
+
+    headers = {
+        "authorization": f"bearer {create_apns_jwt(config['team_id'], config['key_id'], config['key_path'])}",
+        "apns-topic": config["bundle_id"],
+        "apns-push-type": "alert",
+        "apns-priority": "10"
+    }
+
+    payload = {
+        "aps": {
+            "alert": {"title": title, "body": body},
+            "sound": "default",
+            "badge": 1
+        }
+    }
+
+    with httpx.Client(http2=True) as client:
+        response = client.post(
+            f"{host}/3/device/{apns_token}",
+            headers=headers,
+            json=payload
+        )
+        return response.status_code == 200
+```
+
+**CRITICAL: HTTP/2 is required!** APNs only accepts HTTP/2 connections. Use `httpx[http2]` in Python.
+
+### APNs Environments: Sandbox vs Production
+
+| Build Type | APNs Environment | Host |
+|------------|------------------|------|
+| Debug (Xcode) | Sandbox | api.sandbox.push.apple.com |
+| TestFlight | **Production** | api.push.apple.com |
+| App Store | **Production** | api.push.apple.com |
+
+**Common mistake:** Using sandbox APNs for TestFlight builds. TestFlight builds are signed with production entitlements, so they need production APNs!
+
+**Device tokens are environment-specific!** A token from a debug build won't work with production APNs, and vice versa. When switching environments, the app must re-register and get a new token.
+
+### Troubleshooting Push Notifications
+
+| Problem | Cause | Solution |
+|---------|-------|----------|
+| `didRegisterForRemoteNotifications` never called | Missing entitlements file | Add `AppName.entitlements` with `aps-environment` |
+| Token registered but push fails | Wrong APNs environment | TestFlight = production, Debug = sandbox |
+| "BadDeviceToken" error | Token/environment mismatch | Get fresh token after switching debug↔release |
+| Push works in debug, fails in TestFlight | Using sandbox URL | Switch to `api.push.apple.com` for TestFlight |
+| Backend /register-apns returns 404 | Server running old code | Restart the backend server |
+
+### Advanced: Rich Notifications
+
+You can enhance notifications with:
+
+**1. Images/Media (Notification Service Extension)**
+- Add a "Notification Service Extension" target in Xcode
+- Download images when notification arrives
+- Supports images, GIFs, video, audio (max 10MB)
+
+**2. Action Buttons**
+- Define `UNNotificationCategory` with `UNNotificationAction`s
+- Users can tap buttons without opening app
+
+**3. Custom UI (Notification Content Extension)**
+- Fully custom notification interface
+- Interactive controls, maps, timelines
+
+**4. Live Activities (iOS 16+)**
+- Dynamic Island updates
+- Lock screen live updates
+
+### Example Config File
+
+Store push config at `~/dispatch/state/push-config.json`:
+
+```json
+{
+  "team_id": "B5JUGARUU6",
+  "key_id": "X3H9DPHLAM",
+  "bundle_id": "com.sven.Sven",
+  "key_path": "~/.claude/secrets/AuthKey_X3H9DPHLAM.p8",
+  "use_sandbox": false
+}
+```
+
+Set `use_sandbox: true` only for debug builds run directly from Xcode.

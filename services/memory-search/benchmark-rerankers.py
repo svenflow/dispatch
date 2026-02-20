@@ -1,212 +1,191 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["mlx-lm>=0.30"]
+# dependencies = [
+#     "httpx",
+# ]
 # ///
 """
-Comprehensive benchmark of 2026 OSS models for reranking on Apple Silicon.
-Tests both speed and semantic quality.
+Benchmark different reranking approaches on the eval dataset.
+
+Uses eval dataset docs directly (with known relevance labels) to measure quality.
 """
 
+import json
+import subprocess
 import time
-import re
-from mlx_lm import load, generate
+from pathlib import Path
 
-# Test documents with clear relevance signals
-TEST_DOCS = [
-    "The Philips Hue lights can be controlled via the Hue Bridge using the API.",  # lights - high
-    "Yesterday we discussed the project timeline and budget allocation.",  # unrelated
-    "To turn on the living room lights, use the command: hue lights on --room living",  # lights - high
-    "The meeting notes from last week covered quarterly planning.",  # unrelated
-    "Smart home automation includes controlling lights, thermostats, and security.",  # lights - medium
-    "Python is a popular programming language for data science.",  # unrelated
-    "The kitchen lights are connected to the Lutron Caseta dimmer switch.",  # lights - high
-    "Machine learning models can be trained on various datasets.",  # unrelated
-    "LED lights consume less energy than traditional incandescent bulbs.",  # lights - medium
-    "The weather forecast shows rain expected tomorrow afternoon.",  # unrelated
-]
+import httpx
 
-# Expected: docs 0,2,4,6,8 should score high, docs 1,3,5,7,9 should score low
-EXPECTED_HIGH = {0, 2, 4, 6, 8}  # Light-related docs
+# Load eval dataset
+EVAL_PATH = Path(__file__).parent / "eval-dataset.json"
+with open(EVAL_PATH) as f:
+    EVAL_DATA = json.load(f)
 
-# Models to test (2026 OSS with MLX support)
-MODELS = [
-    # Qwen3 family
-    ("Qwen/Qwen3-0.6B-MLX-4bit", "Qwen3-0.6B"),
-    ("Qwen/Qwen3-1.7B-MLX-4bit", "Qwen3-1.7B"),
-    ("Qwen/Qwen3-4B-MLX-4bit", "Qwen3-4B"),
-    # Gemma 3 family
-    ("mlx-community/gemma-3-1b-it-4bit", "Gemma3-1B"),
-    ("mlx-community/gemma-3-4b-it-4bit", "Gemma3-4B"),
-]
+# Use first 15 queries for benchmark
+QUERIES = EVAL_DATA["data"][:15]
 
-def create_prompt(query: str, docs: list[str]) -> str:
-    """Create scoring prompt."""
-    doc_list = "\n".join([f"[{i+1}] {doc[:100]}" for i, doc in enumerate(docs)])
-    return f"""Query: "{query}"
-Rate relevance 0-10 for each doc. Output only 10 space-separated integers.
 
+def rerank_with_embed_rerank(query: str, docs: list[str], port: int = 9000) -> list[tuple[int, float]]:
+    """Rerank using embed-rerank server (TEI-compatible endpoint)."""
+    try:
+        resp = httpx.post(
+            f"http://localhost:{port}/rerank",
+            json={"query": query, "texts": docs},
+            timeout=60,
+        )
+        # TEI endpoint returns array directly (sorted by score descending)
+        results = resp.json()
+        if isinstance(results, list):
+            return [(r["index"], r["score"]) for r in results]
+        return []
+    except Exception as e:
+        print(f"    Error: {e}")
+        return []
+
+
+def rerank_with_claude(query: str, docs: list[str], top_k: int = 10) -> list[tuple[int, float]]:
+    """Rerank using Claude via Agent SDK."""
+    # Format docs with indices
+    doc_list = "\n".join(f"[{i}] {doc[:400]}" for i, doc in enumerate(docs))
+
+    prompt = f"""You are a relevance judge. Given a query and a list of documents, return the indices of the {top_k} most relevant documents in order of relevance.
+
+Query: {query}
+
+Documents:
 {doc_list}
 
-Scores:"""
+Return ONLY a JSON array of document indices in order of relevance, like [3, 1, 7, ...]. No explanation."""
+
+    result = subprocess.run(
+        ["claude", "-p", prompt, "--output-format", "text"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    try:
+        text = result.stdout.strip()
+        start = text.find("[")
+        end = text.rfind("]") + 1
+        if start >= 0 and end > start:
+            indices = json.loads(text[start:end])
+            return [(idx, 1.0 - i * 0.05) for i, idx in enumerate(indices)]
+    except:
+        pass
+    return []
 
 
-def parse_scores(response: str) -> list[int]:
-    """Extract scores from response."""
-    numbers = re.findall(r'\d+', response)
-    return [int(n) for n in numbers[:10]]
+def calculate_metrics(ranked_indices: list[int], relevant_set: set[int], k: int = 10) -> dict:
+    """Calculate precision@k, recall@k, and MRR."""
+    top_k = ranked_indices[:k]
+    hits = len(set(top_k) & relevant_set)
 
-
-def evaluate_quality(scores: list[int]) -> dict:
-    """Evaluate if model correctly ranked light-related docs higher."""
-    if len(scores) < 10:
-        return {"valid": False, "precision": 0, "recall": 0}
-
-    # Get top 5 by score
-    ranked = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)
-    top5_indices = set(idx for idx, _ in ranked[:5])
-
-    # Calculate precision/recall
-    true_positives = len(top5_indices & EXPECTED_HIGH)
-    precision = true_positives / 5 if top5_indices else 0
-    recall = true_positives / len(EXPECTED_HIGH)
+    # MRR: reciprocal rank of first relevant result
+    mrr = 0.0
+    for i, idx in enumerate(ranked_indices):
+        if idx in relevant_set:
+            mrr = 1.0 / (i + 1)
+            break
 
     return {
-        "valid": True,
-        "precision": precision,
-        "recall": recall,
-        "f1": 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0,
-        "scores": scores,
+        "precision": hits / k if k > 0 else 0,
+        "recall": hits / len(relevant_set) if relevant_set else 0,
+        "mrr": mrr,
+        "hits": hits,
     }
 
 
-def benchmark_model(model_path: str, model_name: str, query: str) -> dict:
-    """Benchmark a single model."""
-    print(f"\n{'='*60}")
-    print(f"Testing: {model_name}")
-    print(f"{'='*60}")
-
-    # Load model
-    print("Loading model...")
-    load_start = time.time()
-    try:
-        model, tokenizer = load(model_path)
-    except Exception as e:
-        print(f"  FAILED to load: {e}")
-        return {"model": model_name, "error": str(e)}
-    load_time = time.time() - load_start
-    print(f"  Loaded in {load_time:.2f}s")
-
-    # Create prompt
-    prompt = create_prompt(query, TEST_DOCS)
-
-    # Apply chat template
-    messages = [{"role": "user", "content": prompt}]
-    try:
-        formatted = tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True,
-            enable_thinking=False
-        )
-    except TypeError:
-        # Some models don't support enable_thinking
-        formatted = tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True
-        )
-
-    # Generate (warm up)
-    print("  Warm-up run...")
-    _ = generate(model, tokenizer, prompt=formatted, max_tokens=50, verbose=False)
-
-    # Timed run
-    print("  Timed run...")
-    gen_start = time.time()
-    response = generate(model, tokenizer, prompt=formatted, max_tokens=100, verbose=False)
-    gen_time = time.time() - gen_start
-
-    # Strip thinking tags if present
-    if "</think>" in response:
-        response = response.split("</think>")[-1].strip()
-
-    print(f"  Response: {response[:100]}...")
-    print(f"  Generation time: {gen_time*1000:.0f}ms")
-
-    # Parse and evaluate
-    scores = parse_scores(response)
-    quality = evaluate_quality(scores)
-
-    result = {
-        "model": model_name,
-        "load_time_s": load_time,
-        "gen_time_ms": gen_time * 1000,
-        "per_doc_ms": gen_time * 1000 / 10,
-        "response": response[:200],
-        **quality
+def run_benchmark(test_claude: bool = False, num_claude_queries: int = 5):
+    """Run the benchmark."""
+    metrics = {
+        "random": {"precision": [], "recall": [], "mrr": []},
+        "embed_similarity": {"precision": [], "recall": [], "mrr": []},
+        "claude": {"precision": [], "recall": [], "mrr": []},
+    }
+    latencies = {
+        "embed_similarity": [],
+        "claude": [],
     }
 
-    if quality["valid"]:
-        print(f"  Precision: {quality['precision']:.0%}")
-        print(f"  Recall: {quality['recall']:.0%}")
-        print(f"  F1: {quality['f1']:.2f}")
-    else:
-        print(f"  Invalid output (got {len(scores)} scores)")
-
-    # Cleanup
-    del model, tokenizer
-
-    return result
-
-
-def main():
-    print("=" * 60)
-    print("MLX RERANKER BENCHMARK - 2026 OSS Models")
-    print("=" * 60)
-    print(f"Machine: Apple M4 Pro, 64GB RAM")
-    print(f"Test: 10 documents, semantic query")
-    print(f"Query: 'home illumination control' (no 'lights' keyword)")
-    print()
-
-    query = "home illumination control"
-    results = []
-
-    for model_path, model_name in MODELS:
-        try:
-            result = benchmark_model(model_path, model_name, query)
-            results.append(result)
-        except Exception as e:
-            print(f"Error testing {model_name}: {e}")
-            results.append({"model": model_name, "error": str(e)})
-
-    # Summary report
-    print("\n" + "=" * 60)
-    print("BENCHMARK RESULTS SUMMARY")
-    print("=" * 60)
-    print(f"\n{'Model':<20} {'Gen(ms)':<10} {'Per-doc':<10} {'F1':<8} {'Notes'}")
+    print(f"Running benchmark on {len(QUERIES)} queries...")
+    print(f"Using eval dataset docs with known relevance labels")
     print("-" * 60)
 
-    for r in results:
-        if "error" in r:
-            print(f"{r['model']:<20} {'ERROR':<10} {'-':<10} {'-':<8} {r['error'][:30]}")
-        elif not r.get("valid", False):
-            print(f"{r['model']:<20} {r['gen_time_ms']:<10.0f} {r['per_doc_ms']:<10.1f} {'INVALID':<8}")
-        else:
-            print(f"{r['model']:<20} {r['gen_time_ms']:<10.0f} {r['per_doc_ms']:<10.1f} {r['f1']:<8.2f}")
+    for i, item in enumerate(QUERIES):
+        query = item["query"]
+        docs = [d["doc"] for d in item["docs"]]
+        relevant_set = {j for j, d in enumerate(item["docs"]) if d["relevant"]}
 
+        print(f"\n[{i+1}/{len(QUERIES)}] Query: {query}")
+        print(f"  Docs: {len(docs)}, Relevant: {len(relevant_set)}")
+
+        # Random baseline (original order)
+        random_indices = list(range(len(docs)))
+        m = calculate_metrics(random_indices, relevant_set)
+        metrics["random"]["precision"].append(m["precision"])
+        metrics["random"]["recall"].append(m["recall"])
+        metrics["random"]["mrr"].append(m["mrr"])
+
+        # Embed similarity rerank
+        start = time.time()
+        embed_ranks = rerank_with_embed_rerank(query, docs)
+        latency = time.time() - start
+        latencies["embed_similarity"].append(latency)
+
+        if embed_ranks:
+            embed_indices = [r[0] for r in embed_ranks]
+            m = calculate_metrics(embed_indices, relevant_set)
+            metrics["embed_similarity"]["precision"].append(m["precision"])
+            metrics["embed_similarity"]["recall"].append(m["recall"])
+            metrics["embed_similarity"]["mrr"].append(m["mrr"])
+            print(f"  Embed: P@10={m['precision']:.2f} R@10={m['recall']:.2f} MRR={m['mrr']:.2f} ({latency*1000:.0f}ms)")
+        else:
+            print(f"  Embed: FAILED")
+
+        # Claude rerank (limited queries due to cost)
+        if test_claude and i < num_claude_queries:
+            start = time.time()
+            claude_ranks = rerank_with_claude(query, docs, top_k=len(docs))
+            latency = time.time() - start
+            latencies["claude"].append(latency)
+
+            if claude_ranks:
+                claude_indices = [r[0] for r in claude_ranks]
+                m = calculate_metrics(claude_indices, relevant_set)
+                metrics["claude"]["precision"].append(m["precision"])
+                metrics["claude"]["recall"].append(m["recall"])
+                metrics["claude"]["mrr"].append(m["mrr"])
+                print(f"  Claude: P@10={m['precision']:.2f} R@10={m['recall']:.2f} MRR={m['mrr']:.2f} ({latency*1000:.0f}ms)")
+            else:
+                print(f"  Claude: FAILED")
+
+    # Summary
     print("\n" + "=" * 60)
-    print("RECOMMENDATIONS")
+    print("BENCHMARK RESULTS")
     print("=" * 60)
 
-    # Find best by speed and quality
-    valid = [r for r in results if r.get("valid", False)]
-    if valid:
-        fastest = min(valid, key=lambda x: x["gen_time_ms"])
-        best_quality = max(valid, key=lambda x: x["f1"])
-        print(f"Fastest: {fastest['model']} ({fastest['per_doc_ms']:.1f}ms/doc)")
-        print(f"Best quality: {best_quality['model']} (F1={best_quality['f1']:.2f})")
+    for method in ["random", "embed_similarity", "claude"]:
+        if metrics[method]["precision"]:
+            n = len(metrics[method]["precision"])
+            avg_p = sum(metrics[method]["precision"]) / n
+            avg_r = sum(metrics[method]["recall"]) / n
+            avg_mrr = sum(metrics[method]["mrr"]) / n
+
+            print(f"\n{method.upper()}:")
+            print(f"  Queries: {n}")
+            print(f"  Avg P@10: {avg_p:.3f}")
+            print(f"  Avg R@10: {avg_r:.3f}")
+            print(f"  Avg MRR:  {avg_mrr:.3f}")
+
+            if method in latencies and latencies[method]:
+                avg_lat = sum(latencies[method]) / len(latencies[method]) * 1000
+                print(f"  Avg Latency: {avg_lat:.0f}ms")
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    test_claude = "--claude" in sys.argv
+    run_benchmark(test_claude=test_claude)

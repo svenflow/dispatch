@@ -1,0 +1,149 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["bleak"]
+# ///
+"""
+Sniff BLE traffic during Bloomin8 wake to understand the protocol.
+Logs all BLE advertisements, connections, and characteristic writes.
+"""
+
+import asyncio
+import sys
+from datetime import datetime
+from bleak import BleakScanner, BleakClient
+
+# Known Bloomin8 info
+TARGET_BT_MAC = "F4:90:32:19:2F:50"
+WAKE_CHARACTERISTIC = "0000f001-0000-1000-8000-00805f9b34fb"
+
+seen_devices = {}
+events = []
+
+def log(msg):
+    ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+    line = f"[{ts}] {msg}"
+    print(line, flush=True)
+    events.append(line)
+
+def detection_callback(device, advertisement_data):
+    addr = device.address.upper()
+    name = device.name or advertisement_data.local_name or ""
+    rssi = advertisement_data.rssi
+
+    # Log new devices
+    if addr not in seen_devices:
+        seen_devices[addr] = {
+            "name": name,
+            "rssi": rssi,
+            "first_seen": datetime.now(),
+            "adv_count": 1,
+            "service_uuids": list(advertisement_data.service_uuids) if advertisement_data.service_uuids else [],
+            "manufacturer_data": dict(advertisement_data.manufacturer_data) if advertisement_data.manufacturer_data else {},
+        }
+
+        # Check if it's our target or looks like Bloomin8
+        is_target = TARGET_BT_MAC.replace(":", "").upper() in addr.replace("-", "").replace(":", "").upper()
+        is_bloomin = any(x in name.lower() for x in ["bloomin", "eink", "canvas", "arpobot", "frame", "c355"])
+
+        if is_target or is_bloomin:
+            log(f"*** TARGET FOUND: {addr} | {name} | RSSI: {rssi}")
+            log(f"    Service UUIDs: {advertisement_data.service_uuids}")
+            log(f"    Manufacturer data: {advertisement_data.manufacturer_data}")
+            log(f"    TX Power: {advertisement_data.tx_power}")
+        else:
+            log(f"NEW: {addr} | {name or 'Unknown'} | RSSI: {rssi}")
+    else:
+        seen_devices[addr]["adv_count"] += 1
+        # Update name if we got one
+        if name and not seen_devices[addr]["name"]:
+            seen_devices[addr]["name"] = name
+            log(f"NAME UPDATE: {addr} -> {name}")
+        # Log if target device changes RSSI significantly
+        is_target = TARGET_BT_MAC.replace(":", "").upper() in addr.replace("-", "").replace(":", "").upper()
+        if is_target:
+            old_rssi = seen_devices[addr]["rssi"]
+            if abs(rssi - old_rssi) > 10:
+                log(f"TARGET RSSI CHANGE: {old_rssi} -> {rssi}")
+                seen_devices[addr]["rssi"] = rssi
+
+async def try_connect_and_explore(device):
+    """Try to connect to a device and explore its services."""
+    log(f"Attempting connection to {device.address}...")
+    try:
+        async with BleakClient(device, timeout=10.0) as client:
+            log(f"CONNECTED to {device.address}")
+
+            # Explore services
+            for service in client.services:
+                log(f"  Service: {service.uuid}")
+                for char in service.characteristics:
+                    props = ", ".join(char.properties)
+                    log(f"    Char: {char.uuid} [{props}]")
+
+                    # Try to read if readable
+                    if "read" in char.properties:
+                        try:
+                            value = await client.read_gatt_char(char.uuid)
+                            log(f"      Value: {value.hex()} ({value})")
+                        except Exception as e:
+                            log(f"      Read failed: {e}")
+
+            log(f"DISCONNECTED from {device.address}")
+    except Exception as e:
+        log(f"Connection failed: {e}")
+
+async def main():
+    duration = int(sys.argv[1]) if len(sys.argv) > 1 else 300
+    log(f"Starting BLE sniff for {duration} seconds...")
+    log(f"Looking for: {TARGET_BT_MAC} or 'bloomin/eink/canvas/arpobot' in name")
+    log("-" * 70)
+
+    scanner = BleakScanner(detection_callback=detection_callback)
+    await scanner.start()
+
+    start_time = asyncio.get_event_loop().time()
+    target_found = False
+
+    while asyncio.get_event_loop().time() - start_time < duration:
+        await asyncio.sleep(1)
+
+        # Check if we found the target
+        for addr in seen_devices:
+            is_target = TARGET_BT_MAC.replace(":", "").upper() in addr.replace("-", "").replace(":", "").upper()
+            is_bloomin = any(x in seen_devices[addr].get("name", "").lower() for x in ["bloomin", "eink", "canvas", "arpobot"])
+
+            if (is_target or is_bloomin) and not target_found:
+                target_found = True
+                log("=" * 70)
+                log("TARGET DETECTED! Attempting to connect and explore...")
+                log("=" * 70)
+
+                # Find the device object
+                devices = await BleakScanner.discover(timeout=5.0)
+                for d in devices:
+                    if d.address.upper().replace("-", ":") == addr.replace("-", ":"):
+                        await try_connect_and_explore(d)
+                        break
+
+    await scanner.stop()
+
+    log("-" * 70)
+    log(f"Sniff complete. Total unique devices: {len(seen_devices)}")
+
+    # Summary
+    log("\nDEVICE SUMMARY (sorted by advertisement count):")
+    sorted_devices = sorted(seen_devices.items(), key=lambda x: x[1]["adv_count"], reverse=True)
+    for addr, info in sorted_devices[:20]:
+        is_target = TARGET_BT_MAC.replace(":", "").upper() in addr.replace("-", "").replace(":", "").upper()
+        marker = "***" if is_target else "   "
+        log(f"{marker} {addr} | {info['name'] or 'Unknown'} | count={info['adv_count']} | RSSI={info['rssi']}")
+
+    # Save log
+    log_path = "/tmp/bloomin8-wake-sniff.log"
+    with open(log_path, "w") as f:
+        f.write("\n".join(events))
+    log(f"\nLog saved to {log_path}")
+
+if __name__ == "__main__":
+    asyncio.run(main())

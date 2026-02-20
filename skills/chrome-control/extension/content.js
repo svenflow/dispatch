@@ -1,6 +1,11 @@
 // Chrome Control - Content Script
 // Element discovery and interaction with full MCP parity
 
+if (window.__chromeControlLoaded) {
+  console.log('[ChromeControl] Content script already loaded, skipping');
+} else {
+window.__chromeControlLoaded = true;
+
 console.log('[ChromeControl] Content script loaded:', window.location.href);
 
 const elementMap = new Map();
@@ -406,3 +411,4 @@ const originalConsole = {
 });
 
 chrome.runtime.sendMessage({ type: 'content_script_ready', url: window.location.href });
+} // end guard

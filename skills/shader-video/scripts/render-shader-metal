@@ -1,0 +1,364 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "pyobjc-framework-Metal",
+#     "pyobjc-framework-MetalKit",
+#     "pyobjc-framework-Cocoa",
+#     "numpy",
+#     "pillow",
+# ]
+# ///
+"""
+Render a GLSL-style shader to video using Metal (GPU accelerated).
+
+This converts GLSL fragment shaders to Metal Shading Language and renders
+using the GPU for massive speedup over CPU-based OpenGL.
+
+Usage:
+    render-shader-metal shader.frag output.mov
+    render-shader-metal shader.frag output.mov --duration 6 --width 2160 --height 2160
+"""
+
+import argparse
+import ctypes
+import os
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+import Metal
+import numpy as np
+from PIL import Image
+
+
+def glsl_to_metal(glsl_code: str) -> str:
+    """
+    Convert GLSL fragment shader to Metal compute kernel.
+
+    This handles the common Shadertoy/glslViewer uniforms:
+    - u_resolution / iResolution
+    - u_time / iTime
+    - gl_FragCoord / fragCoord
+    """
+
+    # Metal compute kernel template
+    # We'll inject the GLSL main() logic into the Metal kernel
+
+    metal_template = '''
+#include <metal_stdlib>
+using namespace metal;
+
+// Uniforms passed from CPU
+struct Uniforms {
+    float2 resolution;
+    float time;
+};
+
+// GLSL compatibility - Metal already has: fract, mix, smoothstep, step, clamp, etc.
+// Only define functions that differ between GLSL and Metal
+
+// GLSL mod() is different from Metal fmod() - GLSL uses floor division
+inline float mod(float x, float y) { return x - y * floor(x/y); }
+inline float2 mod(float2 x, float y) { return x - y * floor(x/y); }
+inline float3 mod(float3 x, float y) { return x - y * floor(x/y); }
+inline float2 mod(float2 x, float2 y) { return x - y * floor(x/y); }
+inline float3 mod(float3 x, float3 y) { return x - y * floor(x/y); }
+
+// Note: hash, hash2, rotate2d are commonly defined in shaders
+// We don't provide defaults to avoid redefinition errors
+
+{USER_FUNCTIONS}
+
+// Main compute kernel
+kernel void shader_kernel(
+    texture2d<float, access::write> output [[texture(0)]],
+    constant Uniforms& uniforms [[buffer(0)]],
+    uint2 gid [[thread_position_in_grid]]
+) {
+    // Skip if outside texture bounds
+    if (gid.x >= output.get_width() || gid.y >= output.get_height()) return;
+
+    // Set up GLSL-like variables
+    float2 gl_FragCoord = float2(gid.x + 0.5f, gid.y + 0.5f);
+    float2 u_resolution = uniforms.resolution;
+    float2 iResolution = uniforms.resolution;
+    float u_time = uniforms.time;
+    float iTime = uniforms.time;
+
+    // Call the shader main function
+    float4 fragColor = float4(0.0f);
+    mainImage(fragColor, gl_FragCoord, u_resolution, u_time);
+
+    // Write to texture (flip Y for correct orientation)
+    uint2 write_pos = uint2(gid.x, output.get_height() - 1 - gid.y);
+    output.write(fragColor, write_pos);
+}
+'''
+
+    # Extract user functions and main from GLSL
+    # We need to convert the GLSL syntax to Metal
+
+    # Remove #version directive
+    glsl_code = '\n'.join(line for line in glsl_code.split('\n')
+                          if not line.strip().startswith('#version'))
+
+    # Remove uniform declarations (we handle these in the kernel)
+    glsl_code = '\n'.join(line for line in glsl_code.split('\n')
+                          if not line.strip().startswith('uniform '))
+
+    # Remove output declarations
+    glsl_code = '\n'.join(line for line in glsl_code.split('\n')
+                          if not line.strip().startswith('out '))
+
+    # Type conversions GLSL -> Metal
+    conversions = [
+        ('vec2', 'float2'),
+        ('vec3', 'float3'),
+        ('vec4', 'float4'),
+        ('mat2', 'float2x2'),
+        ('mat3', 'float3x3'),
+        ('mat4', 'float4x4'),
+        ('ivec2', 'int2'),
+        ('ivec3', 'int3'),
+        ('ivec4', 'int4'),
+    ]
+
+    for glsl_type, metal_type in conversions:
+        glsl_code = glsl_code.replace(glsl_type, metal_type)
+
+    # Convert atan(y, x) to atan2(y, x) - Metal uses atan2
+    import re
+    # This is tricky - atan with one arg stays atan, with two becomes atan2
+    # For now, we'll handle the common case
+    glsl_code = re.sub(r'\batan\s*\(\s*([^,)]+)\s*,\s*([^)]+)\s*\)', r'atan2(\1, \2)', glsl_code)
+
+    # Convert void main() to mainImage function
+    # Look for the main function pattern
+    main_pattern = r'void\s+main\s*\(\s*\)\s*\{'
+
+    if re.search(main_pattern, glsl_code):
+        # Standard GLSL main() - convert to mainImage
+        glsl_code = re.sub(
+            main_pattern,
+            'void mainImage(thread float4& fragColor, float2 gl_FragCoord, float2 u_resolution, float u_time) {',
+            glsl_code
+        )
+    elif 'void mainImage' not in glsl_code:
+        # No main function found, wrap the whole thing
+        glsl_code = f'''
+void mainImage(thread float4& fragColor, float2 gl_FragCoord, float2 u_resolution, float u_time) {{
+    float2 uv = gl_FragCoord / u_resolution;
+    fragColor = float4(uv, 0.5f + 0.5f * sin(u_time), 1.0f);
+}}
+'''
+    else:
+        # Already has mainImage - adjust signature for Metal
+        glsl_code = re.sub(
+            r'void\s+mainImage\s*\(\s*out\s+float4\s+(\w+)\s*,\s*in\s+float2\s+(\w+)\s*\)',
+            r'void mainImage(thread float4& \1, float2 \2, float2 u_resolution, float u_time)',
+            glsl_code
+        )
+
+    # Insert user code into template
+    metal_code = metal_template.replace('{USER_FUNCTIONS}', glsl_code)
+
+    return metal_code
+
+
+def render_metal_shader(
+    shader_path: str,
+    output_path: str,
+    width: int = 2160,
+    height: int = 2160,
+    fps: int = 30,
+    duration: float = 6.0,
+):
+    """Render shader using Metal GPU acceleration."""
+
+    # Read GLSL shader
+    with open(shader_path) as f:
+        glsl_code = f.read()
+
+    # Convert to Metal
+    metal_code = glsl_to_metal(glsl_code)
+
+    # Create Metal device
+    device = Metal.MTLCreateSystemDefaultDevice()
+    if device is None:
+        print("Error: No Metal device available", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Using Metal device: {device.name()}")
+
+    # Compile Metal shader
+    try:
+        library, error = device.newLibraryWithSource_options_error_(metal_code, None, None)
+        if library is None:
+            print(f"Metal shader compilation error:\n{error}", file=sys.stderr)
+            print("\nGenerated Metal code:\n", metal_code, file=sys.stderr)
+            sys.exit(1)
+    except Exception as e:
+        print(f"Metal compilation failed: {e}", file=sys.stderr)
+        print("\nGenerated Metal code:\n", metal_code, file=sys.stderr)
+        sys.exit(1)
+
+    kernel_function = library.newFunctionWithName_("shader_kernel")
+    if kernel_function is None:
+        print("Error: Could not find shader_kernel function", file=sys.stderr)
+        sys.exit(1)
+
+    # Create compute pipeline
+    pipeline_state, error = device.newComputePipelineStateWithFunction_error_(kernel_function, None)
+    if pipeline_state is None:
+        print(f"Error creating pipeline state: {error}", file=sys.stderr)
+        sys.exit(1)
+
+    # Create command queue
+    command_queue = device.newCommandQueue()
+
+    # Create output texture
+    texture_desc = Metal.MTLTextureDescriptor.texture2DDescriptorWithPixelFormat_width_height_mipmapped_(
+        Metal.MTLPixelFormatRGBA8Unorm,
+        width,
+        height,
+        False
+    )
+    texture_desc.setUsage_(Metal.MTLTextureUsageShaderWrite | Metal.MTLTextureUsageShaderRead)
+    texture_desc.setStorageMode_(Metal.MTLStorageModeShared)
+
+    output_texture = device.newTextureWithDescriptor_(texture_desc)
+
+    # Create uniforms buffer
+    # struct Uniforms { float2 resolution; float time; } = 12 bytes, align to 16
+    uniforms_size = 16
+    uniforms_buffer = device.newBufferWithLength_options_(uniforms_size, Metal.MTLResourceStorageModeShared)
+
+    # Render frames
+    num_frames = int(fps * duration)
+    bytes_per_row = width * 4  # RGBA8
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        print(f"Rendering {num_frames} frames at {width}x{height} using Metal GPU...")
+        start_time = time.time()
+
+        for frame_idx in range(num_frames):
+            time_value = frame_idx / fps
+
+            # Update uniforms using the buffer's as_buffer() method
+            uniforms_data = np.array([width, height, time_value, 0.0], dtype=np.float32)
+            uniforms_array = (ctypes.c_float * 4).from_buffer(
+                uniforms_buffer.contents().as_buffer(16)
+            )
+            uniforms_array[:] = uniforms_data
+
+            # Create command buffer
+            command_buffer = command_queue.commandBuffer()
+
+            # Create compute encoder
+            compute_encoder = command_buffer.computeCommandEncoder()
+            compute_encoder.setComputePipelineState_(pipeline_state)
+            compute_encoder.setTexture_atIndex_(output_texture, 0)
+            compute_encoder.setBuffer_offset_atIndex_(uniforms_buffer, 0, 0)
+
+            # Calculate thread groups
+            threads_per_group = Metal.MTLSizeMake(16, 16, 1)
+            num_groups = Metal.MTLSizeMake(
+                (width + 15) // 16,
+                (height + 15) // 16,
+                1
+            )
+
+            compute_encoder.dispatchThreadgroups_threadsPerThreadgroup_(num_groups, threads_per_group)
+            compute_encoder.endEncoding()
+
+            # Execute
+            command_buffer.commit()
+            command_buffer.waitUntilCompleted()
+
+            # Read pixels from texture
+            pixels = bytearray(width * height * 4)
+            output_texture.getBytes_bytesPerRow_fromRegion_mipmapLevel_(
+                pixels,
+                bytes_per_row,
+                Metal.MTLRegionMake2D(0, 0, width, height),
+                0
+            )
+
+            # Save frame
+            img = Image.frombytes('RGBA', (width, height), bytes(pixels))
+            frame_path = os.path.join(tmpdir, f'frame_{frame_idx:04d}.png')
+            img.save(frame_path)
+
+            if (frame_idx + 1) % fps == 0:
+                elapsed = time.time() - start_time
+                print(f"  {frame_idx + 1}/{num_frames} frames ({(frame_idx + 1) / fps:.0f}s) - {elapsed:.1f}s elapsed")
+
+        render_time = time.time() - start_time
+        print(f"Rendered {num_frames} frames in {render_time:.1f}s ({num_frames/render_time:.1f} fps)")
+
+        # Encode video with ffmpeg
+        print("Encoding video with ffmpeg...")
+
+        is_mov = output_path.lower().endswith('.mov')
+
+        ffmpeg_cmd = [
+            'ffmpeg', '-y',
+            '-framerate', str(fps),
+            '-i', os.path.join(tmpdir, 'frame_%04d.png'),
+            '-c:v', 'libx265',
+            '-b:v', '50M',
+            '-maxrate', '60M',
+            '-bufsize', '120M',
+            '-preset', 'slow',
+            '-tag:v', 'hvc1',
+            '-pix_fmt', 'yuv420p',
+            '-movflags', '+faststart',
+        ]
+        if is_mov:
+            ffmpeg_cmd.extend(['-brand', 'qt'])
+        ffmpeg_cmd.append(output_path)
+
+        result = subprocess.run(ffmpeg_cmd, capture_output=True)
+        if result.returncode != 0:
+            print(f"ffmpeg error:\n{result.stderr.decode()}", file=sys.stderr)
+            sys.exit(1)
+
+        file_size = os.path.getsize(output_path)
+        print(f"Done! Output: {output_path} ({file_size / 1024:.1f} KB)")
+
+        if file_size > 100 * 1024 * 1024:
+            print("Warning: File exceeds 100MB iMessage limit", file=sys.stderr)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Render a GLSL shader to video using Metal GPU',
+    )
+    parser.add_argument('shader', help='Path to GLSL fragment shader file')
+    parser.add_argument('output', help='Output video path (.mov)')
+    parser.add_argument('--width', type=int, default=2160, help='Video width (default: 2160)')
+    parser.add_argument('--height', type=int, default=2160, help='Video height (default: 2160)')
+    parser.add_argument('--fps', type=int, default=30, help='Frames per second (default: 30)')
+    parser.add_argument('--duration', type=float, default=6.0, help='Duration in seconds (default: 6.0)')
+
+    args = parser.parse_args()
+
+    if not os.path.exists(args.shader):
+        print(f"Error: Shader file not found: {args.shader}", file=sys.stderr)
+        sys.exit(1)
+
+    render_metal_shader(
+        args.shader,
+        args.output,
+        args.width,
+        args.height,
+        args.fps,
+        args.duration,
+    )
+
+
+if __name__ == '__main__':
+    main()

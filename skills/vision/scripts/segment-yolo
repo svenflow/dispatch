@@ -1,0 +1,76 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "ultralytics",
+#     "pillow",
+#     "numpy",
+#     "opencv-python",
+# ]
+# ///
+"""YOLO segmentation - detects and segments objects with labels."""
+
+import sys
+import numpy as np
+from PIL import Image
+import cv2
+
+def segment_image(input_path: str, output_prefix: str):
+    """Segment image using YOLO."""
+
+    from ultralytics import YOLO
+
+    print("Loading YOLOv8 segmentation model...")
+    model = YOLO("yolov8n-seg.pt")
+
+    print("Loading image...")
+    img = cv2.imread(input_path)
+    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+    print("Running segmentation...")
+    results = model(img_rgb, verbose=False)
+
+    result = results[0]
+    h, w = img_rgb.shape[:2]
+    colored_overlay = img_rgb.copy().astype(np.float32)
+
+    colors = [
+        (255, 0, 0), (0, 255, 0), (0, 0, 255),
+        (255, 255, 0), (255, 0, 255), (0, 255, 255),
+    ]
+
+    if result.masks is not None:
+        masks = result.masks.data.cpu().numpy()
+        print(f"Found {len(masks)} objects")
+
+        combined_mask = np.zeros((h, w), dtype=np.uint8)
+
+        for i, mask in enumerate(masks):
+            mask_resized = cv2.resize(mask, (w, h)) > 0.5
+            color = colors[i % len(colors)]
+            colored_overlay[mask_resized] = colored_overlay[mask_resized] * 0.5 + np.array(color) * 0.5
+            combined_mask[mask_resized] = min((i + 1) * 30, 255)
+
+        for i, box in enumerate(result.boxes):
+            cls_id = int(box.cls[0])
+            conf = float(box.conf[0])
+            name = result.names[cls_id]
+            print(f"  {i+1}. {name} (confidence: {conf:.2f})")
+
+        mask_path = f"{output_prefix}_mask.png"
+        Image.fromarray(combined_mask).save(mask_path)
+        print(f"Saved mask: {mask_path}")
+    else:
+        print("No objects detected with masks")
+
+    overlay_path = f"{output_prefix}_overlay.png"
+    Image.fromarray(colored_overlay.astype(np.uint8)).save(overlay_path)
+    print(f"Saved overlay: {overlay_path}")
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 3:
+        print("Usage: segment-yolo <input_image> <output_prefix>")
+        sys.exit(1)
+
+    segment_image(sys.argv[1], sys.argv[2])

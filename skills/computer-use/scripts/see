@@ -1,0 +1,381 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "requests>=2.31",
+# ]
+# ///
+"""
+see - Capture and analyze screen using both Peekaboo and OmniParser.
+
+Runs both engines in parallel and returns results from each.
+Peekaboo uses native macOS Accessibility APIs (fast, semantic).
+OmniParser uses vision ML models (slower, sees web content).
+
+Usage:
+    see                           # Capture frontmost window, both engines
+    see --app Chrome              # Capture specific app
+    see --image /path/to/img.png  # Analyze existing image (OmniParser only)
+    see --json                    # JSON output
+    see click <element_id>        # Click element (routes to correct tool)
+"""
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# Import parse-image functions
+SCRIPT_DIR = Path(__file__).parent
+PARSE_IMAGE = SCRIPT_DIR / "parse-image"
+
+
+def run_peekaboo(app: str = None, output_dir: str = None, verbose: bool = False) -> dict:
+    """Run peekaboo see and return results."""
+    try:
+        cmd = ["peekaboo", "see", "--json"]
+        if app:
+            cmd.extend(["--app", app])
+
+        # Create output path for annotated screenshot
+        annotated_path = os.path.join(output_dir, "peekaboo_annotated.png") if output_dir else None
+        if annotated_path:
+            cmd.extend(["--annotate", "--path", annotated_path.replace("_annotated", "")])
+
+        if verbose:
+            print(f"[see] Running: {' '.join(cmd)}", file=sys.stderr)
+
+        start = time.time()
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        elapsed = time.time() - start
+
+        if result.returncode != 0:
+            return {
+                "error": f"peekaboo failed: {result.stderr}",
+                "elapsed_ms": int(elapsed * 1000)
+            }
+
+        data = json.loads(result.stdout)
+
+        # Extract and normalize elements
+        elements = []
+        raw_elements = data.get("data", {}).get("ui_elements", [])
+        for elem in raw_elements:
+            elem_id = elem.get("id", "")
+            # Prefix with p_ for peekaboo
+            elements.append({
+                "id": f"p_{elem_id}" if not elem_id.startswith("p_") else elem_id,
+                "source": "peekaboo",
+                "label": elem.get("label", ""),
+                "role": elem.get("role", ""),
+                "description": elem.get("description", ""),
+                "is_actionable": elem.get("is_actionable", False),
+                "frame": elem.get("frame"),
+                "original_id": elem_id,  # Keep original for clicking
+            })
+
+        # Get screenshot paths
+        screenshot_raw = data.get("data", {}).get("screenshot_raw")
+        screenshot_annotated = data.get("data", {}).get("screenshot_annotated")
+        snapshot_id = data.get("data", {}).get("snapshot_id")
+
+        return {
+            "elements": elements,
+            "element_count": len(elements),
+            "screenshot_raw": screenshot_raw,
+            "screenshot_annotated": screenshot_annotated,
+            "snapshot_id": snapshot_id,
+            "elapsed_ms": int(elapsed * 1000),
+        }
+
+    except subprocess.TimeoutExpired:
+        return {"error": "peekaboo timed out", "elapsed_ms": 30000}
+    except json.JSONDecodeError as e:
+        return {"error": f"peekaboo JSON parse error: {e}"}
+    except FileNotFoundError:
+        return {"error": "peekaboo not installed. Run: brew install steipete/tap/peekaboo"}
+    except Exception as e:
+        return {"error": f"peekaboo error: {e}"}
+
+
+def run_omniparser(app: str = None, output_dir: str = None, verbose: bool = False, image_path: str = None) -> dict:
+    """Run OmniParser and return results."""
+    import requests
+
+    try:
+        # Use provided image or capture screenshot
+        if image_path:
+            screenshot_path = image_path
+        else:
+            screenshot_path = os.path.join(output_dir, "omniparser_input.png") if output_dir else "/tmp/see_omni_input.png"
+            # Simple screen capture
+            subprocess.run(["screencapture", "-x", screenshot_path], timeout=5)
+
+        annotated_path = os.path.join(output_dir, "omniparser_annotated.png") if output_dir else "/tmp/see_omni_annotated.png"
+
+        if verbose:
+            print(f"[see] Running OmniParser on {screenshot_path}", file=sys.stderr)
+
+        start = time.time()
+
+        # Run parse-image
+        cmd = [sys.executable, str(PARSE_IMAGE), screenshot_path, "--json"]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+
+        elapsed = time.time() - start
+
+        if result.returncode != 0:
+            return {
+                "error": f"omniparser failed: {result.stderr}",
+                "elapsed_ms": int(elapsed * 1000)
+            }
+
+        data = json.loads(result.stdout)
+
+        if "error" in data:
+            return {
+                "error": data["error"],
+                "elapsed_ms": int(elapsed * 1000)
+            }
+
+        # Extract and normalize elements
+        elements = []
+        raw_elements = data.get("elements", [])
+        for elem in raw_elements:
+            elem_id = elem.get("id", 0)
+            elements.append({
+                "id": f"o_{elem_id}",
+                "source": "omniparser",
+                "content": elem.get("content", ""),
+                "type": elem.get("type", ""),
+                "bbox": elem.get("bbox"),
+                "bbox_pixels": elem.get("bbox_pixels"),
+                "center": elem.get("center"),
+                "center_pixels": elem.get("center_pixels"),
+                "clickable": elem.get("clickable", False),
+                "original_id": elem_id,
+            })
+
+        # Save annotated image
+        annotated_b64 = data.get("annotated_image")
+        if annotated_b64 and output_dir:
+            import base64
+            with open(annotated_path, "wb") as f:
+                f.write(base64.b64decode(annotated_b64))
+
+        return {
+            "elements": elements,
+            "element_count": len(elements),
+            "screenshot_raw": screenshot_path,
+            "screenshot_annotated": annotated_path if annotated_b64 else None,
+            "elapsed_ms": int(elapsed * 1000),
+            "inference_time_ms": data.get("inference_time_ms"),
+        }
+
+    except subprocess.TimeoutExpired:
+        return {"error": "omniparser timed out", "elapsed_ms": 120000}
+    except json.JSONDecodeError as e:
+        return {"error": f"omniparser JSON parse error: {e}"}
+    except Exception as e:
+        return {"error": f"omniparser error: {e}"}
+
+
+def click_element(element_id: str, verbose: bool = False) -> dict:
+    """Click an element by ID, routing to the correct tool."""
+
+    if element_id.startswith("p_"):
+        # Peekaboo element
+        original_id = element_id[2:]  # Remove p_ prefix
+        if original_id.startswith("elem_"):
+            original_id = original_id  # Keep as-is
+
+        cmd = ["peekaboo", "click", "--on", original_id]
+        if verbose:
+            print(f"[see] Running: {' '.join(cmd)}", file=sys.stderr)
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+
+        if result.returncode != 0:
+            return {"success": False, "error": result.stderr}
+        return {"success": True, "method": "peekaboo", "element": original_id}
+
+    elif element_id.startswith("o_"):
+        # OmniParser element - need to look up coordinates
+        # For now, require coordinates to be passed or stored
+        return {
+            "success": False,
+            "error": "OmniParser click requires coordinates. Use: see click --coords X,Y"
+        }
+
+    else:
+        return {"success": False, "error": f"Unknown element ID format: {element_id}. Expected p_* or o_*"}
+
+
+def click_coords(coords: str, verbose: bool = False) -> dict:
+    """Click at specific coordinates using cliclick."""
+    try:
+        x, y = coords.split(",")
+        x, y = int(x.strip()), int(y.strip())
+
+        # Note: If coordinates are from OmniParser (screenshot pixels on Retina),
+        # they need to be divided by 2 for logical coordinates
+        # The caller should handle this conversion
+
+        cmd = ["cliclick", f"c:{x},{y}"]
+        if verbose:
+            print(f"[see] Running: {' '.join(cmd)}", file=sys.stderr)
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+
+        if result.returncode != 0:
+            return {"success": False, "error": result.stderr}
+        return {"success": True, "method": "cliclick", "coords": [x, y]}
+
+    except ValueError:
+        return {"success": False, "error": f"Invalid coords format: {coords}. Expected: X,Y"}
+    except FileNotFoundError:
+        return {"success": False, "error": "cliclick not installed. Run: brew install cliclick"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Capture and analyze screen using Peekaboo + OmniParser.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+    see                              # Analyze frontmost window
+    see --app Chrome                 # Analyze specific app
+    see --json                       # JSON output
+    see --output /tmp/see            # Save to directory
+    see click p_elem_42              # Click peekaboo element
+    see click --coords 500,300       # Click at coordinates
+        """
+    )
+
+    subparsers = parser.add_subparsers(dest="command")
+
+    # Click subcommand
+    click_parser = subparsers.add_parser("click", help="Click an element")
+    click_parser.add_argument("element", nargs="?", help="Element ID (p_elem_* or o_*)")
+    click_parser.add_argument("--coords", help="Click at coordinates (X,Y)")
+    click_parser.add_argument("--verbose", "-v", action="store_true")
+    click_parser.add_argument("--json", action="store_true", help="JSON output")
+
+    # Main see options
+    parser.add_argument("--app", help="Target application name")
+    parser.add_argument("--image", "-i", help="Analyze existing image file (OmniParser only, skips Peekaboo)")
+    parser.add_argument("--json", action="store_true", help="Output as JSON")
+    parser.add_argument("--output", "-o", help="Output directory for screenshots")
+    parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
+
+    args = parser.parse_args()
+
+    # Handle click command
+    if args.command == "click":
+        if args.coords:
+            result = click_coords(args.coords, args.verbose)
+        elif args.element:
+            result = click_element(args.element, args.verbose)
+        else:
+            print("Error: Specify element ID or --coords", file=sys.stderr)
+            return 1
+
+        if args.json:
+            print(json.dumps(result, indent=2))
+        else:
+            if result.get("success"):
+                print(f"Clicked: {result.get('element') or result.get('coords')}")
+            else:
+                print(f"Error: {result.get('error')}", file=sys.stderr)
+                return 1
+        return 0
+
+    # Main see command - run both engines in parallel
+    output_dir = args.output
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+    else:
+        output_dir = tempfile.mkdtemp(prefix="see_")
+
+    # Check for --image mode (OmniParser only)
+    image_path = getattr(args, 'image', None)
+    if image_path:
+        if not os.path.exists(image_path):
+            print(f"Error: Image not found: {image_path}", file=sys.stderr)
+            return 1
+        if args.verbose:
+            print(f"[see] Analyzing image: {image_path} (OmniParser only)", file=sys.stderr)
+        results = {
+            "peekaboo": {"skipped": True, "reason": "Image mode - Peekaboo requires live screen"},
+            "omniparser": run_omniparser(args.app, output_dir, args.verbose, image_path=image_path),
+        }
+    else:
+        if args.verbose:
+            print(f"[see] Output directory: {output_dir}", file=sys.stderr)
+            print(f"[see] Running Peekaboo and OmniParser in parallel...", file=sys.stderr)
+
+        results = {
+            "peekaboo": None,
+            "omniparser": None,
+        }
+
+        # Run both in parallel
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = {
+                executor.submit(run_peekaboo, args.app, output_dir, args.verbose): "peekaboo",
+                executor.submit(run_omniparser, args.app, output_dir, args.verbose): "omniparser",
+            }
+
+            for future in as_completed(futures):
+                engine = futures[future]
+                try:
+                    results[engine] = future.result()
+                    if args.verbose:
+                        elapsed = results[engine].get("elapsed_ms", 0)
+                        count = results[engine].get("element_count", 0)
+                        error = results[engine].get("error")
+                        if error:
+                            print(f"[see] {engine}: error - {error}", file=sys.stderr)
+                        else:
+                            print(f"[see] {engine}: {count} elements in {elapsed}ms", file=sys.stderr)
+                except Exception as e:
+                    results[engine] = {"error": str(e)}
+
+    # Output results
+    if args.json:
+        print(json.dumps(results, indent=2))
+    else:
+        # Text summary
+        for engine, data in results.items():
+            print(f"\n=== {engine.upper()} ===")
+            if "error" in data:
+                print(f"Error: {data['error']}")
+            else:
+                print(f"Elements: {data.get('element_count', 0)}")
+                print(f"Time: {data.get('elapsed_ms', 0)}ms")
+                if data.get("screenshot_annotated"):
+                    print(f"Annotated: {data['screenshot_annotated']}")
+
+                # Show first few elements
+                elements = data.get("elements", [])[:5]
+                if elements:
+                    print("Sample elements:")
+                    for elem in elements:
+                        if engine == "peekaboo":
+                            print(f"  {elem['id']}: {elem.get('label') or elem.get('description') or '(no label)'} [{elem.get('role')}]")
+                        else:
+                            print(f"  {elem['id']}: {elem.get('content') or '(no content)'} [{elem.get('type')}]")
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

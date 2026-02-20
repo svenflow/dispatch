@@ -1,0 +1,186 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "torch",
+#     "pillow",
+#     "numpy",
+# ]
+# ///
+"""
+CPPN Fractal Recursion - Infinite zoom into recursive copies of the image.
+Classic Droste effect with psychedelic twist.
+"""
+
+import argparse
+import math
+import subprocess
+import tempfile
+from pathlib import Path
+
+import numpy as np
+import torch
+import torch.nn as nn
+from PIL import Image
+
+
+class SIREN(nn.Module):
+    def __init__(self, hidden_features=256, hidden_layers=8, latent_dim=8, omega_0=30.0):
+        super().__init__()
+        self.latent_dim = latent_dim
+        self.omega_0 = omega_0
+        self.input_layer = nn.Linear(3 + latent_dim, hidden_features)
+        self.hidden_layers = nn.ModuleList([
+            nn.Linear(hidden_features, hidden_features)
+            for _ in range(hidden_layers)
+        ])
+        self.output_layer = nn.Linear(hidden_features, 3)
+
+    def forward(self, coords, latent):
+        if latent.dim() == 1:
+            latent = latent.unsqueeze(0).expand(coords.shape[0], -1)
+        x = torch.cat([coords, latent], dim=-1)
+        x = torch.sin(self.omega_0 * self.input_layer(x))
+        for layer in self.hidden_layers:
+            x = torch.sin(self.omega_0 * layer(x))
+        x = self.output_layer(x)
+        x = torch.sigmoid(x)
+        return x
+
+
+def load_model(model_path):
+    checkpoint = torch.load(model_path, map_location='cpu', weights_only=False)
+    config = checkpoint['config']
+    model = SIREN(
+        hidden_features=config['hidden'],
+        hidden_layers=config['layers'],
+        latent_dim=config['latent_dim']
+    )
+    model.load_state_dict(checkpoint['model_state'])
+    model.eval()
+    return model, checkpoint['base_latent'], config
+
+
+def create_fractal_coords(width, height, time, zoom_speed=0.5):
+    """Create coordinates with Droste/fractal recursion effect."""
+    y = torch.linspace(-1, 1, height)
+    x = torch.linspace(-1, 1, width)
+    yy, xx = torch.meshgrid(y, x, indexing='ij')
+
+    # Convert to polar for log-polar transform (Droste effect)
+    r = torch.sqrt(xx**2 + yy**2) + 0.001  # Avoid log(0)
+    theta = torch.atan2(yy, xx)
+
+    # Log-polar transform with time-based zoom
+    # This creates infinite recursive zoom
+    log_r = torch.log(r)
+
+    # Animate zoom: shift in log space = multiplicative zoom in linear space
+    log_r = log_r - time * zoom_speed
+
+    # Add spiral twist proportional to zoom depth
+    theta = theta + log_r * 0.3 + time * 0.2
+
+    # Tile in log space for recursion
+    # This creates the fractal copies
+    tile_scale = 1.5
+    log_r_tiled = torch.fmod(log_r + 10, tile_scale) - tile_scale / 2
+
+    # Back to cartesian
+    r_out = torch.exp(log_r_tiled)
+    xx_out = r_out * torch.cos(theta)
+    yy_out = r_out * torch.sin(theta)
+
+    # Clamp to valid range
+    xx_out = torch.clamp(xx_out, -1, 1)
+    yy_out = torch.clamp(yy_out, -1, 1)
+    rr_out = torch.sqrt(xx_out**2 + yy_out**2)
+
+    return torch.stack([xx_out, yy_out, rr_out], dim=-1).reshape(-1, 3)
+
+
+def render_frame(model, coords, latent, width, height):
+    with torch.no_grad():
+        output = model(coords, latent)
+        img = output.reshape(height, width, 3).numpy()
+        return (img * 255).clip(0, 255).astype(np.uint8)
+
+
+def hue_rotate(img_array, angle):
+    """Rotate hue of RGB image."""
+    r, g, b = img_array[..., 0], img_array[..., 1], img_array[..., 2]
+    cos_a = np.cos(angle)
+    sin_a = np.sin(angle)
+
+    r_out = r * (0.299 + 0.701 * cos_a + 0.168 * sin_a) + \
+            g * (0.587 - 0.587 * cos_a + 0.330 * sin_a) + \
+            b * (0.114 - 0.114 * cos_a - 0.497 * sin_a)
+    g_out = r * (0.299 - 0.299 * cos_a - 0.328 * sin_a) + \
+            g * (0.587 + 0.413 * cos_a + 0.035 * sin_a) + \
+            b * (0.114 - 0.114 * cos_a + 0.292 * sin_a)
+    b_out = r * (0.299 - 0.300 * cos_a + 1.250 * sin_a) + \
+            g * (0.587 - 0.588 * cos_a - 1.050 * sin_a) + \
+            b * (0.114 + 0.886 * cos_a - 0.203 * sin_a)
+
+    return np.clip(np.stack([r_out, g_out, b_out], axis=-1), 0, 255).astype(np.uint8)
+
+
+def fractal_zoom(model_path, output_path, duration=8, fps=30, size=512):
+    """Create fractal zoom animation."""
+
+    print(f"Loading model: {model_path}")
+    model, base_latent, config = load_model(model_path)
+
+    width = height = size
+    num_frames = duration * fps
+
+    print(f"Rendering {num_frames} frames with fractal recursion...")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        for i in range(num_frames):
+            t = i / fps
+
+            # Create fractal coordinates
+            coords = create_fractal_coords(width, height, t, zoom_speed=0.4)
+
+            # Subtle latent variation synced to zoom
+            latent = base_latent + torch.randn_like(base_latent) * 0.03 * math.sin(t * 0.5)
+
+            frame = render_frame(model, coords, latent, width, height)
+
+            # Hue shift based on zoom depth
+            frame = hue_rotate(frame, t * 0.3)
+
+            Image.fromarray(frame).save(f"{tmpdir}/frame_{i:04d}.png")
+
+            if (i + 1) % fps == 0:
+                print(f"  {i+1}/{num_frames} frames ({(i+1)//fps}s)")
+
+        print("Encoding video...")
+        subprocess.run([
+            'ffmpeg', '-y', '-framerate', str(fps),
+            '-i', f'{tmpdir}/frame_%04d.png',
+            '-c:v', 'libx265', '-preset', 'medium',
+            '-crf', '24', '-tag:v', 'hvc1',
+            '-pix_fmt', 'yuv420p',
+            output_path
+        ], check=True, capture_output=True)
+
+    size_kb = Path(output_path).stat().st_size / 1024
+    print(f"Done! Output: {output_path} ({size_kb:.1f} KB)")
+
+
+def main():
+    parser = argparse.ArgumentParser(description='CPPN Fractal Recursion')
+    parser.add_argument('model', help='Trained CPPN model (.pt)')
+    parser.add_argument('output', help='Output video (.mp4)')
+    parser.add_argument('--duration', type=int, default=8)
+    parser.add_argument('--fps', type=int, default=30)
+    parser.add_argument('--size', type=int, default=512)
+
+    args = parser.parse_args()
+    fractal_zoom(args.model, args.output, args.duration, args.fps, args.size)
+
+
+if __name__ == '__main__':
+    main()
