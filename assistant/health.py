@@ -30,7 +30,7 @@ FATAL_PATTERNS: list[tuple[str, str]] = [
     (r"image dimensions exceed max allowed size", "image_too_large"),
     (r"context_length_exceeded", "context_too_long"),
     (r"prompt is too long", "prompt_too_long"),
-    (r"\"authentication_failed\"", "auth_failed"),
+    (r"\"authentication_\w+\"", "auth_error"),
     (r"\"billing_error\"", "billing_error"),
     (r"content size exceeds", "content_too_large"),
 ]
