@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+# Render an STL file to PNG using Blender
+set -e
+
+STL_PATH="$1"
+OUTPUT_PATH="${2:-${STL_PATH%.stl}.png}"
+
+if [ -z "$STL_PATH" ]; then
+    echo "Usage: cad-render <stl_file> [output.png]"
+    exit 1
+fi
+
+if [ ! -f "$STL_PATH" ]; then
+    echo "ERROR: File not found: $STL_PATH"
+    exit 1
+fi
+
+BLENDER="/Applications/Blender.app/Contents/MacOS/Blender"
+if [ ! -x "$BLENDER" ]; then
+    echo "ERROR: Blender not found at $BLENDER"
+    exit 1
+fi
+
+# Create render script
+RENDER_SCRIPT=$(mktemp /tmp/render_XXXXXX.py)
+cat > "$RENDER_SCRIPT" << 'PYTHON'
+import bpy
+import sys
+import os
+
+stl_path = sys.argv[sys.argv.index('--') + 1]
+output_path = sys.argv[sys.argv.index('--') + 2]
+
+# Clear scene
+bpy.ops.object.select_all(action='SELECT')
+bpy.ops.object.delete()
+
+# Import STL
+bpy.ops.wm.stl_import(filepath=stl_path)
+obj = bpy.context.selected_objects[0]
+
+# Center object
+bpy.ops.object.origin_set(type='ORIGIN_GEOMETRY', center='BOUNDS')
+obj.location = (0, 0, 0)
+
+# Add material
+mat = bpy.data.materials.new(name="CAD_Material")
+mat.use_nodes = True
+bsdf = mat.node_tree.nodes["Principled BSDF"]
+bsdf.inputs["Base Color"].default_value = (0.2, 0.5, 0.9, 1)
+bsdf.inputs["Metallic"].default_value = 0.3
+bsdf.inputs["Roughness"].default_value = 0.4
+obj.data.materials.append(mat)
+
+# Setup camera
+cam_data = bpy.data.cameras.new(name='Camera')
+cam = bpy.data.objects.new('Camera', cam_data)
+bpy.context.scene.collection.objects.link(cam)
+bpy.context.scene.camera = cam
+
+dims = obj.dimensions
+max_dim = max(dims)
+cam.location = (max_dim * 1.5, -max_dim * 1.5, max_dim * 1.0)
+cam.rotation_euler = (1.1, 0, 0.8)
+
+# Add light
+light_data = bpy.data.lights.new(name='Light', type='SUN')
+light_data.energy = 3
+light = bpy.data.objects.new('Light', light_data)
+bpy.context.scene.collection.objects.link(light)
+light.location = (5, -5, 10)
+
+# Render settings
+bpy.context.scene.render.engine = 'CYCLES'
+bpy.context.scene.cycles.device = 'GPU'
+bpy.context.scene.cycles.samples = 64
+bpy.context.scene.render.resolution_x = 800
+bpy.context.scene.render.resolution_y = 600
+bpy.context.scene.render.filepath = output_path
+
+# Background
+bpy.context.scene.world.use_nodes = True
+bg = bpy.context.scene.world.node_tree.nodes["Background"]
+bg.inputs["Color"].default_value = (0.05, 0.05, 0.08, 1)
+
+# Render
+bpy.ops.render.render(write_still=True)
+print(f"RENDERED|{output_path}")
+PYTHON
+
+"$BLENDER" --background --python "$RENDER_SCRIPT" -- "$STL_PATH" "$OUTPUT_PATH" 2>&1 | grep -E "(RENDERED|Error|error)" || true
+rm -f "$RENDER_SCRIPT"
+
+if [ -f "$OUTPUT_PATH" ]; then
+    echo "OK|$OUTPUT_PATH"
+else
+    echo "ERROR|Render failed"
+    exit 1
+fi

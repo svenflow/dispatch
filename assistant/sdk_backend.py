@@ -383,6 +383,40 @@ class SDKBackend:
         log.info(f"Injected message for {chat_id} via {source}")
         return True
 
+    async def inject_reaction(
+        self,
+        chat_id: str,
+        reaction_text: str,
+        emoji: str,
+        sender_name: str,
+        sender_tier: str,
+        source: str = "imessage",
+    ) -> bool:
+        """Inject a reaction notification into an existing session.
+
+        Unlike inject_message, this does NOT create a session on-demand.
+        Reactions only matter if there's an active conversation.
+        """
+        from assistant.backends import get_backend
+        backend = get_backend(source)
+        if backend.registry_prefix and not chat_id.startswith(backend.registry_prefix):
+            registry_chat_id = f"{backend.registry_prefix}{chat_id}"
+        else:
+            registry_chat_id = chat_id
+        normalized = normalize_chat_id(registry_chat_id)
+
+        # Only inject if session exists and is alive
+        async with self._lock:
+            session = self.sessions.get(normalized)
+            if not session or not session.is_alive():
+                log.debug(f"No active session for {chat_id}, skipping reaction")
+                return False
+
+        # Inject the reaction notification (no wrapping needed, it's already formatted)
+        await session.inject(reaction_text)
+        log.info(f"Injected reaction {emoji} from {sender_name} for {chat_id}")
+        return True
+
     # ──────────────────────────────────────────────────────────────
     # Group sessions
     # ──────────────────────────────────────────────────────────────

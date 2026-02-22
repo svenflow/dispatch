@@ -408,7 +408,7 @@ def call_claude_agent(system_prompt: str, user_prompt: str, verbose: bool = Fals
             input=user_prompt,
             capture_output=True,
             text=True,
-            timeout=180,
+            timeout=900,  # 15 minutes
             env=clean_env
         )
 
@@ -432,7 +432,7 @@ def call_claude_agent(system_prompt: str, user_prompt: str, verbose: bool = Fals
         return output
 
     except subprocess.TimeoutExpired:
-        raise RuntimeError(f"{pass_name} timed out after 180s")
+        raise RuntimeError(f"{pass_name} timed out after 15min")
 
 
 def extract_json_from_output(output: str) -> list:
