@@ -1814,12 +1814,34 @@ Keep the text concise - this is a nightly check-in, not a full report.
 
         self._shutdown_flag = False
         spurious_cancel_count = 0
+        imessage_error_logged = False
+        last_poll_log_time = 0  # Telemetry: log poll status every 5 minutes
+        POLL_LOG_INTERVAL = 300  # 5 minutes
         while not self._shutdown_flag:
             try:
                 # Run blocking SQLite poll in executor
-                messages = await loop.run_in_executor(
-                    None, self.messages.get_new_messages, self.last_rowid
-                )
+                poll_start = time.time()
+                try:
+                    messages = await loop.run_in_executor(
+                        None, self.messages.get_new_messages, self.last_rowid
+                    )
+                    poll_duration_ms = (time.time() - poll_start) * 1000
+                    if imessage_error_logged:
+                        log.info("iMessage chat.db access restored")
+                        imessage_error_logged = False
+                    # Telemetry: log poll status periodically or if messages found
+                    now = time.time()
+                    if messages or (now - last_poll_log_time > POLL_LOG_INTERVAL):
+                        log.info(f"POLL_TELEMETRY | rowid={self.last_rowid} | found={len(messages)} | duration={poll_duration_ms:.1f}ms")
+                        last_poll_log_time = now
+                except Exception as db_err:
+                    if "unable to open database" in str(db_err) or "authorization denied" in str(db_err):
+                        if not imessage_error_logged:
+                            log.error(f"iMessage chat.db unavailable (FDA required): {db_err}")
+                            imessage_error_logged = True
+                        messages = []
+                    else:
+                        raise
 
                 for msg in messages:
                     msg["source"] = "imessage"  # Tag source
