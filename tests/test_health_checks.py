@@ -171,7 +171,16 @@ class TestCheckFatalRegex:
             'Error: "authentication_failed" - your API key is invalid'
         )]
         result = check_fatal_regex(entries)
-        assert result == "auth_failed"
+        assert result == "auth_error"
+
+    def test_detects_auth_error(self):
+        """Test that authentication_error is also detected (the actual API error type)."""
+        from assistant.health import check_fatal_regex
+        entries = [_make_assistant_entry(
+            'Error: "authentication_error" - invalid API key'
+        )]
+        result = check_fatal_regex(entries)
+        assert result == "auth_error"
 
     def test_detects_billing_error(self):
         from assistant.health import check_fatal_regex
