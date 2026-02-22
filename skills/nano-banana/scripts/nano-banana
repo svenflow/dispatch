@@ -18,10 +18,11 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from google import genai
+from google.genai import types
 from PIL import Image
 
 
-def generate_image(prompt: str, input_image: Path | None = None, output: Path | None = None, model: str = "gemini-3-pro-image-preview") -> Path:
+def generate_image(prompt: str, input_images: list[Path] | None = None, output: Path | None = None, model: str = "gemini-3-pro-image-preview", image_size: str = "1K", aspect_ratio: str | None = None) -> Path:
     """Generate or edit an image using Nano Banana Pro."""
 
     # Load API key from secrets.env
@@ -35,17 +36,29 @@ def generate_image(prompt: str, input_image: Path | None = None, output: Path | 
     # Initialize client
     client = genai.Client(api_key=api_key)
 
-    # Build contents
-    if input_image:
-        image = Image.open(input_image)
-        contents = [prompt, image]
+    # Build contents - support multiple images
+    if input_images:
+        contents = [prompt]
+        for img_path in input_images:
+            contents.append(Image.open(img_path))
     else:
         contents = prompt
+
+    # Build generation config with image settings
+    image_config = types.ImageConfig(image_size=image_size)
+    if aspect_ratio:
+        image_config = types.ImageConfig(image_size=image_size, aspect_ratio=aspect_ratio)
+
+    config = types.GenerateContentConfig(
+        response_modalities=["TEXT", "IMAGE"],
+        image_config=image_config,
+    )
 
     # Generate
     response = client.models.generate_content(
         model=model,
         contents=contents,
+        config=config,
     )
 
     # Extract and save image
@@ -75,24 +88,33 @@ Examples:
         """
     )
     parser.add_argument("prompt", help="Text prompt for image generation/editing")
-    parser.add_argument("-i", "--input", type=Path, help="Input image for editing (optional)")
+    parser.add_argument("-i", "--input", type=Path, action="append", dest="inputs", help="Input image(s) for editing - can specify multiple times")
     parser.add_argument("-o", "--output", type=Path, default=Path("generated_image.png"), help="Output file path (default: generated_image.png)")
     parser.add_argument("--model", default="gemini-3-pro-image-preview",
                        choices=["gemini-3-pro-image-preview", "gemini-2.5-flash-image"],
                        help="Model to use (default: gemini-3-pro-image-preview)")
+    parser.add_argument("--size", default="1K", choices=["1K", "2K", "4K"],
+                       help="Output image size (default: 1K)")
+    parser.add_argument("--aspect-ratio", default=None,
+                       choices=["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"],
+                       help="Output aspect ratio (default: model decides)")
 
     args = parser.parse_args()
 
-    if args.input and not args.input.exists():
-        print(f"Error: Input file not found: {args.input}", file=sys.stderr)
-        sys.exit(1)
+    if args.inputs:
+        for inp in args.inputs:
+            if not inp.exists():
+                print(f"Error: Input file not found: {inp}", file=sys.stderr)
+                sys.exit(1)
 
     try:
         output_path = generate_image(
             prompt=args.prompt,
-            input_image=args.input,
+            input_images=args.inputs,
             output=args.output,
-            model=args.model
+            model=args.model,
+            image_size=args.size,
+            aspect_ratio=args.aspect_ratio
         )
         print(f"Image saved to: {output_path}")
     except Exception as e:

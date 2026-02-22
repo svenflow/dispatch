@@ -280,6 +280,87 @@ class MessagesReader:
         conn.close()
         return messages
 
+    def get_new_reactions(self, since_rowid: int) -> list:
+        """Get reactions newer than the given ROWID.
+
+        Reactions are messages with associated_message_type in 2000-2999 (add) or 3000-3999 (remove).
+        Standard types: 2000=❤️, 2001=👍, 2002=👎, 2003=😂, 2004=‼️, 2005=❓
+        iOS 17+ uses 2006+ for custom emoji reactions (emoji stored in associated_message_emoji).
+        Removals mirror: 3000=remove ❤️, etc.
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        # Query reactions and join to get the target message text
+        cursor.execute("""
+            SELECT
+                r.ROWID,
+                r.date,
+                h.id as phone,
+                r.associated_message_type,
+                r.associated_message_emoji,
+                r.associated_message_guid,
+                target.text as target_text,
+                target.is_from_me as target_is_from_me,
+                chat.style,
+                chat.chat_identifier
+            FROM message r
+            LEFT JOIN handle h ON r.handle_id = h.ROWID
+            LEFT JOIN message target ON substr(r.associated_message_guid, 5) = target.guid
+            LEFT JOIN chat_message_join ON r.ROWID = chat_message_join.message_id
+            LEFT JOIN chat ON chat_message_join.chat_id = chat.ROWID
+            WHERE r.ROWID > ?
+              AND r.is_from_me = 0
+              AND (
+                  r.associated_message_type BETWEEN 2000 AND 2999
+                  OR r.associated_message_type BETWEEN 3000 AND 3999
+              )
+            ORDER BY r.date ASC
+        """, (since_rowid,))
+
+        rows = cursor.fetchall()
+        reactions = []
+
+        # Map reaction types to emoji (fallback if associated_message_emoji is null)
+        REACTION_EMOJI = {
+            2000: "❤️", 2001: "👍", 2002: "👎", 2003: "😂", 2004: "‼️", 2005: "❓",
+            3000: "❤️", 3001: "👍", 3002: "👎", 3003: "😂", 3004: "‼️", 3005: "❓",
+        }
+
+        for row in rows:
+            (rowid, date, phone, reaction_type, reaction_emoji, target_guid,
+             target_text, target_is_from_me, chat_style, chat_identifier) = row
+
+            if not phone:
+                continue
+
+            # Use associated_message_emoji if available (iOS 17+ custom emoji),
+            # otherwise fall back to the type mapping
+            emoji = reaction_emoji or REACTION_EMOJI.get(reaction_type, "💬")
+
+            # Determine if this is a removal (3000+ series)
+            is_removal = reaction_type >= 3000
+
+            timestamp = self._macos_to_datetime(date)
+            is_group = chat_style == 43
+
+            reactions.append({
+                "rowid": rowid,
+                "timestamp": timestamp,
+                "phone": phone,
+                "emoji": emoji,
+                "is_removal": is_removal,
+                "target_guid": target_guid,
+                "target_text": target_text,
+                "target_is_from_me": bool(target_is_from_me),
+                "is_group": is_group,
+                "chat_identifier": chat_identifier,
+                "type": "reaction",  # Mark as reaction for process_message routing
+            })
+
+        conn.close()
+        return reactions
+
     def _generate_group_name(self, cursor, chat_identifier: str, contacts_manager=None) -> str | None:
         """Generate a group name from participant names.
 
@@ -1603,6 +1684,71 @@ You have 15 minutes. Work efficiently.
             # Contact exists but has unknown/unrecognized tier
             log.warning(f"Contact {sender_name} has unexpected tier '{sender_tier}', ignoring")
 
+    async def process_reaction(self, reaction: dict):
+        """Process a single incoming reaction.
+
+        Reactions are injected into the session with context about what was reacted to.
+        Only 👎 reactions require the session to respond; others are silent acknowledgments.
+        """
+        phone = reaction["phone"]
+        emoji = reaction["emoji"]
+        rowid = reaction["rowid"]
+        is_removal = reaction.get("is_removal", False)
+        target_text = reaction.get("target_text")
+        target_is_from_me = reaction.get("target_is_from_me", False)
+        is_group = reaction.get("is_group", False)
+        chat_identifier = reaction.get("chat_identifier")
+        source = reaction.get("source", "imessage")
+
+        # Skip reaction removals - they don't need to be surfaced
+        if is_removal:
+            log.debug(f"Ignoring reaction removal {rowid} from {phone}: {emoji}")
+            return
+
+        # Only care about reactions to OUR messages (is_from_me on target)
+        if not target_is_from_me:
+            log.debug(f"Ignoring reaction {rowid} to someone else's message from {phone}")
+            return
+
+        # Lookup contact
+        contact = self.contacts.lookup_identifier(phone)
+        if not contact:
+            log.debug(f"Ignoring reaction {rowid} from unknown contact {phone}")
+            return
+
+        sender_name = contact["name"]
+        sender_tier = contact["tier"]
+
+        # Only process reactions from blessed tiers
+        if sender_tier not in ("admin", "wife", "family", "favorite"):
+            log.debug(f"Ignoring reaction {rowid} from {sender_name} (tier: {sender_tier})")
+            return
+
+        # Determine chat_id (group vs individual)
+        chat_id: str = chat_identifier if is_group and chat_identifier else phone
+
+        # Build the reaction notification
+        target_preview = f': "{target_text[:100]}..."' if target_text and len(target_text) > 100 else f': "{target_text}"' if target_text else ""
+
+        # Format reaction for injection
+        reaction_text = f"""
+---REACTION from {sender_name}---
+{emoji} reacted to your message{target_preview}
+---END REACTION---
+"""
+
+        log.info(f"Processing reaction {rowid} from {sender_name}: {emoji} on message{target_preview[:50]}")
+
+        # Inject into session (if it exists)
+        await self.sessions.inject_reaction(
+            chat_id=chat_id,
+            reaction_text=reaction_text.strip(),
+            emoji=emoji,
+            sender_name=sender_name,
+            sender_tier=sender_tier,
+            source=source,
+        )
+
     async def _shutdown(self):
         """Graceful shutdown."""
         self._shutdown_flag = True
@@ -1854,6 +2000,22 @@ Keep the text concise - this is a nightly check-in, not a full report.
                         log.error(f"Failed to process message {msg['rowid']}: {e}")
                         # Still advance rowid to avoid infinite retry on bad messages
                         self._save_state(msg["rowid"])
+
+                # Poll for reactions (same rowid sequence as messages)
+                reactions = await loop.run_in_executor(
+                    None, self.messages.get_new_reactions, self.last_rowid
+                )
+
+                for reaction in reactions:
+                    reaction["source"] = "imessage"
+                    try:
+                        await self.process_reaction(reaction)
+                        self._save_state(reaction["rowid"])
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        log.error(f"Failed to process reaction {reaction['rowid']}: {e}")
+                        self._save_state(reaction["rowid"])
 
                 # Process Signal messages from queue
                 while not self.signal_queue.empty():

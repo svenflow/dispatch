@@ -1,0 +1,279 @@
+#!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+"""
+Generate CAD models from templates using CadQuery.
+
+Usage:
+    cad-generate <template> [--param=value ...]
+    cad-generate --list-templates
+"""
+
+import argparse
+import os
+import subprocess
+import sys
+from datetime import datetime
+from pathlib import Path
+
+CAD_VENV = Path.home() / ".venvs/cad"
+PYTHON = CAD_VENV / "bin/python"
+OUTPUT_DIR = Path("/tmp/cad_output")
+RENDER_SCRIPT = Path.home() / ".claude/skills/cad/scripts/cad-render"
+
+TEMPLATES = {
+    "bracket": "L-bracket with mounting holes",
+    "enclosure": "Rectangular box shell",
+    "spacer": "Cylindrical spacer with center hole",
+    "mount": "Wall mount plate with corner holes",
+    "organizer": "Cable/item organizer with slots",
+}
+
+def generate_bracket(params: dict, output_base: str):
+    width = params.get("width", 50)
+    height = params.get("height", 40)
+    depth = params.get("depth", 30)
+    thickness = params.get("thickness", 5)
+    hole = params.get("hole", 5)
+
+    code = f'''
+import cadquery as cq
+
+width, height, depth = {width}, {height}, {depth}
+thickness, hole_d = {thickness}, {hole}
+
+result = (
+    cq.Workplane("XY")
+    .box(width, depth, thickness)
+    .faces(">Z").workplane()
+    .move(0, depth/2 - thickness/2)
+    .box(width, thickness, height, centered=(True, True, False))
+    .faces("<Z").workplane()
+    .pushPoints([(-width/4, 0), (width/4, 0)])
+    .hole(hole_d)
+    .faces(">Y").workplane()
+    .pushPoints([(-width/4, height/2), (width/4, height/2)])
+    .hole(hole_d)
+)
+
+cq.exporters.export(result, "{output_base}.stl")
+cq.exporters.export(result, "{output_base}.step")
+bb = result.val().BoundingBox()
+print(f"Bracket: {{bb.xlen:.1f}} x {{bb.ylen:.1f}} x {{bb.zlen:.1f}} mm")
+'''
+    return code
+
+def generate_spacer(params: dict, output_base: str):
+    od = params.get("od", 20)
+    id = params.get("id", 8)
+    height = params.get("height", 10)
+
+    code = f'''
+import cadquery as cq
+
+od, id, height = {od}, {id}, {height}
+
+result = (
+    cq.Workplane("XY")
+    .circle(od/2)
+    .extrude(height)
+    .faces(">Z").workplane()
+    .hole(id)
+)
+
+cq.exporters.export(result, "{output_base}.stl")
+cq.exporters.export(result, "{output_base}.step")
+print(f"Spacer: OD={{od}}mm, ID={{id}}mm, H={{height}}mm")
+'''
+    return code
+
+def generate_organizer(params: dict, output_base: str):
+    slots = params.get("slots", 5)
+    slot_width = params.get("slot_width", 10)
+    slot_depth = params.get("slot_depth", 15)
+    wall = params.get("wall", 3)
+    base = params.get("base", 8)
+
+    code = f'''
+import cadquery as cq
+
+num_slots = {slots}
+slot_width = {slot_width}
+slot_depth = {slot_depth}
+wall = {wall}
+base_height = {base}
+
+total_width = num_slots * (slot_width + wall) + wall
+total_depth = slot_depth + wall * 2
+
+result = cq.Workplane("XY").box(total_width, total_depth, base_height + slot_depth)
+
+for i in range(num_slots):
+    x_pos = -total_width/2 + wall + slot_width/2 + i * (slot_width + wall)
+    result = (
+        result
+        .faces(">Z").workplane()
+        .moveTo(x_pos, 0)
+        .rect(slot_width, slot_depth - wall)
+        .cutBlind(-slot_depth)
+    )
+
+for i in range(num_slots):
+    x_pos = -total_width/2 + wall + slot_width/2 + i * (slot_width + wall)
+    result = (
+        result
+        .faces("<Y").workplane()
+        .moveTo(x_pos, base_height + slot_depth/2)
+        .rect(slot_width, slot_depth)
+        .cutBlind(-wall)
+    )
+
+cq.exporters.export(result, "{output_base}.stl")
+cq.exporters.export(result, "{output_base}.step")
+bb = result.val().BoundingBox()
+print(f"Organizer: {{bb.xlen:.1f}} x {{bb.ylen:.1f}} x {{bb.zlen:.1f}} mm ({{num_slots}} slots)")
+'''
+    return code
+
+def generate_mount(params: dict, output_base: str):
+    width = params.get("width", 60)
+    height = params.get("height", 40)
+    thickness = params.get("thickness", 4)
+    hole = params.get("hole", 5)
+    margin = params.get("margin", 8)
+
+    code = f'''
+import cadquery as cq
+
+width, height = {width}, {height}
+thickness = {thickness}
+hole_d = {hole}
+margin = {margin}
+
+result = (
+    cq.Workplane("XY")
+    .box(width, height, thickness)
+    .faces(">Z").workplane()
+    .pushPoints([
+        (-width/2 + margin, -height/2 + margin),
+        (width/2 - margin, -height/2 + margin),
+        (-width/2 + margin, height/2 - margin),
+        (width/2 - margin, height/2 - margin),
+    ])
+    .hole(hole_d)
+)
+
+cq.exporters.export(result, "{output_base}.stl")
+cq.exporters.export(result, "{output_base}.step")
+print(f"Mount plate: {{width}}x{{height}}x{{thickness}}mm, 4x {{hole_d}}mm holes")
+'''
+    return code
+
+def generate_enclosure(params: dict, output_base: str):
+    width = params.get("width", 80)
+    depth = params.get("depth", 60)
+    height = params.get("height", 30)
+    wall = params.get("wall", 3)
+
+    code = f'''
+import cadquery as cq
+
+width, depth, height = {width}, {depth}, {height}
+wall = {wall}
+
+outer = cq.Workplane("XY").box(width, depth, height)
+inner = (
+    cq.Workplane("XY")
+    .box(width - wall*2, depth - wall*2, height - wall)
+    .translate((0, 0, wall))
+)
+result = outer.cut(inner)
+
+cq.exporters.export(result, "{output_base}.stl")
+cq.exporters.export(result, "{output_base}.step")
+print(f"Enclosure: {{width}}x{{depth}}x{{height}}mm, wall={{wall}}mm")
+'''
+    return code
+
+GENERATORS = {
+    "bracket": generate_bracket,
+    "spacer": generate_spacer,
+    "organizer": generate_organizer,
+    "mount": generate_mount,
+    "enclosure": generate_enclosure,
+}
+
+def main():
+    parser = argparse.ArgumentParser(description="Generate CAD models from templates")
+    parser.add_argument("template", nargs="?", help="Template name")
+    parser.add_argument("--list-templates", action="store_true", help="List available templates")
+
+    args, remaining = parser.parse_known_args()
+
+    if args.list_templates:
+        print("Available templates:")
+        for name, desc in TEMPLATES.items():
+            print(f"  {name:12} - {desc}")
+        return 0
+
+    if not args.template:
+        parser.print_help()
+        return 1
+
+    if args.template not in GENERATORS:
+        print(f"Unknown template: {args.template}")
+        print("Use --list-templates to see available templates")
+        return 1
+
+    # Parse --key=value parameters
+    params = {}
+    for arg in remaining:
+        if arg.startswith("--") and "=" in arg:
+            key, value = arg[2:].split("=", 1)
+            try:
+                params[key] = int(value)
+            except ValueError:
+                try:
+                    params[key] = float(value)
+                except ValueError:
+                    params[key] = value
+
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_base = OUTPUT_DIR / f"{args.template}_{timestamp}"
+
+    code = GENERATORS[args.template](params, str(output_base))
+
+    # Run the code
+    result = subprocess.run(
+        [str(PYTHON), "-c", code],
+        capture_output=True,
+        text=True
+    )
+
+    if result.returncode != 0:
+        print(f"ERROR: {result.stderr}")
+        return 1
+
+    print(result.stdout.strip())
+    print(f"STL|{output_base}.stl")
+    print(f"STEP|{output_base}.step")
+
+    # Render
+    stl_path = f"{output_base}.stl"
+    png_path = f"{output_base}.png"
+    if Path(stl_path).exists() and RENDER_SCRIPT.exists():
+        render_result = subprocess.run(
+            [str(RENDER_SCRIPT), stl_path, png_path],
+            capture_output=True,
+            text=True
+        )
+        if Path(png_path).exists():
+            print(f"PNG|{png_path}")
+
+    return 0
+
+if __name__ == "__main__":
+    sys.exit(main())

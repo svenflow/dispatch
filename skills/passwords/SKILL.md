@@ -23,6 +23,7 @@ All my credentials are stored in macOS Keychain using the `security` CLI. This i
 | `google-oauth-client-secret` | OAuth client secret for gogcli |
 | `modal-token-id` | Modal.com API token ID |
 | `modal-token-secret` | Modal.com API token secret |
+| `fal-api-key` | fal.ai API key (image/3D/video generation) |
 
 ### Payment Card (Privacy.com)
 | Service | Purpose |

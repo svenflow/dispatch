@@ -83,3 +83,20 @@ Notes are useful for remembering preferences, context, etc.
 - Phone numbers should include country code (e.g., +1 for US)
 - The Messages.app chat.db uses phone numbers as identifiers
 - When a message comes in, lookup the phone number to determine tier and routing
+
+## Technical Details
+
+**Hybrid read/write path:**
+- **Reads**: SQLite queries against AddressBook-v22.abcddb (fast, no Contacts.app dependency)
+- **Writes**: AppleScript via Contacts.app (required by macOS for mutations)
+
+**Multi-source database architecture:**
+macOS stores contacts across multiple SQLite databases when iCloud is enabled:
+- `~/Library/Application Support/AddressBook/AddressBook-v22.abcddb` (root, may be stale)
+- `~/Library/Application Support/AddressBook/Sources/<UUID>/AddressBook-v22.abcddb` (per-source)
+
+The same contact can exist in multiple source DBs with different data. AppleScript writes go to
+the active iCloud source (most recently modified). SQLite reads query all sources, sorted by
+modification time (newest first), so "first match wins" returns the most recent version.
+
+If notes appear to not persist, it may be an iCloud sync issue - check all source DBs manually.

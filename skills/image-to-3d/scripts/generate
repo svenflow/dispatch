@@ -1,0 +1,232 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["fal-client", "requests"]
+# ///
+"""
+Generate 3D models from images using fal.ai APIs.
+
+Usage:
+    generate --model meshy /path/to/image.jpg
+    generate --model triposr /path/to/image.jpg -o /tmp/output.glb
+    generate --list-models
+"""
+
+import argparse
+import base64
+import json
+import os
+import sys
+from pathlib import Path
+
+import fal_client
+import requests
+
+
+MODELS = {
+    "hunyuan": {
+        "id": "fal-ai/hunyuan3d-v3/image-to-3d",
+        "name": "Hunyuan3D v3",
+        "description": "Best for faces/people, full PBR textures (~$0.05)",
+        "has_texture": True,
+        "output_key": "model_glb",
+        "input_key": "input_image_url",  # Uses different param name
+        "extra_args": {"enable_pbr": True},
+    },
+    "meshy": {
+        "id": "fal-ai/meshy/v6/image-to-3d",
+        "name": "Meshy-6",
+        "description": "Stylized/cartoonish textured models (~$0.10)",
+        "has_texture": True,
+        "output_key": "model_glb",
+    },
+    "triposr": {
+        "id": "fal-ai/triposr",
+        "name": "TripoSR",
+        "description": "Fast geometry-only, no textures (~$0.02)",
+        "has_texture": False,
+        "output_key": "model_mesh",
+    },
+    "trellis": {
+        "id": "fal-ai/trellis",
+        "name": "TRELLIS",
+        "description": "Native 3D gen, high detail preservation (~$0.02)",
+        "has_texture": True,
+        "output_key": "model_mesh",
+    },
+    "rodin": {
+        "id": "fal-ai/hyper3d/rodin",
+        "name": "Hyper3D Rodin",
+        "description": "Realistic, production-ready 3D (~$0.40)",
+        "has_texture": True,
+        "output_key": "model_mesh",
+        "input_key": "input_image_urls",  # Uses array
+        "input_array": True,
+        "extra_args": {"geometry_file_format": "glb", "quality": "high"},
+    },
+}
+
+
+def load_api_key():
+    """Load FAL_KEY from secrets.env or keychain."""
+    # Try secrets.env first
+    secrets_path = Path.home() / ".claude" / "secrets.env"
+    if secrets_path.exists():
+        with open(secrets_path) as f:
+            for line in f:
+                if line.startswith("FAL_KEY="):
+                    return line.strip().split("=", 1)[1]
+
+    # Try keychain
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["security", "find-generic-password", "-s", "fal-api-key", "-w"],
+            capture_output=True, text=True
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
+
+    raise RuntimeError("FAL_KEY not found in ~/.claude/secrets.env or keychain (fal-api-key)")
+
+
+def image_to_data_url(image_path: str) -> str:
+    """Convert image file to data URL."""
+    path = Path(image_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Image not found: {image_path}")
+
+    with open(path, "rb") as f:
+        image_data = base64.b64encode(f.read()).decode()
+
+    ext = path.suffix.lower()
+    mime_types = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".webp": "image/webp",
+    }
+    mime = mime_types.get(ext, "image/jpeg")
+
+    return f"data:{mime};base64,{image_data}"
+
+
+def generate_3d(image_path: str, model: str, output_path: str = None) -> dict:
+    """Generate 3D model from image."""
+    if model not in MODELS:
+        raise ValueError(f"Unknown model: {model}. Available: {list(MODELS.keys())}")
+
+    model_info = MODELS[model]
+
+    # Set API key
+    os.environ["FAL_KEY"] = load_api_key()
+
+    # Convert image to data URL
+    data_url = image_to_data_url(image_path)
+
+    print(f"Generating 3D model with {model_info['name']}...")
+    print(f"Image: {image_path}")
+
+    # Build arguments based on model
+    input_key = model_info.get("input_key", "image_url")
+    if model_info.get("input_array"):
+        args = {input_key: [data_url]}
+    else:
+        args = {input_key: data_url}
+
+    # Add any extra args from model config
+    if "extra_args" in model_info:
+        args.update(model_info["extra_args"])
+
+    if model == "triposr":
+        args.update({
+            "output_format": "glb",
+            "foreground_ratio": 0.9,
+            "remove_background": True,
+        })
+
+    # Call API
+    result = fal_client.subscribe(
+        model_info["id"],
+        arguments=args,
+        with_logs=True,
+    )
+
+    # Download GLB
+    output_key = model_info["output_key"]
+    if output_key in result:
+        mesh_info = result[output_key]
+        mesh_url = mesh_info.get("url")
+
+        if mesh_url:
+            # Determine output path
+            if output_path is None:
+                input_stem = Path(image_path).stem
+                output_path = f"/tmp/{input_stem}_{model}.glb"
+
+            print(f"Downloading mesh from: {mesh_url}")
+            r = requests.get(mesh_url)
+            r.raise_for_status()
+
+            with open(output_path, "wb") as f:
+                f.write(r.content)
+
+            print(f"Saved to: {output_path}")
+            result["local_path"] = output_path
+
+    return result
+
+
+def list_models():
+    """List available models."""
+    print("Available models:\n")
+    for key, info in MODELS.items():
+        texture = "✅ Yes" if info["has_texture"] else "❌ No"
+        print(f"  {key:12} - {info['name']}")
+        print(f"               {info['description']}")
+        print(f"               Textures: {texture}")
+        print()
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Generate 3D models from images")
+    parser.add_argument("image", nargs="?", help="Path to input image")
+    parser.add_argument("-m", "--model", default="meshy",
+                       choices=list(MODELS.keys()),
+                       help="Model to use (default: meshy)")
+    parser.add_argument("-o", "--output", help="Output GLB path")
+    parser.add_argument("--list-models", action="store_true",
+                       help="List available models")
+    parser.add_argument("--json", action="store_true",
+                       help="Output full result as JSON")
+
+    args = parser.parse_args()
+
+    if args.list_models:
+        list_models()
+        return 0
+
+    if not args.image:
+        parser.error("Image path required (or use --list-models)")
+
+    try:
+        result = generate_3d(args.image, args.model, args.output)
+
+        if args.json:
+            print(json.dumps(result, indent=2))
+        else:
+            print("\n✅ Generation complete!")
+            if "local_path" in result:
+                print(f"   Output: {result['local_path']}")
+
+        return 0
+
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

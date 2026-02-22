@@ -38,6 +38,12 @@ def _get_all_addressbook_dbs() -> List[Path]:
     - Sources: Sources/<UUID>/AddressBook-v22.abcddb (one per account/source)
 
     iCloud sync writes to per-source DBs, so we must query ALL of them.
+
+    IMPORTANT: Returns DBs sorted by modification time (newest first).
+    This ensures single-item queries like get_notes return the most recent
+    version when the same contact exists in multiple synced sources.
+    AppleScript writes go to the active iCloud source (most recently modified),
+    so SQLite reads should prefer that same source for consistency.
     """
     dbs = []
 
@@ -52,6 +58,9 @@ def _get_all_addressbook_dbs() -> List[Path]:
             source_db = source_dir / "AddressBook-v22.abcddb"
             if source_db.exists():
                 dbs.append(source_db)
+
+    # Sort by modification time (newest first) so queries prefer the active source
+    dbs.sort(key=lambda p: p.stat().st_mtime, reverse=True)
 
     return dbs
 
