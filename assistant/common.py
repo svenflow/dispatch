@@ -11,8 +11,10 @@ import json
 import re
 import shutil
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 # Paths
 HOME = Path.home()
@@ -203,9 +205,14 @@ def wrap_sms(
   else:
     reply_cmd = '~/.claude/skills/sms-assistant/scripts/reply'
 
+  # Format timestamp in local timezone (US Eastern)
+  now = datetime.now(ZoneInfo("America/New_York"))
+  timestamp = now.strftime("%a %b %d, %Y %-I:%M%p %Z")  # Mon Feb 23, 2026 6:12PM EST
+
   return f"""
 ---{backend.label} FROM {contact_name} ({tier})---
-Chat ID: {chat_id}{reply_context}
+Chat ID: {chat_id}
+Time: {timestamp}{reply_context}
 {display_prompt}
 ---END {backend.label}---
 **Important:** You are in a text message session. Communicate back with: {reply_cmd} "message"
@@ -264,9 +271,14 @@ def wrap_group_message(
 
   backend = get_backend(source)
 
+  # Format timestamp in local timezone (US Eastern)
+  now = datetime.now(ZoneInfo("America/New_York"))
+  timestamp = now.strftime("%a %b %d, %Y %-I:%M%p %Z")  # Mon Feb 23, 2026 6:12PM EST
+
   return f"""
 ---GROUP {backend.label} [{shown_name}] FROM {sender_name} [TIER: {sender_tier}]---
-Chat ID: {chat_id}{reply_context}
+Chat ID: {chat_id}
+Time: {timestamp}{reply_context}
 {msg_body}
 ---END {backend.label}---{acl_note}
 
