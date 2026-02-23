@@ -1,0 +1,264 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["claude-agent-sdk>=0.1.26"]
+# ///
+"""
+Summarize a session's recent conversation using Opus.
+
+Generates a handoff briefing for session continuity across restarts.
+Saves to .compactions/{timestamp}.md and .pending-summary.md in transcript dir.
+
+Usage:
+    summarize-session <session_name> [--dry-run]
+    summarize-session imessage/2df6be1ed7534cd797e5fdb2c4bd6bd8
+"""
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import logging
+import os
+import subprocess
+import sys
+from datetime import datetime
+from pathlib import Path
+
+# Unset CLAUDECODE to allow nested SDK calls
+if "CLAUDECODE" in os.environ:
+    del os.environ["CLAUDECODE"]
+
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+log = logging.getLogger(__name__)
+
+# Paths
+HOME = Path.home()
+TRANSCRIPTS_DIR = HOME / "transcripts"
+DISPATCH_DIR = HOME / "dispatch"
+LOGS_DIR = DISPATCH_DIR / "logs"
+COMPACTION_LOG = LOGS_DIR / "compactions.log"
+
+# Limits
+MAX_MESSAGES = 50  # Context window safety
+MIN_SUMMARY_LENGTH = 100
+MAX_SUMMARY_LENGTH = 10000
+MAX_COMPACTIONS_KEPT = 10
+
+COMPACTION_PROMPT = """You are preparing a handoff briefing for the next AI instance that will continue this session.
+
+Analyze the conversation transcript below and write a concise handoff document. Focus on:
+
+1. **Active Task**: What was being worked on RIGHT NOW? Be specific - include file paths, function names, error messages if any.
+
+2. **Recent Progress**: What was accomplished in the last few turns? What succeeded/failed?
+
+3. **Blockers/Decisions**: Any unresolved issues, pending decisions, or things the user was waiting for?
+
+4. **User Preferences**: Any corrections, feedback, or preferences the user expressed about how to do things?
+
+5. **Next Step**: What should the next instance do FIRST when it resumes?
+
+Be concise but complete. The next instance will use this to pick up exactly where you left off.
+
+Write your response directly (no wrapper tags)."""
+
+
+def get_transcript_dir(session_name: str) -> Path:
+    """Get transcript directory for a session."""
+    return TRANSCRIPTS_DIR / session_name
+
+
+def read_recent_messages(session_name: str, limit: int = MAX_MESSAGES) -> str:
+    """Read recent messages from the session's chat.
+
+    Uses read-sms or read-signal CLI depending on backend.
+    """
+    # Parse session_name to get backend and chat_id
+    # Format: imessage/+15555550001 or signal/_15555550001
+    parts = session_name.split("/", 1)
+    if len(parts) != 2:
+        log.error(f"Invalid session_name format: {session_name}")
+        return ""
+
+    backend, chat_id = parts
+
+    # Determine which CLI to use
+    if backend == "imessage":
+        cmd = [
+            str(HOME / ".claude/skills/sms-assistant/scripts/read-sms"),
+            "--chat", chat_id,
+            "--limit", str(limit),
+        ]
+    elif backend == "signal":
+        # For signal, we might need a different approach
+        # For now, fall back to read-sms since it reads from Messages.app
+        log.warning(f"Signal backend - falling back to read-sms")
+        cmd = [
+            str(HOME / ".claude/skills/sms-assistant/scripts/read-sms"),
+            "--chat", chat_id,
+            "--limit", str(limit),
+        ]
+    else:
+        log.error(f"Unknown backend: {backend}")
+        return ""
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            log.error(f"read-sms failed: {result.stderr}")
+            return ""
+        return result.stdout
+    except subprocess.TimeoutExpired:
+        log.error("read-sms timed out")
+        return ""
+    except Exception as e:
+        log.error(f"Error reading messages: {e}")
+        return ""
+
+
+async def generate_summary(transcript: str) -> str | None:
+    """Generate summary using Claude Agent SDK with Opus."""
+    from claude_agent_sdk import query, ClaudeAgentOptions, AssistantMessage, TextBlock
+
+    if not transcript or len(transcript.strip()) < 100:
+        log.warning("Transcript too short, skipping summarization")
+        return None
+
+    full_prompt = f"{COMPACTION_PROMPT}\n\n---\n\nTRANSCRIPT:\n{transcript}"
+
+    options = ClaudeAgentOptions(
+        model="opus",
+        max_turns=1,
+        permission_mode="bypassPermissions",
+    )
+
+    result_text = ""
+    try:
+        async for message in query(prompt=full_prompt, options=options):
+            if isinstance(message, AssistantMessage):
+                for block in message.content:
+                    if isinstance(block, TextBlock):
+                        result_text += block.text
+    except Exception as e:
+        # Handle rate_limit_event and other SDK bugs gracefully
+        if "rate_limit_event" in str(e) or "Unknown message type" in str(e):
+            log.warning(f"SDK message parse issue (ignoring): {e}")
+            # Result might still be complete
+        else:
+            log.error(f"SDK error: {e}")
+            if not result_text:
+                return None
+
+    return result_text.strip() if result_text else None
+
+
+def save_summary(session_name: str, summary: str) -> bool:
+    """Save summary to .compactions/ and .pending-summary.md with atomic writes."""
+    transcript_dir = get_transcript_dir(session_name)
+    if not transcript_dir.exists():
+        log.error(f"Transcript dir not found: {transcript_dir}")
+        return False
+
+    # Validate summary length
+    if len(summary) < MIN_SUMMARY_LENGTH:
+        log.warning(f"Summary too short ({len(summary)} chars), skipping save")
+        return False
+    if len(summary) > MAX_SUMMARY_LENGTH:
+        log.warning(f"Summary too long ({len(summary)} chars), truncating")
+        summary = summary[:MAX_SUMMARY_LENGTH] + "\n\n[truncated]"
+
+    # Create .compactions directory
+    compactions_dir = transcript_dir / ".compactions"
+    compactions_dir.mkdir(exist_ok=True)
+
+    # Timestamp for filename
+    timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+
+    # Save to .compactions/{timestamp}.md
+    compaction_file = compactions_dir / f"{timestamp}.md"
+    compaction_file.write_text(summary)
+    log.info(f"Saved compaction to {compaction_file}")
+
+    # Atomic write to .pending-summary.md
+    pending_file = transcript_dir / ".pending-summary.md"
+    pending_tmp = transcript_dir / ".pending-summary.tmp"
+    pending_tmp.write_text(summary)
+    pending_tmp.rename(pending_file)
+    log.info(f"Saved pending summary to {pending_file}")
+
+    # Rotate old compactions (keep last N)
+    rotate_compactions(compactions_dir)
+
+    return True
+
+
+def rotate_compactions(compactions_dir: Path):
+    """Keep only the last N compaction files."""
+    files = sorted(compactions_dir.glob("*.md"), key=lambda f: f.name)
+    if len(files) > MAX_COMPACTIONS_KEPT:
+        for old_file in files[:-MAX_COMPACTIONS_KEPT]:
+            old_file.unlink()
+            log.info(f"Rotated old compaction: {old_file.name}")
+
+
+def log_compaction(session_name: str, success: bool, summary_length: int = 0):
+    """Log compaction result to dedicated log file."""
+    COMPACTION_LOG.parent.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    status = "SUCCESS" if success else "FAILED"
+    with open(COMPACTION_LOG, "a") as f:
+        f.write(f"{timestamp} | {status} | {session_name} | {summary_length} chars\n")
+
+
+async def main():
+    parser = argparse.ArgumentParser(description="Summarize a session for compaction")
+    parser.add_argument("session_name", help="Session name (e.g., imessage/2df6be1ed7534cd797e5fdb2c4bd6bd8)")
+    parser.add_argument("--dry-run", action="store_true", help="Generate summary but don't save")
+    args = parser.parse_args()
+
+    session_name = args.session_name
+    log.info(f"Summarizing session: {session_name}")
+
+    # Read recent messages
+    transcript = read_recent_messages(session_name)
+    if not transcript:
+        log.error("No transcript to summarize")
+        log_compaction(session_name, False)
+        sys.exit(1)
+
+    log.info(f"Read {len(transcript)} chars of transcript")
+
+    # Generate summary with Opus
+    log.info("Generating summary with Opus...")
+    summary = await generate_summary(transcript)
+
+    if not summary:
+        log.error("Failed to generate summary")
+        log_compaction(session_name, False)
+        sys.exit(1)
+
+    log.info(f"Generated summary: {len(summary)} chars")
+
+    if args.dry_run:
+        print("\n--- DRY RUN - Summary would be: ---\n")
+        print(summary)
+        print("\n--- END DRY RUN ---\n")
+        return
+
+    # Save summary
+    if save_summary(session_name, summary):
+        log_compaction(session_name, True, len(summary))
+        log.info("Compaction complete")
+    else:
+        log_compaction(session_name, False)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

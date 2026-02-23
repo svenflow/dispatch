@@ -391,6 +391,7 @@ def ensure_transcript_dir(session_name: str) -> Path:
       link_path.symlink_to(target_path)
 
   # Create settings.json with PreCompact hook
+  # Uses summarize-and-restart which: 1) generates Opus summary, 2) saves to .pending-summary.md, 3) restarts session
   settings_file = claude_dir / "settings.json"
   if not settings_file.exists():
     settings = {
@@ -400,7 +401,7 @@ def ensure_transcript_dir(session_name: str) -> Path:
             "hooks": [
               {
                 "type": "command",
-                "command": f"{HOME}/dispatch/bin/claude-assistant restart-session {session_name}",
+                "command": f"{HOME}/dispatch/bin/summarize-and-restart {session_name}",
                 "async": True,
               }
             ]

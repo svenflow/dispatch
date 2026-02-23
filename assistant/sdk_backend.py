@@ -36,6 +36,206 @@ from assistant.sdk_session import SDKSession
 
 log = logging.getLogger(__name__)
 
+# ──────────────────────────────────────────────────────────────
+# Gemini Vision Analysis (async image understanding)
+# ──────────────────────────────────────────────────────────────
+
+# Image extensions that Gemini can analyze
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif"}
+
+GEMINI_CLI = Path.home() / ".claude" / "skills" / "gemini" / "scripts" / "gemini"
+MESSAGES_DB = Path.home() / "Library" / "Messages" / "chat.db"
+
+
+def get_message_context_for_image(chat_identifier: str, image_rowid: int | None = None,
+                                   before: int = 10, after: int = 1) -> str:
+    """Get recent messages around an image from chat.db for context.
+
+    Args:
+        chat_identifier: The chat ID (phone number or group hex ID)
+        image_rowid: Optional rowid of the image message to anchor around
+        before: Number of messages before the image
+        after: Number of messages after the image
+
+    Returns:
+        Formatted string of recent messages for Gemini context
+    """
+    import sqlite3
+
+    if not MESSAGES_DB.exists():
+        return ""
+
+    try:
+        conn = sqlite3.connect(str(MESSAGES_DB))
+        cursor = conn.cursor()
+
+        # Get messages from this chat, ordered by date
+        # If we have a rowid, get messages around it; otherwise get recent messages
+        if image_rowid:
+            # Get messages before the image
+            cursor.execute("""
+                SELECT
+                    m.ROWID,
+                    m.text,
+                    m.is_from_me,
+                    h.id as sender
+                FROM message m
+                LEFT JOIN handle h ON m.handle_id = h.ROWID
+                LEFT JOIN chat_message_join cmj ON m.ROWID = cmj.message_id
+                LEFT JOIN chat c ON cmj.chat_id = c.ROWID
+                WHERE c.chat_identifier = ?
+                  AND m.ROWID < ?
+                  AND m.text IS NOT NULL
+                  AND m.text != ''
+                ORDER BY m.ROWID DESC
+                LIMIT ?
+            """, (chat_identifier, image_rowid, before))
+            before_msgs = list(reversed(cursor.fetchall()))
+
+            # Get messages after the image
+            cursor.execute("""
+                SELECT
+                    m.ROWID,
+                    m.text,
+                    m.is_from_me,
+                    h.id as sender
+                FROM message m
+                LEFT JOIN handle h ON m.handle_id = h.ROWID
+                LEFT JOIN chat_message_join cmj ON m.ROWID = cmj.message_id
+                LEFT JOIN chat c ON cmj.chat_id = c.ROWID
+                WHERE c.chat_identifier = ?
+                  AND m.ROWID > ?
+                  AND m.text IS NOT NULL
+                  AND m.text != ''
+                ORDER BY m.ROWID ASC
+                LIMIT ?
+            """, (chat_identifier, image_rowid, after))
+            after_msgs = cursor.fetchall()
+
+            messages = before_msgs + after_msgs
+        else:
+            # No rowid - just get recent messages
+            cursor.execute("""
+                SELECT
+                    m.ROWID,
+                    m.text,
+                    m.is_from_me,
+                    h.id as sender
+                FROM message m
+                LEFT JOIN handle h ON m.handle_id = h.ROWID
+                LEFT JOIN chat_message_join cmj ON m.ROWID = cmj.message_id
+                LEFT JOIN chat c ON cmj.chat_id = c.ROWID
+                WHERE c.chat_identifier = ?
+                  AND m.text IS NOT NULL
+                  AND m.text != ''
+                ORDER BY m.ROWID DESC
+                LIMIT ?
+            """, (chat_identifier, before + after))
+            messages = list(reversed(cursor.fetchall()))
+
+        conn.close()
+
+        if not messages:
+            return ""
+
+        # Format messages
+        lines = []
+        for rowid, text, is_from_me, sender in messages:
+            if text and text.strip():
+                who = "Me" if is_from_me else (sender or "Them")
+                lines.append(f"{who}: {text.strip()}")
+
+        return "\n".join(lines)
+
+    except Exception as e:
+        log.warning(f"Failed to get message context: {e}")
+        return ""
+
+
+async def analyze_image_with_gemini(image_path: str, message_context: str | None = None) -> Optional[str]:
+    """Analyze an image using Gemini Vision.
+
+    Runs in background, returns description or None on failure.
+    Uses gemini-3-pro-image-preview for best visual understanding.
+
+    Args:
+        image_path: Path to the image file
+        message_context: Optional text that was sent with the image (provides context)
+    """
+    path = Path(image_path)
+    if not path.exists():
+        log.warning(f"Gemini vision: image not found: {image_path}")
+        return None
+
+    # Check if it's an image
+    suffix = path.suffix.lower()
+    if suffix not in IMAGE_EXTENSIONS:
+        log.debug(f"Gemini vision: not an image: {image_path}")
+        return None
+
+    # Convert HEIC to JPEG if needed (Gemini doesn't support HEIC directly)
+    actual_path = image_path
+    if suffix in {".heic", ".heif"}:
+        try:
+            import tempfile
+            jpeg_path = Path(tempfile.gettempdir()) / f"{path.stem}_converted.jpg"
+            proc = await asyncio.create_subprocess_exec(
+                "sips", "-s", "format", "jpeg", str(path), "--out", str(jpeg_path),
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await proc.wait()
+            if jpeg_path.exists():
+                actual_path = str(jpeg_path)
+                log.debug(f"Gemini vision: converted HEIC to JPEG: {jpeg_path}")
+            else:
+                log.warning(f"Gemini vision: HEIC conversion failed for {image_path}")
+                return None
+        except Exception as e:
+            log.warning(f"Gemini vision: HEIC conversion error: {e}")
+            return None
+
+    # Build context-aware prompt
+    if message_context and message_context.strip() and message_context != "(no text)":
+        # Check if it looks like multi-line conversation context vs single message
+        if "\n" in message_context:
+            prompt = f"""Recent conversation context:
+{message_context}
+
+Now an image was shared. Briefly describe what you see in this image, considering the conversation context above. Be concise but capture key details. 2-3 sentences max."""
+        else:
+            prompt = f"""The sender shared this image with the message: "{message_context}"
+
+Briefly describe what you see in this image, keeping the sender's context in mind. Be concise but capture key details. 2-3 sentences max."""
+    else:
+        prompt = "Briefly describe what you see in this image. Be concise but capture key details - who/what is shown, the setting, and any notable elements. 2-3 sentences max."
+
+    # Call Gemini CLI
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            str(GEMINI_CLI),
+            "-m", "gemini-3-pro-image-preview",
+            "-i", actual_path,
+            prompt,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60.0)
+
+        if proc.returncode == 0 and stdout:
+            description = stdout.decode().strip()
+            log.info(f"Gemini vision: analyzed {path.name} ({len(description)} chars)")
+            return description
+        else:
+            log.warning(f"Gemini vision failed: {stderr.decode()[:200]}")
+            return None
+    except asyncio.TimeoutError:
+        log.warning(f"Gemini vision: timeout for {image_path}")
+        return None
+    except Exception as e:
+        log.warning(f"Gemini vision error: {e}")
+        return None
+
 # Lifecycle logger (matches current format)
 lifecycle_log = logging.getLogger("lifecycle")
 
@@ -157,6 +357,66 @@ class SDKBackend:
         # Two-tier healing state
         self._last_fast_check: Dict[str, datetime] = {}  # chat_id -> last scan timestamp
         self._recently_healed: Dict[str, datetime] = {}  # chat_id -> heal timestamp
+
+    async def recreate_sessions_with_pending_summaries(self) -> int:
+        """Recreate sessions that have pending summaries from previous daemon shutdown.
+
+        Called at startup to preserve context across daemon restarts.
+        Returns the number of sessions recreated.
+        """
+        recreated = 0
+
+        # Iterate through registry to find sessions with pending summaries
+        for chat_id, entry in self.registry.all().items():
+            session_name = entry.get("session_name")
+            if not session_name:
+                continue
+
+            # Check if there's a pending summary
+            transcript_dir = TRANSCRIPTS_DIR / session_name
+            pending_file = transcript_dir / ".pending-summary.md"
+
+            if not pending_file.exists():
+                continue
+
+            # Get session metadata from registry
+            contact_name = entry.get("contact_name", "Unknown")
+            tier = entry.get("tier", "favorite")
+            session_type = entry.get("type", "individual")
+
+            # Parse source from session_name (format: imessage/chat_id or signal/chat_id)
+            source = "imessage"
+            if "/" in session_name:
+                source = session_name.split("/")[0]
+
+            log.info(f"STARTUP | Recreating session with pending summary: {session_name}")
+            lifecycle_log.info(f"STARTUP | RECREATE_PENDING | {session_name}")
+
+            try:
+                if session_type == "group":
+                    display_name = entry.get("display_name", chat_id)
+                    await self.create_group_session(
+                        chat_id=chat_id,
+                        display_name=display_name,
+                        source=source,
+                    )
+                else:
+                    await self.create_session(
+                        contact_name=contact_name,
+                        chat_id=chat_id,
+                        tier=tier,
+                        source=source,
+                        session_type=session_type,
+                    )
+                recreated += 1
+            except Exception as e:
+                log.error(f"STARTUP | Failed to recreate {session_name}: {e}")
+
+        if recreated:
+            log.info(f"STARTUP | Recreated {recreated} sessions with pending summaries")
+            lifecycle_log.info(f"STARTUP | RECREATE_COMPLETE | count={recreated}")
+
+        return recreated
 
     # ──────────────────────────────────────────────────────────────
     # Individual sessions
@@ -381,6 +641,21 @@ class SDKBackend:
         await session.inject(wrapped)
         self.registry.update_last_message_time(normalized)
         log.info(f"Injected message for {chat_id} via {source}")
+
+        # Spawn async Gemini vision analysis for image attachments
+        if attachments:
+            for att in attachments:
+                image_path = att.get("path")
+                if image_path and Path(image_path).suffix.lower() in IMAGE_EXTENSIONS:
+                    asyncio.create_task(
+                        self._inject_gemini_vision(
+                            session, normalized, image_path,
+                            chat_identifier=chat_id,  # Original chat_id for chat.db lookup
+                            message_rowid=att.get("rowid"),  # For message context anchoring
+                        ),
+                        name=f"gemini-vision-{normalized}",
+                    )
+
         return True
 
     async def inject_reaction(
@@ -416,6 +691,57 @@ class SDKBackend:
         await session.inject(reaction_text)
         log.info(f"Injected reaction {emoji} from {sender_name} for {chat_id}")
         return True
+
+    async def _inject_gemini_vision(
+        self,
+        session: SDKSession,
+        chat_id: str,
+        image_path: str,
+        chat_identifier: str | None = None,
+        message_rowid: int | None = None,
+    ) -> None:
+        """Background task: analyze image with Gemini and inject result into session.
+
+        Silently skips if Gemini fails (no error injection).
+
+        Args:
+            session: The SDK session to inject into
+            chat_id: Internal chat ID (normalized)
+            image_path: Path to the image file
+            chat_identifier: Chat identifier for chat.db lookup (phone or group hex)
+            message_rowid: Optional rowid of the image message for context anchoring
+        """
+        try:
+            # Get conversation context from chat.db (10 before, 1 after)
+            conversation_context = ""
+            if chat_identifier:
+                # Run blocking DB query in executor to avoid blocking event loop
+                loop = asyncio.get_event_loop()
+                conversation_context = await loop.run_in_executor(
+                    None,
+                    get_message_context_for_image,
+                    chat_identifier,
+                    message_rowid,
+                    10,  # before
+                    1,   # after
+                )
+
+            description = await analyze_image_with_gemini(image_path, conversation_context)
+            if description:
+                # Check session is still alive before injecting
+                if session.is_alive():
+                    vision_msg = f"""
+---VISION ANALYSIS---
+Gemini analyzed the attached image:
+{description}
+---END VISION---
+"""
+                    await session.inject(vision_msg)
+                    log.info(f"Injected Gemini vision for {chat_id}")
+                else:
+                    log.debug(f"Session {chat_id} died before vision inject")
+        except Exception as e:
+            log.warning(f"Gemini vision task failed for {chat_id}: {e}")
 
     # ──────────────────────────────────────────────────────────────
     # Group sessions
@@ -585,6 +911,21 @@ class SDKBackend:
         )
         await session.inject(wrapped)
         self.registry.update_last_message_time(chat_id)
+
+        # Spawn async Gemini vision analysis for image attachments
+        if attachments:
+            for att in attachments:
+                image_path = att.get("path")
+                if image_path and Path(image_path).suffix.lower() in IMAGE_EXTENSIONS:
+                    asyncio.create_task(
+                        self._inject_gemini_vision(
+                            session, chat_id, image_path,
+                            chat_identifier=chat_id,  # Group chat_id is the chat_identifier
+                            message_rowid=att.get("rowid"),
+                        ),
+                        name=f"gemini-vision-{chat_id}",
+                    )
+
         return True
 
     # ──────────────────────────────────────────────────────────────
@@ -1104,12 +1445,76 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
                     return ""
         return ""
 
+    async def _generate_shutdown_summaries(self, sessions: list) -> dict[str, bool]:
+        """Generate summaries for all active sessions before shutdown.
+
+        Runs summarize-session for each session concurrently with a timeout.
+        Returns dict mapping session_name -> success.
+        """
+        SUMMARIZE_SCRIPT = HOME / "dispatch/bin/summarize-session"
+        TIMEOUT_PER_SESSION = 60  # seconds
+
+        if not sessions:
+            return {}
+
+        log.info(f"SHUTDOWN | Generating summaries for {len(sessions)} active sessions...")
+
+        async def summarize_one(session: SDKSession) -> tuple[str, bool]:
+            """Generate summary for one session."""
+            session_name = get_session_name(session.chat_id, session.source)
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    str(UV), "run", str(SUMMARIZE_SCRIPT), session_name,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                try:
+                    stdout, stderr = await asyncio.wait_for(
+                        proc.communicate(),
+                        timeout=TIMEOUT_PER_SESSION
+                    )
+                    if proc.returncode == 0:
+                        log.info(f"SHUTDOWN | Summary generated for {session_name}")
+                        return (session_name, True)
+                    else:
+                        log.warning(f"SHUTDOWN | Summary failed for {session_name}: {stderr.decode()[:200]}")
+                        return (session_name, False)
+                except asyncio.TimeoutError:
+                    proc.kill()
+                    await proc.wait()
+                    log.warning(f"SHUTDOWN | Summary timeout for {session_name}")
+                    return (session_name, False)
+            except Exception as e:
+                log.error(f"SHUTDOWN | Summary error for {session_name}: {e}")
+                return (session_name, False)
+
+        # Run all summaries concurrently
+        results = await asyncio.gather(*[summarize_one(s) for s in sessions], return_exceptions=True)
+
+        # Process results
+        summary_results = {}
+        for result in results:
+            if isinstance(result, Exception):
+                log.error(f"SHUTDOWN | Summary exception: {result}")
+            elif isinstance(result, tuple):
+                session_name, success = result
+                summary_results[session_name] = success
+
+        success_count = sum(1 for v in summary_results.values() if v)
+        log.info(f"SHUTDOWN | Generated {success_count}/{len(sessions)} summaries")
+        return summary_results
+
     async def shutdown(self):
-        """Clean shutdown: save session_ids, disconnect all clients."""
+        """Clean shutdown: generate summaries, save session_ids, disconnect all clients."""
         log.info("SHUTDOWN | Saving session_ids and disconnecting all clients...")
         async with self._lock:
             sessions = list(self.sessions.values())
             self.sessions.clear()
+
+        # Generate summaries for active sessions before stopping them
+        # This preserves context across daemon restarts
+        if sessions:
+            await self._generate_shutdown_summaries(sessions)
 
         # Save session_ids for future resume
         for s in sessions:
@@ -1135,6 +1540,39 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
     # System prompt builders (identical to current tmux prompts)
     # ──────────────────────────────────────────────────────────────
 
+    def _get_pending_summary(self, session_name: str) -> str | None:
+        """Get and consume pending summary from compaction.
+
+        Reads .pending-summary.md if it exists, validates it, deletes it, and returns content.
+        Returns None if no pending summary or validation fails.
+        """
+        transcript_dir = ensure_transcript_dir(session_name)
+        pending_file = transcript_dir / ".pending-summary.md"
+
+        if not pending_file.exists():
+            return None
+
+        try:
+            summary = pending_file.read_text()
+
+            # Validate length
+            if len(summary) < 100:
+                log.warning(f"Pending summary too short ({len(summary)} chars), ignoring")
+                pending_file.unlink()
+                return None
+            if len(summary) > 10000:
+                log.warning(f"Pending summary too long ({len(summary)} chars), truncating")
+                summary = summary[:10000] + "\n\n[truncated]"
+
+            # Consume the file (delete after reading)
+            pending_file.unlink()
+            log.info(f"Injected pending summary for {session_name} ({len(summary)} chars)")
+            return summary
+
+        except Exception as e:
+            log.error(f"Error reading pending summary: {e}")
+            return None
+
     async def _build_individual_system_prompt(
         self,
         session_name: str,
@@ -1155,11 +1593,15 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
             self._get_chat_context(session_name),
         )
 
+        # Check for pending summary from compaction
+        pending_summary = self._get_pending_summary(session_name)
+
         # Build sections with clear labels
         soul_section = f"\n## My Identity (from SOUL.md)\n\n{soul_content}\n" if soul_content else ""
         notes_section = f"\n## About {contact_name} (from Contacts.app)\n\n{contact_notes}\n" if contact_notes else ""
         memory_section = f"\n## About {contact_name} (from memories)\n\n{memory_summary}\n" if memory_summary else ""
         context_section = f"\n## Current Conversation Context\n\n{chat_context}\n" if chat_context else ""
+        summary_section = f"\n## Previous Session Context\n\n{pending_summary}\n" if pending_summary else ""
 
         # Determine send command and history based on source
         from assistant.backends import get_backend
@@ -1173,7 +1615,7 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
 
         return f"""SESSION START - INDIVIDUAL {backend.label} CHAT: {contact_name} ({tier} tier)
 Chat ID: {chat_id}
-{soul_section}{notes_section}{memory_section}{context_section}
+{soul_section}{notes_section}{memory_section}{context_section}{summary_section}
 {history_note}
 
 After reading, act based on what you see:
@@ -1258,9 +1700,13 @@ Quick reference:
                     part += f"\n**From memories:**\n{mem}\n"
                 participant_context_parts.append(part)
 
+        # Check for pending summary from compaction
+        pending_summary = self._get_pending_summary(session_name)
+
         participants_section = "\n".join(participant_lines) if participant_lines else "- (unknown participants)"
         participant_context_section = "\n".join(participant_context_parts) if participant_context_parts else ""
         chat_context_section = f"\n## Current Conversation Context\n\n{chat_context}\n" if chat_context else ""
+        summary_section = f"\n## Previous Session Context\n\n{pending_summary}\n" if pending_summary else ""
 
         shown_name = display_name or chat_id
 
@@ -1278,7 +1724,7 @@ Chat ID: {chat_id}
 Participants:
 {participants_section}
 {soul_section}
-{participant_context_section}{chat_context_section}
+{participant_context_section}{chat_context_section}{summary_section}
 **FIRST**: Check conversation history: {history_cmd}
 
 After reading, act based on what you see - respond to unanswered messages, continue work in progress, or wait silently.

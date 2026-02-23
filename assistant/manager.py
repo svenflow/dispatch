@@ -85,6 +85,11 @@ SEARCH_DAEMON_SCRIPT = SEARCH_DAEMON_DIR / "src" / "daemon.ts"
 SEARCH_DAEMON_PORT = 7890
 SEARCH_DAEMON_ENABLED = os.environ.get("DISABLE_SEARCH_DAEMON", "").lower() not in ("1", "true", "yes")
 
+# Sven API config - lives in dispatch/services/sven-api
+SVEN_API_DIR = ASSISTANT_DIR / "services" / "sven-api"
+SVEN_API_SCRIPT = SVEN_API_DIR / "server.py"
+SVEN_API_PORT = 8080
+
 # macOS epoch offset (2001-01-01 to 1970-01-01)
 MACOS_EPOCH_OFFSET = 978307200
 
@@ -1182,6 +1187,9 @@ class Manager:
             log.info("Search daemon disabled via DISABLE_SEARCH_DAEMON env var")
             self.search_daemon = None
 
+        # Spawn Sven API as child process
+        self.sven_api_daemon = self._spawn_sven_api_daemon()
+
         # Signal integration
         self.signal_queue = queue.Queue()
         self.signal_daemon = None
@@ -1241,6 +1249,42 @@ class Manager:
         try:
             import urllib.request
             url = f"http://localhost:{SEARCH_DAEMON_PORT}/health"
+            with urllib.request.urlopen(url, timeout=2) as resp:
+                return resp.status == 200
+        except Exception:
+            return False
+
+    def _spawn_sven_api_daemon(self) -> Optional[subprocess.Popen]:
+        """Spawn the Sven API server as a child process.
+
+        Returns the Popen object or None if spawn failed.
+        """
+        if not SVEN_API_SCRIPT.exists():
+            log.warning(f"Sven API script not found at {SVEN_API_SCRIPT}")
+            return None
+
+        sven_api_log_path = LOGS_DIR / "sven-api.log"
+        self._sven_api_log_fh = open(sven_api_log_path, "a")
+
+        try:
+            proc = subprocess.Popen(
+                [str(UV), "run", str(SVEN_API_SCRIPT)],
+                stdout=self._sven_api_log_fh,
+                stderr=self._sven_api_log_fh,
+                cwd=str(SVEN_API_DIR),
+            )
+            log.info(f"Spawned Sven API daemon (PID: {proc.pid})")
+            lifecycle_log.info(f"SVEN_API | SPAWNED | pid={proc.pid}")
+            return proc
+        except Exception as e:
+            log.error(f"Failed to spawn Sven API daemon: {e}")
+            return None
+
+    def _check_sven_api_health(self) -> bool:
+        """Check if Sven API is responding."""
+        try:
+            import urllib.request
+            url = f"http://localhost:{SVEN_API_PORT}/health"
             with urllib.request.urlopen(url, timeout=2) as resp:
                 return resp.status == 200
         except Exception:
@@ -1330,6 +1374,17 @@ class Manager:
 
         if SIGNAL_SOCKET.exists():
             SIGNAL_SOCKET.unlink()
+
+    def _stop_sven_api(self):
+        """Stop Sven API daemon."""
+        if self.sven_api_daemon:
+            self.sven_api_daemon.terminate()
+            try:
+                self.sven_api_daemon.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.sven_api_daemon.kill()
+            self.sven_api_daemon = None
+            log.info("Stopped Sven API daemon")
 
     def _send_sms(self, phone: str, message: str) -> bool:
         """Send an SMS message via the send-sms CLI.
@@ -1453,37 +1508,40 @@ Your job is to diagnose and fix the issue. Follow these steps:
 1. FIRST (after verification): Send an SMS to let them know you're on it:
    ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[HEALING] Starting diagnosis..."
 
-2. Check system resources:
+2. Take and send a screenshot of the current screen state:
+   screencapture -x /tmp/healme-screenshot.png && ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" /tmp/healme-screenshot.png
+
+3. Check system resources:
    uv run ~/.claude/skills/system-info/scripts/sysinfo.py
 
-3. Check active SDK sessions:
+4. Check active SDK sessions:
    claude-assistant status
 
-4. Check recent logs for errors:
+5. Check recent logs for errors:
    tail -100 ~/dispatch/logs/manager.log | grep -iE "(error|fail|exception)"
    tail -50 ~/dispatch/logs/session_lifecycle.log
 
-5. Check recent SMS history with admin:
+6. Check recent SMS history with admin:
    ~/.claude/skills/sms-assistant/scripts/read-sms --chat "{admin_phone}" --limit 20
 
-6. Check the admin transcript for context:
+7. Check the admin transcript for context:
    Look at ~/transcripts/{session_name}/ if it exists
 
-7. Send [HEALING] updates as you find issues:
+8. Send [HEALING] updates as you find issues:
    ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[HEALING] Found: <issue>"
 
-8. Fix what you can:
+9. Fix what you can:
    - Kill stuck Claude processes: kill <pid>
    - Close stale Chrome tabs: ~/.claude/skills/chrome-control/scripts/chrome close <tab_id>
    - Kill broken sessions: claude-assistant kill-session <name>
 
-9. Restart the daemon:
-   claude-assistant restart
+10. Restart the daemon:
+    claude-assistant restart
 
-10. Restart the admin session:
+11. Restart the admin session:
     claude-assistant restart-session {session_name}
 
-11. Send completion message:
+12. Send completion message:
     ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[HEALING] Complete - <summary of what you found and fixed>"
 
 If you CANNOT fix the issue, send:
@@ -1751,6 +1809,10 @@ You have 15 minutes. Work efficiently.
 
     async def _shutdown(self):
         """Graceful shutdown."""
+        # Guard against concurrent shutdown calls (e.g., SIGTERM + SIGINT race)
+        if self._shutdown_flag:
+            log.info("DAEMON | SHUTDOWN | Already in progress, skipping")
+            return
         self._shutdown_flag = True
         log.info("DAEMON | SHUTDOWN | START")
         lifecycle_log.info("DAEMON | SHUTDOWN | START")
@@ -1769,6 +1831,7 @@ You have 15 minutes. Work efficiently.
                 while task.cancelling() > 0:
                     task.uncancel()
         self._stop_signal()
+        self._stop_sven_api()
         log.info("DAEMON | SHUTDOWN | COMPLETE")
         lifecycle_log.info("DAEMON | SHUTDOWN | COMPLETE")
 
@@ -1918,6 +1981,12 @@ Keep the text concise - this is a nightly check-in, not a full report.
 
         # Lazy loading: sessions created on first message (not pre-warmed)
         log.info("Lazy loading enabled - sessions will be created on first message")
+
+        # Recreate sessions that have pending summaries from previous shutdown
+        # This preserves context across daemon restarts
+        recreated = await self.sessions.recreate_sessions_with_pending_summaries()
+        if recreated:
+            log.info(f"Recreated {recreated} sessions with pending context from previous shutdown")
 
         # Start Signal daemon and listener
         log.info("Starting Signal integration...")
@@ -2089,6 +2158,18 @@ Keep the text concise - this is a nightly check-in, not a full report.
                             self.signal_daemon = self._spawn_signal_daemon()
                             if self.signal_daemon:
                                 self._start_signal_listener()
+
+                    # Check Sven API health
+                    if self.sven_api_daemon is not None:
+                        if self.sven_api_daemon.poll() is not None:
+                            log.warning("Sven API died, restarting...")
+                            lifecycle_log.info(f"SVEN_API | DIED | restarting")
+                            self.sven_api_daemon = self._spawn_sven_api_daemon()
+                        elif not self._check_sven_api_health():
+                            log.warning("Sven API not responding, restarting...")
+                            lifecycle_log.info(f"SVEN_API | UNRESPONSIVE | restarting")
+                            self.sven_api_daemon.kill()
+                            self.sven_api_daemon = self._spawn_sven_api_daemon()
 
                     last_health_check = time.time()
 
