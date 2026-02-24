@@ -33,6 +33,7 @@ FATAL_PATTERNS: list[tuple[str, str]] = [
     (r"\"authentication_\w+\"", "auth_error"),
     (r"\"billing_error\"", "billing_error"),
     (r"content size exceeds", "content_too_large"),
+    (r"JSON message exceeded maximum buffer size", "buffer_overflow"),
 ]
 
 # Compiled for performance (called every 60s across all sessions)
