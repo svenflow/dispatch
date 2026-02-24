@@ -1,0 +1,86 @@
+#!/bin/bash
+# md2img - Convert markdown to PNG with GitHub styling
+# Usage: md2img input.md output.png [--width 800] [--theme light|dark]
+
+set -e
+
+# Defaults
+WIDTH=800
+THEME="light"
+INPUT=""
+OUTPUT=""
+
+# Parse args
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -w|--width)
+            WIDTH="$2"
+            shift 2
+            ;;
+        -t|--theme)
+            THEME="$2"
+            shift 2
+            ;;
+        -h|--help)
+            echo "Usage: md2img input.md output.png [--width 800] [--theme light|dark]"
+            echo ""
+            echo "Options:"
+            echo "  -w, --width   Image width in pixels (default: 800)"
+            echo "  -t, --theme   Theme: light or dark (default: light)"
+            echo ""
+            echo "Examples:"
+            echo "  md2img README.md readme.png"
+            echo "  md2img PLAN.md plan.png -w 1000 -t dark"
+            exit 0
+            ;;
+        *)
+            if [[ -z "$INPUT" ]]; then
+                INPUT="$1"
+            elif [[ -z "$OUTPUT" ]]; then
+                OUTPUT="$1"
+            fi
+            shift
+            ;;
+    esac
+done
+
+# Validate
+if [[ -z "$INPUT" ]] || [[ -z "$OUTPUT" ]]; then
+    echo "Error: input and output required"
+    echo "Usage: md2img input.md output.png"
+    exit 1
+fi
+
+# Check mdimg installed
+if ! command -v mdimg &> /dev/null; then
+    echo "Error: mdimg not found. Install with: npm install -g mdimg"
+    exit 1
+fi
+
+# Map theme to mdimg css
+if [[ "$THEME" == "dark" ]]; then
+    CSS="githubDark"
+else
+    CSS="github"
+fi
+
+# Handle stdin
+if [[ "$INPUT" == "-" ]]; then
+    TMPFILE=$(mktemp /tmp/md2img.XXXXXX.md)
+    cat > "$TMPFILE"
+    INPUT="$TMPFILE"
+    trap "rm -f $TMPFILE" EXIT
+fi
+
+# Preprocess frontmatter to styled table
+SCRIPT_DIR="$(dirname "$0")"
+PROCESSED_FILE=$(mktemp /tmp/md2img.XXXXXX.md)
+"$SCRIPT_DIR/preprocess-frontmatter" "$INPUT" > "$PROCESSED_FILE"
+
+# Run mdimg on processed file
+mdimg -i "$PROCESSED_FILE" -o "$OUTPUT" -w "$WIDTH" --css "$CSS"
+
+# Cleanup
+rm -f "$PROCESSED_FILE"
+
+echo "$OUTPUT"

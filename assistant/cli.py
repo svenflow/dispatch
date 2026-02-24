@@ -447,7 +447,12 @@ def cmd_restart_session(args):
             else:
                 print(f"Compaction failed (continuing with restart): {result.stderr[:200] if result.stderr else 'unknown error'}")
 
-    resp = _ipc_command({"cmd": "restart_session", "chat_id": chat_id})
+    # Build restart command with optional tier override
+    restart_cmd = {"cmd": "restart_session", "chat_id": chat_id}
+    if getattr(args, 'tier', None):
+        restart_cmd["tier"] = args.tier
+
+    resp = _ipc_command(restart_cmd)
     if resp.get("ok"):
         print(f"Restarted session: {session}")
     else:
@@ -648,6 +653,20 @@ def cmd_inject_prompt(args):
             tier = "favorite"  # Safe default tier
             print(f"Auto-creating session for: {chat_id} (tier={tier})", file=sys.stderr)
 
+    # --admin flag overrides tier to admin (fixes permission issues when
+    # registry has wrong tier cached)
+    if args.admin:
+        tier = "admin"
+
+    # Build attachment info if provided
+    attachment = None
+    if getattr(args, 'attachment', None):
+        attachment_path = Path(args.attachment).expanduser()
+        if attachment_path.exists():
+            attachment = {"path": str(attachment_path)}
+        else:
+            print(f"Warning: Attachment file not found: {attachment_path}", file=sys.stderr)
+
     resp = _ipc_command({
         "cmd": "inject",
         "chat_id": chat_id,
@@ -660,6 +679,7 @@ def cmd_inject_prompt(args):
         "tier": tier,
         "source": source,
         "reply_to": getattr(args, 'reply_to', None),
+        "attachment": attachment,
     })
 
     if resp.get("ok"):
@@ -870,6 +890,7 @@ def main():
     restart_session_parser = subparsers.add_parser("restart-session", help="Restart a specific session (compacts first)")
     restart_session_parser.add_argument("session", help="Session name (imessage/_15555550100), chat_id, or contact name")
     restart_session_parser.add_argument("--no-compact", action="store_true", help="Skip compaction before restart")
+    restart_session_parser.add_argument("--tier", choices=["admin", "wife", "family", "favorite"], help="Override tier for restarted session")
 
     # restart-sessions
     subparsers.add_parser("restart-sessions", help="Restart all sessions")
@@ -918,6 +939,7 @@ def main():
     inject_parser.add_argument("--sven-app", action="store_true", help="Message from Sven iOS app (adds 🎤 prefix and echo instruction)")
     inject_parser.add_argument("--file", "-f", help="Read prompt from file")
     inject_parser.add_argument("--reply-to", help="GUID of message being replied to (for reply chain context)")
+    inject_parser.add_argument("--attachment", help="Path to image attachment for Gemini vision analysis")
 
     args = parser.parse_args()
 

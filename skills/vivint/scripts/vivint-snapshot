@@ -1,0 +1,121 @@
+#!/usr/bin/env /usr/bin/python3
+"""
+Capture a snapshot from a Vivint camera using RTSP.
+Uses OpenCV which properly handles Digest authentication.
+"""
+
+import argparse
+import json
+import re
+import sys
+from pathlib import Path
+
+# Must use system python for OpenCV to work (uv sandbox has network issues)
+try:
+    import cv2
+except ImportError:
+    print("ERROR: OpenCV not installed. Run: /usr/bin/pip3 install --user opencv-python-headless", file=sys.stderr)
+    sys.exit(1)
+
+STATE_DIR = Path.home() / ".claude" / "skills" / "vivint" / "state"
+PANELS_FILE = STATE_DIR / "panels.json"
+
+
+def get_panel_data():
+    """Load panel data from state file."""
+    if not PANELS_FILE.exists():
+        print("ERROR: No panels.json found. Run vivint-auth --cameras first.", file=sys.stderr)
+        sys.exit(1)
+    return json.loads(PANELS_FILE.read_text())
+
+
+def extract_local_ip(cia_url):
+    """Extract IP from cia field (e.g., https://10.10.10.33:8557/Audio-29 -> 10.10.10.33)."""
+    match = re.search(r'https?://([^:/]+)', cia_url)
+    return match.group(1) if match else None
+
+
+def capture_snapshot(rtsp_url, output_path):
+    """Capture a single frame from RTSP stream."""
+    cap = cv2.VideoCapture(rtsp_url)
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+    if not cap.isOpened():
+        print(f"ERROR: Failed to open stream", file=sys.stderr)
+        return False
+
+    ret, frame = cap.read()
+    cap.release()
+
+    if not ret:
+        print(f"ERROR: Failed to grab frame", file=sys.stderr)
+        return False
+
+    cv2.imwrite(str(output_path), frame)
+    return True
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Capture Vivint camera snapshot")
+    parser.add_argument("camera", nargs="?", help="Camera name (partial match)")
+    parser.add_argument("--panel", help="Panel name (partial match)")
+    parser.add_argument("--output", "-o", help="Output file path (default: /tmp/<camera>_snapshot.jpg)")
+    parser.add_argument("--list", "-l", action="store_true", help="List available cameras")
+    parser.add_argument("--sd", action="store_true", help="Use SD stream instead of HD (default is HD)")
+    args = parser.parse_args()
+
+    data = get_panel_data()
+    panels = data.get("panels", [])
+
+    if args.list:
+        for panel in panels:
+            print(f"\n{panel['name']}:")
+            for cam in panel.get("cameras", []):
+                print(f"  - {cam['name']}")
+        return
+
+    if not args.camera:
+        print("ERROR: Specify a camera name or use --list", file=sys.stderr)
+        sys.exit(1)
+
+    # Find matching camera
+    for panel in panels:
+        if args.panel and args.panel.lower() not in panel["name"].lower():
+            continue
+
+        for cam in panel.get("cameras", []):
+            if args.camera.lower() in cam["name"].lower():
+                # Found the camera
+                local_ip = extract_local_ip(cam.get("local_ip", ""))
+                if not local_ip:
+                    print(f"ERROR: No local IP found for {cam['name']}", file=sys.stderr)
+                    sys.exit(1)
+
+                # Build RTSP URL with local IP
+                # Extract Video-XX from local_stream URL
+                stream_match = re.search(r'(Video-\d+)', cam.get("local_stream", ""))
+                if not stream_match:
+                    print(f"ERROR: Could not parse stream URL", file=sys.stderr)
+                    sys.exit(1)
+
+                video_id = stream_match.group(1)
+                # HD = no suffix (960x960), SD = _SD suffix (512x512)
+                # Note: _HD suffix doesn't exist, use no suffix for higher res
+                quality = "_SD" if args.sd else ""
+                rtsp_url = f"rtsp://{panel['rtsp_user']}:{panel['rtsp_pass']}@{local_ip}:8554/{video_id}{quality}"
+
+                output = args.output or f"/tmp/{cam['name'].lower().replace(' ', '_')}_snapshot.jpg"
+
+                print(f"Capturing from {cam['name']}...")
+                if capture_snapshot(rtsp_url, output):
+                    print(f"Saved to {output}")
+                    sys.exit(0)
+                else:
+                    sys.exit(1)
+
+    print(f"ERROR: Camera '{args.camera}' not found", file=sys.stderr)
+    sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

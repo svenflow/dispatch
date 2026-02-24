@@ -1,0 +1,439 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["requests", "pyjwt"]
+# ///
+"""
+Vivint API authentication and panel credential fetcher.
+Uses OAuth PKCE flow with MFA support and token refresh.
+"""
+
+import argparse
+import base64
+import hashlib
+import json
+import os
+import secrets
+import subprocess
+import sys
+import urllib.parse
+from pathlib import Path
+
+import jwt
+import requests
+
+AUTH_ENDPOINT = "https://id.vivint.com"
+API_ENDPOINT = "https://www.vivintsky.com"
+STATE_DIR = Path.home() / ".claude" / "skills" / "vivint" / "state"
+TOKENS_FILE = STATE_DIR / "tokens.json"
+PANELS_FILE = STATE_DIR / "panels.json"
+
+DEBUG = False
+
+def debug(msg: str):
+    """Print debug message if debug mode enabled."""
+    if DEBUG:
+        print(f"[DEBUG] {msg}", file=sys.stderr)
+
+
+def get_keychain_password(service: str, account: str) -> str | None:
+    """Get password from macOS keychain."""
+    debug(f"Getting keychain password for {service}/{account}")
+    try:
+        result = subprocess.run(
+            ["security", "find-generic-password", "-s", service, "-a", account, "-w"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        debug(f"Found keychain password for {service}/{account}")
+        return result.stdout.strip()
+    except subprocess.CalledProcessError:
+        debug(f"No keychain password found for {service}/{account}")
+        return None
+
+
+def set_keychain_password(service: str, account: str, password: str) -> bool:
+    """Store password in macOS keychain (updates if exists)."""
+    debug(f"Setting keychain password for {service}/{account}")
+    # First try to delete existing entry (ignore errors if not found)
+    subprocess.run(
+        ["security", "delete-generic-password", "-s", service, "-a", account],
+        capture_output=True,
+    )
+    try:
+        subprocess.run(
+            ["security", "add-generic-password", "-s", service, "-a", account, "-w", password],
+            capture_output=True,
+            check=True,
+        )
+        debug(f"Stored keychain password for {service}/{account}")
+        return True
+    except subprocess.CalledProcessError as e:
+        debug(f"Failed to store keychain password: {e}")
+        return False
+
+
+def get_tokens_from_keychain() -> dict | None:
+    """Get OAuth tokens from keychain."""
+    tokens_json = get_keychain_password("vivint-tokens", "oauth")
+    if tokens_json:
+        try:
+            return json.loads(tokens_json)
+        except json.JSONDecodeError:
+            debug("Failed to parse tokens from keychain")
+            return None
+    return None
+
+
+def save_tokens_to_keychain(tokens: dict) -> bool:
+    """Save OAuth tokens to keychain."""
+    return set_keychain_password("vivint-tokens", "oauth", json.dumps(tokens))
+
+
+def save_tokens(tokens: dict):
+    """Save OAuth tokens to keychain (primary) and state file (backup)."""
+    # Save to keychain (secure)
+    if save_tokens_to_keychain(tokens):
+        debug("Tokens saved to keychain")
+    else:
+        debug("Failed to save tokens to keychain, falling back to file")
+
+    # Also save to state file for backward compatibility, but set restrictive permissions
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    os.chmod(STATE_DIR, 0o700)  # rwx------
+    TOKENS_FILE.write_text(json.dumps(tokens, indent=2))
+    os.chmod(TOKENS_FILE, 0o600)  # rw-------
+    debug(f"Tokens saved to {TOKENS_FILE} with 0600 permissions")
+
+
+def load_tokens() -> dict | None:
+    """Load saved tokens from keychain first, then file fallback."""
+    # Try keychain first (more secure)
+    tokens = get_tokens_from_keychain()
+    if tokens:
+        debug("Loaded tokens from keychain")
+        return tokens
+
+    # Fallback to file
+    if TOKENS_FILE.exists():
+        debug(f"Loading tokens from {TOKENS_FILE}")
+        try:
+            tokens = json.loads(TOKENS_FILE.read_text())
+            # Migrate to keychain
+            if save_tokens_to_keychain(tokens):
+                debug("Migrated tokens from file to keychain")
+            return tokens
+        except json.JSONDecodeError as e:
+            debug(f"Failed to parse tokens file: {e}")
+            print(f"WARNING: Corrupted tokens.json, removing. Re-run with --mfa to re-authenticate.", file=sys.stderr)
+            TOKENS_FILE.unlink()
+            return None
+    return None
+
+
+def is_token_valid(tokens: dict) -> bool:
+    """Check if access token is still valid (with 30s leeway)."""
+    if not tokens or "id_token" not in tokens:
+        return False
+    try:
+        jwt.decode(
+            tokens["id_token"],
+            options={"verify_signature": False, "verify_exp": True},
+            leeway=-30,
+        )
+        return True
+    except jwt.ExpiredSignatureError:
+        return False
+
+
+def generate_pkce() -> tuple[str, str]:
+    """Generate PKCE code verifier and challenge."""
+    code_verifier = secrets.token_urlsafe(32)
+    code_challenge = base64.urlsafe_b64encode(
+        hashlib.sha256(code_verifier.encode()).digest()
+    ).decode().rstrip("=")
+    return code_verifier, code_challenge
+
+
+def refresh_token(refresh_token: str) -> dict | None:
+    """Refresh OAuth tokens using refresh token."""
+    session = requests.Session()
+    resp = session.post(
+        f"{AUTH_ENDPOINT}/oauth2/token",
+        params={"client_id": "ios"},
+        data={"grant_type": "refresh_token", "refresh_token": refresh_token},
+    )
+    if resp.status_code == 200:
+        return resp.json()
+    return None
+
+
+def authenticate(email: str, password: str, mfa_code: str | None = None) -> dict:
+    """
+    Perform full OAuth PKCE authentication with MFA support.
+    Returns tokens dict or raises exception.
+    """
+    session = requests.Session()
+    code_verifier, code_challenge = generate_pkce()
+    state = secrets.token_urlsafe(16)
+
+    # Step 1: Initialize OAuth with PKCE
+    resp = session.get(
+        f"{AUTH_ENDPOINT}/oauth2/auth",
+        params={
+            "response_type": "code",
+            "client_id": "ios",
+            "scope": "openid email devices email_verified",
+            "redirect_uri": "vivint://app/oauth_redirect",
+            "state": state,
+            "code_challenge": code_challenge,
+            "code_challenge_method": "S256",
+        },
+        allow_redirects=False,
+    )
+
+    # Step 2: Submit credentials
+    resp = session.post(
+        f"{AUTH_ENDPOINT}/idp/api/submit",
+        params={"client_id": "ios"},
+        headers={"Content-Type": "application/json"},
+        json={"username": email, "password": password},
+    )
+
+    if resp.status_code != 200:
+        raise Exception(f"Login failed: {resp.text}")
+
+    data = resp.json()
+
+    # Check for MFA requirement
+    if "mfa" in data or "validate" in data:
+        mfa_type = "mfa" if "mfa" in data else "code"
+        if not mfa_code:
+            raise Exception(f"MFA_REQUIRED:{mfa_type}")
+
+        # Submit MFA code
+        endpoint = "submit" if mfa_type == "mfa" else "validate"
+        resp = session.post(
+            f"{AUTH_ENDPOINT}/idp/api/{endpoint}",
+            params={"client_id": "ios"},
+            headers={"Content-Type": "application/json"},
+            json={
+                mfa_type: mfa_code,
+                "username": email,
+                "password": password,
+            },
+        )
+
+        if resp.status_code != 200:
+            raise Exception(f"MFA verification failed: {resp.text}")
+
+        data = resp.json()
+
+    # Step 3: Follow redirect to get auth code
+    if "url" not in data:
+        raise Exception(f"Unexpected response: {data}")
+
+    resp = session.get(f"{AUTH_ENDPOINT}{data['url']}", allow_redirects=False)
+    location = resp.headers.get("Location", "")
+
+    if "code=" not in location:
+        raise Exception(f"No auth code in redirect: {location}")
+
+    query = urllib.parse.urlparse(location).query
+    params = urllib.parse.parse_qs(query)
+    auth_code = params.get("code", [None])[0]
+
+    # Step 4: Exchange auth code for tokens
+    resp = session.post(
+        f"{AUTH_ENDPOINT}/oauth2/token",
+        data={
+            "grant_type": "authorization_code",
+            "client_id": "ios",
+            "redirect_uri": "vivint://app/oauth_redirect",
+            "code": auth_code,
+            "code_verifier": code_verifier,
+        },
+    )
+
+    if resp.status_code != 200:
+        raise Exception(f"Token exchange failed: {resp.text}")
+
+    return resp.json()
+
+
+def get_api_session(tokens: dict) -> requests.Session:
+    """Create authenticated API session."""
+    session = requests.Session()
+    session.headers.update({
+        "Authorization": f"Bearer {tokens['access_token']}",
+        "Content-Type": "application/json",
+    })
+    return session
+
+
+def get_panels_and_cameras(session: requests.Session) -> list:
+    """Get all panels with their credentials and cameras."""
+    resp = session.get(f"{API_ENDPOINT}/api/authuser")
+    if resp.status_code != 200:
+        raise Exception(f"Failed to get authuser: {resp.text}")
+
+    authuser = resp.json()
+    panels_data = authuser.get("u", {}).get("system", [])
+
+    result = []
+    for panel in panels_data:
+        panel_id = panel.get("panid")
+        panel_name = panel.get("sn")
+
+        # Get RTSP credentials
+        resp = session.get(f"{API_ENDPOINT}/api/panel-login/{panel_id}")
+        if resp.status_code != 200:
+            print(f"Warning: Failed to get credentials for {panel_name}", file=sys.stderr)
+            continue
+        creds = resp.json()
+
+        # Get cameras
+        resp = session.get(
+            f"{API_ENDPOINT}/api/systems/{panel_id}",
+            params={"includerules": "false"},
+        )
+        cameras = []
+        if resp.status_code == 200:
+            system_data = resp.json()
+            for partition in system_data.get("system", {}).get("par", []):
+                for device in partition.get("d", []):
+                    if "cous" in device or "ceu" in device:
+                        cameras.append({
+                            "id": device.get("_id"),
+                            "name": device.get("n", "Unknown Camera"),
+                            "local_stream": device.get("cous"),
+                            "external_stream": device.get("ceu", [None])[0] if device.get("ceu") else None,
+                            "local_ip": device.get("cia"),
+                        })
+
+        result.append({
+            "name": panel_name,
+            "panel_id": panel_id,
+            "rtsp_user": creds.get("n"),
+            "rtsp_pass": creds.get("pswd"),
+            "cameras": cameras,
+        })
+
+    return result
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Vivint API authentication")
+    parser.add_argument("--email", help="Vivint account email (or set VIVINT_EMAIL env var)")
+    parser.add_argument("--refresh", action="store_true", help="Force token refresh")
+    parser.add_argument("--mfa", help="MFA code for initial authentication")
+    parser.add_argument("--cameras", action="store_true", help="List cameras with RTSP URLs")
+    parser.add_argument("--panel", help="Filter to specific panel name")
+    parser.add_argument("--json", action="store_true", help="Output as JSON")
+    parser.add_argument("--debug", action="store_true", help="Enable debug output")
+    parser.add_argument("--hide-credentials", action="store_true", help="Hide RTSP passwords in output")
+    parser.add_argument("--reset", action="store_true", help="Clear all stored tokens and state files")
+    args = parser.parse_args()
+
+    global DEBUG
+    DEBUG = args.debug
+
+    # Handle reset
+    if args.reset:
+        debug("Resetting all state...")
+        # Remove keychain entries
+        subprocess.run(["security", "delete-generic-password", "-s", "vivint-tokens", "-a", "oauth"], capture_output=True)
+        # Remove state files
+        if TOKENS_FILE.exists():
+            TOKENS_FILE.unlink()
+            print(f"Removed {TOKENS_FILE}")
+        if PANELS_FILE.exists():
+            PANELS_FILE.unlink()
+            print(f"Removed {PANELS_FILE}")
+        print("Reset complete. Run with --mfa to re-authenticate.")
+        sys.exit(0)
+
+    # Try to use existing tokens
+    tokens = load_tokens()
+
+    if tokens and not args.refresh:
+        # Try to use existing token
+        if is_token_valid(tokens):
+            pass  # Token still valid
+        elif "refresh_token" in tokens:
+            # Try refresh
+            new_tokens = refresh_token(tokens["refresh_token"])
+            if new_tokens:
+                tokens = new_tokens
+                save_tokens(tokens)
+            else:
+                tokens = None
+        else:
+            tokens = None
+
+    # If no valid tokens, authenticate
+    if not tokens or args.refresh:
+        password = get_keychain_password("vivint", args.email)
+        if not password:
+            print(f"ERROR: No password in keychain for vivint/{args.email}", file=sys.stderr)
+            sys.exit(1)
+
+        try:
+            tokens = authenticate(args.email, password, args.mfa)
+            save_tokens(tokens)
+        except Exception as e:
+            if str(e).startswith("MFA_REQUIRED"):
+                mfa_type = str(e).split(":")[1]
+                print(f"MFA required (type: {mfa_type}). Run again with --mfa CODE", file=sys.stderr)
+                sys.exit(2)
+            raise
+
+    # Get panels and cameras
+    session = get_api_session(tokens)
+    panels = get_panels_and_cameras(session)
+
+    # Save panels data
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    PANELS_FILE.write_text(json.dumps({"panels": panels}, indent=2))
+
+    # Filter if requested
+    if args.panel:
+        panels = [p for p in panels if args.panel.lower() in p["name"].lower()]
+
+    # Output
+    if args.json:
+        output = {"panels": panels}
+        if args.hide_credentials:
+            for p in output["panels"]:
+                p["rtsp_pass"] = "***HIDDEN***"
+        print(json.dumps(output, indent=2))
+    else:
+        for panel in panels:
+            print(f"\n=== {panel['name']} ===")
+            if args.hide_credentials:
+                print(f"RTSP Credentials: {panel['rtsp_user']}:***HIDDEN***")
+            else:
+                print(f"RTSP Credentials: {panel['rtsp_user']}:{panel['rtsp_pass']}")
+
+            if args.cameras:
+                print(f"\nCameras ({len(panel['cameras'])}):")
+                for cam in panel["cameras"]:
+                    print(f"  - {cam['name']}")
+                    if cam["local_stream"]:
+                        # Build full RTSP URL with credentials
+                        stream = cam["local_stream"]
+                        # Parse the URL to insert credentials
+                        if "://" in stream:
+                            proto, rest = stream.split("://", 1)
+                            if args.hide_credentials:
+                                full_url = f"{proto}://{panel['rtsp_user']}:***@{rest}"
+                            else:
+                                full_url = f"{proto}://{panel['rtsp_user']}:{panel['rtsp_pass']}@{rest}"
+                            print(f"    RTSP: {full_url}")
+                        else:
+                            print(f"    Local: {stream}")
+
+
+if __name__ == "__main__":
+    main()

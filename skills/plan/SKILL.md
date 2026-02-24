@@ -21,7 +21,7 @@ Before creating a plan, ask clarifying questions to understand:
 - Who's the audience/user?
 - What's the scope?
 
-**IMPORTANT:** Send each question as a SEPARATE message so user can reply to specific ones.
+**IMPORTANT:** Ask ALL questions in a SINGLE numbered message. Wait for user to answer all questions before responding or creating the plan. Don't reply to partial answers - let them finish.
 
 ### 2. Create Initial Plan
 
@@ -32,14 +32,39 @@ After getting answers, create the plan:
 ~/.claude/skills/plan/scripts/plan create "title" --template app
 ```
 
-Edit PLAN.md to fill in goal, steps, and notes based on user's answers.
+Fill in goal, steps, and notes based on user's answers.
 
-### 3. Iterate with Review
+### 3. Always Use `plan update` to Write Changes
+
+**CRITICAL: Never use the Write tool directly on PLAN.md. Always use `plan update`.**
+
+```bash
+# Write changes via CLI (auto-snapshots before writing)
+cat << 'EOF' | ~/.claude/skills/plan/scripts/plan update "title" --stdin
+---
+title: My Plan
+version: 1
+...
+---
+
+## Goal
+...
+EOF
+```
+
+This auto-snapshots before every write, preserving version history:
+- Saves current content to `snapshots/vN.md`
+- Bumps version number in frontmatter
+- Updates `LATEST.md` symlink
+- Then writes your new content
+
+### 4. Iterate with Review
 
 After each significant revision:
-1. Run subagent-review: `~/.claude/skills/plan/scripts/plan review "title"`
-2. Render the plan as an image and attach to message
-3. Include brief text summary with score and key feedback
+1. Snapshot first (auto-handled by review command)
+2. Run subagent-review: `~/.claude/skills/plan/scripts/plan review "title"`
+3. Render the plan as an image and attach to message
+4. Include brief text summary with score and key feedback
 
 **IMPORTANT: Always attach the rendered plan image when sharing with user.**
 
@@ -73,6 +98,41 @@ If the review surfaces ambiguity or unclear areas, ask the user for clarificatio
 ### 5. Target Score for Implementation
 
 Recommend implementation when plan reaches 8/10 or higher. User can override this threshold.
+
+## Embedding Images in Plans
+
+Plans can include images for visual context (screenshots, diagrams, mockups). Images render in the final PNG when using md2img.
+
+**How to embed images:**
+
+1. Save images to the plan's attachments folder:
+```bash
+plan attach "title" /path/to/screenshot.png
+# copies to: plans/title/attachments/screenshot.png
+```
+
+2. Reference in PLAN.md using relative paths:
+```markdown
+## Mockups
+
+Here's the current UI:
+![Current UI](./attachments/screenshot.png)
+
+And the proposed design:
+![Proposed](./attachments/mockup.png)
+```
+
+3. When rendered with md2img, images are embedded in the output PNG.
+
+**What works:**
+- Local file paths (relative or absolute)
+- Remote URLs (https://...)
+- Base64 data URIs
+
+**Tips:**
+- Use `./attachments/` for relative paths in PLAN.md
+- Screenshot a Figma design and attach it
+- Capture relevant UI states to reference in the plan
 
 ## Sandbox Rules
 
