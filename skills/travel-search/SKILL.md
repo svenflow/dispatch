@@ -1,52 +1,134 @@
-# Travel Search Skill v3.3
+# Travel Search Skill v3.4
 
-**Review-aware travel search** with sentiment analysis, neighborhood ranking, comparative analysis, and Airbnb quality scoring.
+**Review-aware travel search** with direct booking links, emoji-rich output, and discount hunting.
 
 **Trigger words:** travel search, find trip, plan trip, flights and airbnb, vacation search, trip to [destination]
 
-## What's New in v3.3
+## What's New in v3.4
 
-### Airbnb Neighborhood Display
-- **Auto-detect neighborhood for each listing** using lat/lng coordinates
-- Works for major cities: Paris, Tokyo, London, NYC, Rome, Barcelona, Amsterdam, Lisbon, Madrid, Berlin
-- Each Airbnb listing shows `📍 Neighborhood` in output
-- Expanded neighborhood coverage (60+ neighborhoods across 10 cities)
+### Direct Booking Links (NOT Search Pages)
+- **Flights**: Each flight links directly to that specific itinerary (not a search results page)
+- **Airbnbs**: Each listing links to `airbnb.com/rooms/LISTING_ID` (not search page)
+- **Rental Cars**: Each car links to the specific rental or pre-filtered search
 
-## What's New in v3.1
+### Enhanced Flight Output
+- **Top 5 flights** sorted by total cost (including taxes)
+- Each shows: ✈️ Airline | 💰 Total w/taxes | ⏱️ Duration | 🔄 Connections
+- **Price emojis**: 🔥 great deal | 💵 normal | 💸 expensive
+- **Speed emojis**: ⚡ fast (<8hrs) | 🐢 slow (>14hrs)
+- **Direct link** to book that specific flight
 
-### Neighborhood Comparison
-- **Head-to-head analysis**: "Le Marais vs Saint-Germain: Marais wins walkability (+0.3), Saint-Germain wins family-friendly (+0.4)"
-- **Trip-type recommendation**: "Both excellent for family trips" or "Le Marais is better for romantic trips"
-- Automatically compares top 3 neighborhoods in output
+### Enhanced Airbnb Output
+- **10 listings** ranked by reviews + cost + location
+- Each shows:
+  - 📍 Neighborhood | ⭐ Rating (reviews) | 💰 Total price
+  - 🏷️ **Discount**: `~~$3,200~~ $2,400 - 25% OFF!` when applicable
+- **Amenity emojis**: 🏊 Pool | 🛁 Hot Tub | 🎱 Pool Table | 🎮 Game Room | 🏋️ Gym | 🅿️ Parking | 🌡️ AC | 📶 WiFi | 🍳 Kitchen | 🧺 Washer
+- **Direct listing link**: `airbnb.com/rooms/[ID]`
 
-### Neighborhood-Targeted Airbnb URLs
-- **Lat/lng bounds filtering**: URLs now target specific neighborhoods using bounding boxes
-- **10 major cities supported**: Paris, Tokyo, London, NYC, Rome, Barcelona, Amsterdam, Berlin, Lisbon, Madrid
-- Example: `get_neighborhood_airbnb_url("Paris", "Le Marais", ...)` returns URL with `ne_lat`, `sw_lat`, etc.
+### Enhanced Transportation Output
+- **5 rental cars** from major companies (Enterprise, Hertz, Budget, Avis, National)
+- **Turo rideshare** option included
+- Each shows: 🚗 Car type | 💰 Total | 📍 Pickup | ⭐ Rating
+- **Price emojis**: 🔥 🔥 💵 💸
 
-### Destination-Specific Transport Costs
-- **20+ cities** with accurate weekly cost estimates
-- Paris: Car $450, Transit $30 (Navigo week pass)
-- Tokyo: Car $500, Transit $25 (Suica/JR Pass)
-- No more hardcoded defaults - researched per destination
+### Finding Discounted Listings
+- **Prioritize listings showing "X% off"** or crossed-out prices
+- **Value score**: quality_score / normalized_price
+- **Flag luxury at budget prices**: "Normally $4,500 → $2,800 this week!"
 
-## What's New in v3.0
+## Output Format
 
-### Real Review Integration
-- **Sentiment analysis** of neighborhood reviews
-- **Aspect-based scoring**: safety, walkability, food scene, family-friendly, nightlife, value, transit, authenticity
-- **Trip-type-weighted ranking**: Family trips weight safety/walkability higher; romantic trips weight food scene/walkability
-- **30-day review caching**: Don't re-fetch reviews for same destination
+### Flight Results (Top 5)
+```
+✈️ FLIGHTS (BOS → Paris, 4 pax) - Apr 17-23
 
-### Airbnb Review Quality Scoring
-- **Formula**: `rating * log10(review_count)`
-- **Balances**: High ratings vs review volume (50 reviews at 4.9 > 3 reviews at 5.0)
-- **Value score**: quality_score / (price / 1000)
+1. [Air France 8:10pm direct](https://...) ⚡
+   💰 $3,200 total w/taxes 💵
+   ⏱️ 7h 15m | 🔄 Nonstop
 
-### Structured Output for LLM
-- `--structured` flag produces JSON with explicit execution steps
-- Each step has action, expected output, and dependencies
-- Deterministic workflow Claude can follow
+2. [TAP Portugal via Lisbon](https://...)
+   💰 $2,100 total w/taxes 🔥
+   ⏱️ 11h 30m | 🔄 1 stop (LIS)
+```
+
+### Airbnb Results (Top 10)
+```
+🏠 AIRBNBS (Apr 17-23, 6 nights, 4 guests)
+
+1. [Charming Marais Loft](https://www.airbnb.com/rooms/12345678)
+   📍 Le Marais | ⭐ 4.92 (127 reviews)
+   💰 ~~$3,200~~ $2,400 🔥 25% OFF!
+   🏊 Pool 🌡️ AC 📶 WiFi 🍳 Kitchen
+
+2. [Spacious Saint-Germain Flat](https://www.airbnb.com/rooms/23456789)
+   📍 Saint-Germain (6th) | ⭐ 4.88 (89 reviews)
+   💰 $2,650 💵
+   🛁 Hot Tub 🅿️ Parking 🌡️ AC 🍳 Kitchen 🧺 Washer
+```
+
+### Transportation (5 cars + Turo)
+```
+🚗 RENTAL CARS (Apr 17-23)
+
+1. [Enterprise - Peugeot 3008](https://...)
+   💰 $380/week 🔥 | 📍 CDG Airport | ⭐ 4.2
+
+2. [Hertz - VW Golf](https://...)
+   💰 $420/week 💵 | 📍 CDG Airport | ⭐ 4.0
+
+🚙 TURO
+1. [Tesla Model 3 - Pierre](https://turo.com/...)
+   💰 $85/day ($510/week) | 📍 Paris 11th | ⭐ 4.9 (23 trips)
+```
+
+### Budget Summary
+```
+💰 BUDGET ($6,000)
+
+OPTION 1 - Best Value:
+✈️ TAP Portugal: $2,100
+🏠 Marais Loft: $2,400 (discounted!)
+🚇 Metro: $120
+─────────────
+💰 $4,620 ✅ Remaining: $1,380
+
+OPTION 2 - Most Convenient:
+✈️ Air France Direct: $3,200
+🏠 Saint-Germain: $2,650
+🚗 Enterprise: $380
+─────────────
+💰 $6,230 ⚠️ Over budget
+```
+
+## Emoji Reference
+
+### Price Indicators
+- 🔥 **Great Deal** - Below average
+- 💵 **Normal** - Average price
+- 💸 **Expensive** - Above average
+
+### Speed (Flights)
+- ⚡ **Fast** - Under 8 hours
+- 🐢 **Slow** - Over 14 hours
+
+### Amenities (Airbnb)
+| Emoji | Amenity |
+|-------|---------|
+| 🏊 | Pool |
+| 🛁 | Hot Tub |
+| 🎱 | Pool Table |
+| 🎮 | Game Room |
+| 🏋️ | Gym |
+| 🅿️ | Free Parking |
+| 🌡️ | AC |
+| 📶 | WiFi |
+| 🍳 | Kitchen |
+| 🧺 | Washer/Dryer |
+| 🏖️ | Beach Access |
+| ⛷️ | Ski-in/out |
+| 🔥 | Fireplace |
+| 🌳 | Garden |
 
 ## Quick Start
 
@@ -238,58 +320,63 @@ Neighborhood recognition works best for these cities with pre-built lists:
 
 For other cities, neighborhood extraction uses pattern matching (less reliable).
 
+## How to Execute This Skill
+
+When user requests a travel search:
+
+### Step 1: Extract Individual Flights
+Use browser automation (chrome-control skill) to:
+1. Open Google Flights with search criteria
+2. Wait for results to load
+3. Extract top 5 flights with: airline, price, duration, stops, booking URL
+4. Check if price is below/above average for that route
+
+### Step 2: Extract Individual Airbnbs
+1. Open Airbnb search with filters (dates, guests, bedrooms)
+2. Sort by "Top Rated"
+3. Extract 10 listings: ID, name, price, strikethrough price (if any), rating, reviews, amenities
+4. Compute discount % if strikethrough price exists
+5. Use listing ID: `https://www.airbnb.com/rooms/[ID]`
+
+### Step 3: Extract Rental Cars
+1. Open Kayak/AutoSlash for rental car search
+2. Extract top 5 from different companies
+3. Get: company, car type, total price, pickup location
+4. Also search Turo for the destination city
+
+### Step 4: Display Results
+1. Apply emoji coding based on price/speed
+2. Calculate budget totals for combinations
+3. Highlight discounts and best value options
+4. Format per output specification above
+
 ## Limitations
 
-1. **Keyword-based sentiment**: Not as accurate as ML models, but fast and works offline. Handles negations ("not safe" = negative).
-2. **Neighborhood extraction**: Pre-built lists for 10 major cities. Other cities use regex patterns which may miss some neighborhoods.
-3. **Browser automation can fail**: Sites block bots, show CAPTCHAs
-4. **URLs may break**: Travel sites change URL formats frequently
-5. **Prices are snapshots**: They change constantly
-6. **No booking**: Manual action required
-7. **Confidence depends on sample size**: 1 mention = "very low" confidence, 10+ = "high"
+1. **Browser automation required**: Direct links require scraping actual results
+2. **Sites may block**: CAPTCHAs, rate limits, bot detection
+3. **Prices change constantly**: Results are point-in-time snapshots
+4. **No booking**: Manual action required to complete purchase
+5. **Discount data varies**: Not all listings show original vs sale price
 
 ## Changelog
 
-### v3.3
-- Expanded neighborhood bounds: 60+ neighborhoods across 10 cities (Paris, Tokyo, London, NYC, Rome, Barcelona, Amsterdam, Lisbon, Madrid, Berlin)
-- Added Paris: Opera, Louvre, Champs-Elysees, Belleville, Oberkampf, Pigalle, Batignolles, Republique
-- Added Tokyo: Harajuku, Roppongi, Akihabara, Ueno
-- Added London: Notting Hill, Kensington, Westminster, Marylebone
-- Added NYC: East Village, Chelsea, Midtown, Tribeca, Lower East Side
-- Added Rome: Testaccio, Prati, Termini
-- Added Barcelona, Amsterdam, Lisbon, Madrid, Berlin (6 neighborhoods each)
+### v3.4 (Current)
+- **Direct booking links** - Each flight, Airbnb, rental car links to specific listing
+- **Top 5 flights** sorted by cost with airline, duration, stops, price/speed emojis
+- **Top 10 Airbnbs** with direct room links, amenity emojis, discount hunting
+- **5 rental cars** from major companies + Turo rideshare
+- **Enhanced emoji system** for prices, speed, and amenities
+- **Discount display** - strikethrough pricing when discounted
 
-### v3.2
-- Auto-detect Airbnb listing neighborhood from lat/lng coordinates
-- `detect_neighborhood_from_coords()` function for coordinate-based lookup
-- AirbnbListing now supports `lat`, `lng`, `destination` fields
-- Neighborhood auto-populated when ranking listings with coordinates
+### v3.3
+- Neighborhood detection (60+ neighborhoods, 10 cities)
 
 ### v3.1
-- Neighborhood head-to-head comparison output
-- Neighborhood-targeted Airbnb URLs with lat/lng bounding boxes
-- Destination-specific transport costs (20+ cities)
-- Fixed neighborhood name normalization for URL matching
+- Head-to-head neighborhood comparison
+- Lat/lng bounds for neighborhood Airbnb URLs
+- 20+ cities transport cost estimates
 
 ### v3.0
-- Review sentiment analysis with aspect-based scoring
-- Trip-type-weighted neighborhood ranking
-- Airbnb review quality scoring (rating * log(review_count))
-- 30-day review caching
-- Structured JSON output mode for LLM consumption
-- Transportation analysis (car vs transit)
-- New commands: --analyze-reviews, --rank-airbnbs, --structured
-
-### v2.2
-- Search history (last 3 searches)
-- Default criteria auto-saved from first search
-
-### v2.1
-- Simplified airline preferences (no FF numbers)
-- Aggregator-only rental car URLs (Kayak, AutoSlash)
-- Honest capability documentation
-
-### v2.0
-- Multi-site flight search (Google, Skyscanner, Kayak)
-- Rental car search
-- Transportation research queries
+- Review sentiment analysis
+- Airbnb review quality scoring
+- Structured JSON output
