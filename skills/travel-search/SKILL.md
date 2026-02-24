@@ -1,8 +1,16 @@
-# Travel Search Skill v3.2
+# Travel Search Skill v3.3
 
 **Review-aware travel search** with sentiment analysis, neighborhood ranking, comparative analysis, and Airbnb quality scoring.
 
 **Trigger words:** travel search, find trip, plan trip, flights and airbnb, vacation search, trip to [destination]
+
+## What's New in v3.3
+
+### Airbnb Neighborhood Display
+- **Auto-detect neighborhood for each listing** using lat/lng coordinates
+- Works for major cities: Paris, Tokyo, London, NYC, Rome, Barcelona, Amsterdam, Lisbon, Madrid, Berlin
+- Each Airbnb listing shows `📍 Neighborhood` in output
+- Expanded neighborhood coverage (60+ neighborhoods across 10 cities)
 
 ## What's New in v3.1
 
@@ -241,6 +249,15 @@ For other cities, neighborhood extraction uses pattern matching (less reliable).
 7. **Confidence depends on sample size**: 1 mention = "very low" confidence, 10+ = "high"
 
 ## Changelog
+
+### v3.3
+- Expanded neighborhood bounds: 60+ neighborhoods across 10 cities (Paris, Tokyo, London, NYC, Rome, Barcelona, Amsterdam, Lisbon, Madrid, Berlin)
+- Added Paris: Opera, Louvre, Champs-Elysees, Belleville, Oberkampf, Pigalle, Batignolles, Republique
+- Added Tokyo: Harajuku, Roppongi, Akihabara, Ueno
+- Added London: Notting Hill, Kensington, Westminster, Marylebone
+- Added NYC: East Village, Chelsea, Midtown, Tribeca, Lower East Side
+- Added Rome: Testaccio, Prati, Termini
+- Added Barcelona, Amsterdam, Lisbon, Madrid, Berlin (6 neighborhoods each)
 
 ### v3.2
 - Auto-detect Airbnb listing neighborhood from lat/lng coordinates
