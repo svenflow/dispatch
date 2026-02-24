@@ -7,9 +7,95 @@ let port = null;
 let reconnectTimeout = null;
 
 // Track managed tabs and console/network data
-const managedTabs = new Map();
+const managedTabs = new Map(); // tabId -> { url, status, createdAt }
 const consoleMessages = new Map(); // tabId -> messages[]
 const networkRequests = new Map(); // tabId -> requests[]
+
+// TTL settings for stale tab cleanup (24 hours)
+const TAB_TTL_MS = 24 * 60 * 60 * 1000;
+
+// === DEBUGGER PERSISTENCE OPTIMIZATION ===
+// Keep debugger attached per-tab instead of attach/detach on every action
+const attachedDebuggers = new Map(); // tabId -> { attachedAt, idleTimer, inUse }
+const DEBUGGER_IDLE_TIMEOUT_MS = 30000; // 30 seconds idle timeout (increased from 10s)
+
+// Ensure debugger is attached to tab (idempotent - no-op if already attached)
+async function ensureDebuggerAttached(tabId) {
+  const existing = attachedDebuggers.get(tabId);
+  if (existing) {
+    // Already attached - mark as in use (timer reset will happen in resetDebuggerIdleTimer)
+    existing.inUse = true;
+    return;
+  }
+
+  // Attach debugger with timeout to prevent hangs
+  const attachWithTimeout = async () => {
+    const attachPromise = chrome.debugger.attach({ tabId }, '1.3');
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('debugger attach timeout (5s)')), 5000)
+    );
+    return Promise.race([attachPromise, timeoutPromise]);
+  };
+
+  try {
+    await attachWithTimeout();
+  } catch (e) {
+    // If already attached (from previous session), that's fine - just track it
+    if (e.message && e.message.includes('already attached')) {
+      // Recovered from previous session
+    } else {
+      throw e;
+    }
+  }
+
+  // Don't start idle timer yet - wait until operation completes
+  attachedDebuggers.set(tabId, { attachedAt: Date.now(), idleTimer: null, inUse: true });
+}
+
+// Call this AFTER an operation completes to start/reset idle timer
+function resetDebuggerIdleTimer(tabId) {
+  const info = attachedDebuggers.get(tabId);
+  if (!info) return;
+
+  info.inUse = false;
+  clearTimeout(info.idleTimer);
+  info.idleTimer = setTimeout(() => detachDebuggerIdle(tabId), DEBUGGER_IDLE_TIMEOUT_MS);
+}
+
+// Detach debugger due to idle timeout
+async function detachDebuggerIdle(tabId) {
+  const info = attachedDebuggers.get(tabId);
+  if (!info) return;
+
+  attachedDebuggers.delete(tabId);
+  try {
+    await chrome.debugger.detach({ tabId });
+    console.log(`[ChromeControl] Debugger detached from tab ${tabId} (idle timeout)`);
+  } catch (e) {
+    // Tab may have closed, ignore
+  }
+}
+
+// Clean up debugger state when tab closes
+chrome.tabs.onRemoved.addListener((tabId) => {
+  const info = attachedDebuggers.get(tabId);
+  if (info) {
+    clearTimeout(info.idleTimer);
+    attachedDebuggers.delete(tabId);
+    console.log(`[ChromeControl] Debugger state cleaned up for closed tab ${tabId}`);
+  }
+});
+
+// Handle debugger detach events (user clicked "cancel" on debugger bar, etc.)
+chrome.debugger.onDetach.addListener((source) => {
+  const tabId = source.tabId;
+  const info = attachedDebuggers.get(tabId);
+  if (info) {
+    clearTimeout(info.idleTimer);
+    attachedDebuggers.delete(tabId);
+    console.log(`[ChromeControl] Debugger externally detached from tab ${tabId}`);
+  }
+});
 
 // Connect to native messaging host
 function connectNativeHost() {
@@ -198,6 +284,15 @@ async function handleCommand(message) {
     case 'iframe_debug':
       return await iframeDebug(params.tabId);
 
+    case 'debugger_eval':
+      return await debuggerEval(params.tabId, params.code || params.expression);
+
+    case 'iframe_target_eval':
+      return await iframeTargetEval(params.tabId, params.urlPattern, params.code);
+
+    case 'iframe_target_type':
+      return await iframeTargetType(params.tabId, params.urlPattern, params.text);
+
     case 'form_input':
       return await setFormValue(params.tabId, params.ref, params.value);
 
@@ -265,13 +360,14 @@ async function createTab(url) {
 
 async function openTab(url) {
   const tab = await chrome.tabs.create({ url, active: true });
-  managedTabs.set(tab.id, { url, status: 'loading' });
+  const createdAt = Date.now();
+  managedTabs.set(tab.id, { url, status: 'loading', createdAt });
 
   return new Promise((resolve) => {
     const listener = (tabId, changeInfo) => {
       if (tabId === tab.id && changeInfo.status === 'complete') {
         chrome.tabs.onUpdated.removeListener(listener);
-        managedTabs.set(tab.id, { url, status: 'ready' });
+        managedTabs.set(tab.id, { url, status: 'ready', createdAt });
         resolve({ tabId: tab.id, url, status: 'ready' });
       }
     };
@@ -370,10 +466,15 @@ async function clickByRef(tabId, ref) {
   return await executeInTab(tabId, 'click', { selector: ref });
 }
 
-// Click at coordinates using debugger
+// Click at coordinates using debugger (persistent attach)
 async function clickAtCoordinates(tabId, x, y) {
   try {
-    await chrome.debugger.attach({ tabId }, '1.3');
+    // CRITICAL: Input.dispatchMouseEvent requires the tab to be focused
+    const tab = await chrome.tabs.get(tabId);
+    await chrome.windows.update(tab.windowId, { focused: true });
+    await chrome.tabs.update(tabId, { active: true });
+
+    await ensureDebuggerAttached(tabId);
 
     await chrome.debugger.sendCommand({ tabId }, 'Input.dispatchMouseEvent', {
       type: 'mousePressed', x, y, button: 'left', clickCount: 1
@@ -382,17 +483,22 @@ async function clickAtCoordinates(tabId, x, y) {
       type: 'mouseReleased', x, y, button: 'left', clickCount: 1
     });
 
-    await chrome.debugger.detach({ tabId });
+    resetDebuggerIdleTimer(tabId);
     return { clicked: true, x, y };
   } catch (error) {
-    try { await chrome.debugger.detach({ tabId }); } catch {}
+    resetDebuggerIdleTimer(tabId);
     return { clicked: false, error: error.message };
   }
 }
 
 async function doubleClickAt(tabId, x, y) {
   try {
-    await chrome.debugger.attach({ tabId }, '1.3');
+    // CRITICAL: Input.dispatchMouseEvent requires the tab to be focused
+    const tab = await chrome.tabs.get(tabId);
+    await chrome.windows.update(tab.windowId, { focused: true });
+    await chrome.tabs.update(tabId, { active: true });
+
+    await ensureDebuggerAttached(tabId);
 
     await chrome.debugger.sendCommand({ tabId }, 'Input.dispatchMouseEvent', {
       type: 'mousePressed', x, y, button: 'left', clickCount: 2
@@ -401,34 +507,44 @@ async function doubleClickAt(tabId, x, y) {
       type: 'mouseReleased', x, y, button: 'left', clickCount: 2
     });
 
-    await chrome.debugger.detach({ tabId });
+    resetDebuggerIdleTimer(tabId);
     return { clicked: true, x, y, double: true };
   } catch (error) {
-    try { await chrome.debugger.detach({ tabId }); } catch {}
+    resetDebuggerIdleTimer(tabId);
     return { clicked: false, error: error.message };
   }
 }
 
 async function hoverAt(tabId, x, y) {
   try {
-    await chrome.debugger.attach({ tabId }, '1.3');
+    // CRITICAL: Input.dispatchMouseEvent requires the tab to be focused
+    const tab = await chrome.tabs.get(tabId);
+    await chrome.windows.update(tab.windowId, { focused: true });
+    await chrome.tabs.update(tabId, { active: true });
+
+    await ensureDebuggerAttached(tabId);
 
     await chrome.debugger.sendCommand({ tabId }, 'Input.dispatchMouseEvent', {
       type: 'mouseMoved', x, y
     });
 
-    await chrome.debugger.detach({ tabId });
+    resetDebuggerIdleTimer(tabId);
     return { hovered: true, x, y };
   } catch (error) {
-    try { await chrome.debugger.detach({ tabId }); } catch {}
+    resetDebuggerIdleTimer(tabId);
     return { hovered: false, error: error.message };
   }
 }
 
-// Keyboard
+// Keyboard (persistent debugger)
 async function sendKey(tabId, key, modifiers) {
   try {
-    await chrome.debugger.attach({ tabId }, '1.3');
+    // CRITICAL: Input.dispatchKeyEvent requires the tab to be focused
+    const tab = await chrome.tabs.get(tabId);
+    await chrome.windows.update(tab.windowId, { focused: true });
+    await chrome.tabs.update(tabId, { active: true });
+
+    await ensureDebuggerAttached(tabId);
 
     const keyEvent = {
       type: 'keyDown',
@@ -447,10 +563,10 @@ async function sendKey(tabId, key, modifiers) {
     await chrome.debugger.sendCommand({ tabId }, 'Input.dispatchKeyEvent', keyEvent);
     await chrome.debugger.sendCommand({ tabId }, 'Input.dispatchKeyEvent', { ...keyEvent, type: 'keyUp' });
 
-    await chrome.debugger.detach({ tabId });
+    resetDebuggerIdleTimer(tabId);
     return { sent: true, key };
   } catch (error) {
-    try { await chrome.debugger.detach({ tabId }); } catch {}
+    resetDebuggerIdleTimer(tabId);
     return { sent: false, error: error.message };
   }
 }
@@ -458,7 +574,7 @@ async function sendKey(tabId, key, modifiers) {
 // Insert text via debugger using Page.getFrameTree to find iframes
 async function insertText(tabId, text) {
   try {
-    await chrome.debugger.attach({ tabId }, '1.3');
+    await ensureDebuggerAttached(tabId);
 
     // Enable Page domain to access frame tree
     await chrome.debugger.sendCommand({ tabId }, 'Page.enable');
@@ -467,14 +583,15 @@ async function insertText(tabId, text) {
     const frameTree = await chrome.debugger.sendCommand({ tabId }, 'Page.getFrameTree');
     console.log('[ChromeControl] Frame tree:', JSON.stringify(frameTree, null, 2));
 
-    // Find iframe with Apple sign-in
+    // Find iframe with Apple sign-in OR CyberSource payment
     let targetFrameId = null;
     const findFrame = (frame) => {
       const url = frame.frame?.url || '';
       console.log('[ChromeControl] Checking frame:', url);
-      if (url.includes('idmsa.apple.com') || url.includes('signin.apple.com')) {
+      if (url.includes('idmsa.apple.com') || url.includes('signin.apple.com') ||
+          url.includes('cybersource.com') || url.includes('flex.cybersource')) {
         targetFrameId = frame.frame?.id;
-        console.log('[ChromeControl] Found Apple auth frame:', targetFrameId);
+        console.log('[ChromeControl] Found target auth/payment frame:', targetFrameId);
         return true;
       }
       if (frame.childFrames) {
@@ -561,7 +678,7 @@ async function insertText(tabId, text) {
       });
       console.log('[ChromeControl] Eval result:', result);
 
-      await chrome.debugger.detach({ tabId });
+      resetDebuggerIdleTimer(tabId);
       return { inserted: true, text, frameId: targetFrameId, evalResult: result?.result?.value };
     } else {
       // No iframe found, type directly using Input.dispatchKeyEvent on main page
@@ -577,12 +694,12 @@ async function insertText(tabId, text) {
         });
         await new Promise(r => setTimeout(r, 10));
       }
-      await chrome.debugger.detach({ tabId });
+      resetDebuggerIdleTimer(tabId);
       return { inserted: true, text, frameId: null, note: 'no iframe found, used main page' };
     }
   } catch (error) {
     console.error('[ChromeControl] insertText error:', error);
-    try { await chrome.debugger.detach({ tabId }); } catch {}
+    resetDebuggerIdleTimer(tabId);
     return { inserted: false, error: error.message };
   }
 }
@@ -590,7 +707,7 @@ async function insertText(tabId, text) {
 // Debug iframe contents
 async function iframeDebug(tabId) {
   try {
-    await chrome.debugger.attach({ tabId }, '1.3');
+    await ensureDebuggerAttached(tabId);
     await chrome.debugger.sendCommand({ tabId }, 'Page.enable');
 
     const frameTree = await chrome.debugger.sendCommand({ tabId }, 'Page.getFrameTree');
@@ -640,22 +757,64 @@ async function iframeDebug(tabId) {
         returnByValue: true
       });
 
-      await chrome.debugger.detach({ tabId });
+      resetDebuggerIdleTimer(tabId);
       return { debug: JSON.parse(result?.result?.value || '{}') };
     } else {
-      await chrome.debugger.detach({ tabId });
+      resetDebuggerIdleTimer(tabId);
       return { error: 'iframe not found' };
     }
   } catch (error) {
-    try { await chrome.debugger.detach({ tabId }); } catch {}
+    resetDebuggerIdleTimer(tabId);
     return { error: error.message };
+  }
+}
+
+// Execute arbitrary JS via debugger API (bypasses CSP)
+async function debuggerEval(tabId, code) {
+  try {
+    await ensureDebuggerAttached(tabId);
+    await chrome.debugger.sendCommand({ tabId }, 'Page.enable');
+
+    const frameTree = await chrome.debugger.sendCommand({ tabId }, 'Page.getFrameTree');
+    const mainFrameId = frameTree.frameTree.frame.id;
+
+    // Create isolated world in main frame with universal access
+    const isolatedWorld = await chrome.debugger.sendCommand({ tabId }, 'Page.createIsolatedWorld', {
+      frameId: mainFrameId,
+      worldName: 'chromeControlEval',
+      grantUniveralAccess: true
+    });
+
+    // Wrap code to return JSON result
+    const wrappedCode = `
+      try {
+        const __result = (function() { ${code} })();
+        JSON.stringify({ success: true, result: __result });
+      } catch (e) {
+        JSON.stringify({ success: false, error: e.message, stack: e.stack });
+      }
+    `;
+
+    const result = await chrome.debugger.sendCommand({ tabId }, 'Runtime.evaluate', {
+      expression: wrappedCode,
+      contextId: isolatedWorld.executionContextId,
+      returnByValue: true
+    });
+
+    try {
+      return JSON.parse(result?.result?.value || '{}');
+    } catch {
+      return { raw: result?.result?.value };
+    }
+  } catch (error) {
+    return { success: false, error: error.message };
   }
 }
 
 // Type into iframe using debugger key events
 async function iframeType(tabId, text) {
   try {
-    await chrome.debugger.attach({ tabId }, '1.3');
+    await ensureDebuggerAttached(tabId);
 
     // Type each character using Input.dispatchKeyEvent
     for (const char of text) {
@@ -685,10 +844,8 @@ async function iframeType(tabId, text) {
       await new Promise(r => setTimeout(r, 50));
     }
 
-    await chrome.debugger.detach({ tabId });
     return { typed: true, text };
   } catch (error) {
-    try { await chrome.debugger.detach({ tabId }); } catch {}
     return { typed: false, error: error.message };
   }
 }
@@ -696,7 +853,7 @@ async function iframeType(tabId, text) {
 // Click element in iframe via isolated world
 async function iframeClick(tabId, selector) {
   try {
-    await chrome.debugger.attach({ tabId }, '1.3');
+    await ensureDebuggerAttached(tabId);
     await chrome.debugger.sendCommand({ tabId }, 'Page.enable');
 
     const frameTree = await chrome.debugger.sendCommand({ tabId }, 'Page.getFrameTree');
@@ -729,23 +886,54 @@ async function iframeClick(tabId, selector) {
 
     // More robust click: dispatch full mouse event sequence + focus + click
     // Also supports text:XXX selector to click by text content
+    // Searches both regular DOM AND shadow DOMs for cookie consent modals
     const script = `
       const selector = '${selector.replace(/'/g, "\\'")}';
       let el = null;
 
+      // Helper function to search through shadow DOMs recursively
+      function querySelectorAllDeep(root, selectors) {
+        const elements = [...root.querySelectorAll(selectors)];
+        const shadowRoots = [...root.querySelectorAll('*')].filter(e => e.shadowRoot);
+        shadowRoots.forEach(e => {
+          elements.push(...querySelectorAllDeep(e.shadowRoot, selectors));
+        });
+        return elements;
+      }
+
       // Check if it's a text selector
       if (selector.startsWith('text:')) {
         const searchText = selector.substring(5).toLowerCase();
-        const allClickable = document.querySelectorAll('button, [role="button"], input[type="submit"], a, [onclick]');
+        // Search both regular DOM and shadow DOMs
+        const allClickable = querySelectorAllDeep(document, 'button, [role="button"], input[type="submit"], a, [onclick], div[class*="button"], span[class*="button"]');
+
+        // First pass: look for exact or very close matches (button with just this text)
         for (const candidate of allClickable) {
           const text = (candidate.textContent || candidate.value || '').toLowerCase().trim();
-          if (text.includes(searchText)) {
+          // Exact match or starts with the search text (for cases like "Accept all" vs "Accept allAccept...")
+          if (text === searchText || text.startsWith(searchText + ' ') || (text.includes(searchText) && text.length < searchText.length * 2)) {
             el = candidate;
             break;
           }
         }
+        // Second pass: if no good match, look for any element containing the text
+        if (!el) {
+          for (const candidate of allClickable) {
+            const text = (candidate.textContent || candidate.value || '').toLowerCase().trim();
+            if (text.includes(searchText)) {
+              el = candidate;
+              break;
+            }
+          }
+        }
       } else {
+        // First try regular DOM
         el = document.querySelector(selector);
+        // If not found, search shadow DOMs
+        if (!el) {
+          const deepElements = querySelectorAllDeep(document, selector);
+          el = deepElements[0] || null;
+        }
       }
 
       if (el) {
@@ -791,8 +979,8 @@ async function iframeClick(tabId, selector) {
           usedMainFrame: !${targetFrameId ? 'true' : 'false'}
         });
       } else {
-        // Try to find buttons with similar text
-        const allButtons = Array.from(document.querySelectorAll('button, [role="button"], input[type="submit"], a'));
+        // Try to find buttons with similar text - also search shadow DOMs
+        const allButtons = querySelectorAllDeep(document, 'button, [role="button"], input[type="submit"], a');
         const buttonTexts = allButtons.map(b => b.textContent?.trim().substring(0, 30) || b.value || '').filter(t => t);
         JSON.stringify({
           success: false,
@@ -808,8 +996,6 @@ async function iframeClick(tabId, selector) {
       returnByValue: true
     });
 
-    await chrome.debugger.detach({ tabId });
-
     let parsedResult;
     try {
       parsedResult = JSON.parse(result?.result?.value || '{}');
@@ -819,7 +1005,6 @@ async function iframeClick(tabId, selector) {
 
     return { clicked: parsedResult.success !== false, result: parsedResult, usedMainFrame: !targetFrameId };
   } catch (error) {
-    try { await chrome.debugger.detach({ tabId }); } catch {}
     return { clicked: false, error: error.message };
   }
 }
@@ -829,7 +1014,7 @@ async function setFormValue(tabId, ref, value) {
   return await executeInTab(tabId, 'set_value', { selector: ref, value });
 }
 
-// Scrolling
+// Scrolling (persistent debugger)
 async function scroll(tabId, direction, amount = 3, x, y) {
   const scrollAmount = amount * 100;
   let deltaX = 0, deltaY = 0;
@@ -842,7 +1027,13 @@ async function scroll(tabId, direction, amount = 3, x, y) {
   }
 
   try {
-    await chrome.debugger.attach({ tabId }, '1.3');
+    // CRITICAL: Input.dispatchMouseEvent requires the tab to be focused
+    // See: https://github.com/ChromeDevTools/devtools-protocol/issues/89
+    const tab = await chrome.tabs.get(tabId);
+    await chrome.windows.update(tab.windowId, { focused: true });
+    await chrome.tabs.update(tabId, { active: true });
+
+    await ensureDebuggerAttached(tabId);
 
     await chrome.debugger.sendCommand({ tabId }, 'Input.dispatchMouseEvent', {
       type: 'mouseWheel',
@@ -852,10 +1043,10 @@ async function scroll(tabId, direction, amount = 3, x, y) {
       deltaY
     });
 
-    await chrome.debugger.detach({ tabId });
+    resetDebuggerIdleTimer(tabId);
     return { scrolled: true, direction, amount };
   } catch (error) {
-    try { await chrome.debugger.detach({ tabId }); } catch {}
+    resetDebuggerIdleTimer(tabId);
     return { scrolled: false, error: error.message };
   }
 }
@@ -968,15 +1159,159 @@ async function readNetwork(tabId, urlPattern, limit = 100, clear = false) {
   return { requests: filtered };
 }
 
-// Accessibility tree via debugger
+// Evaluate JS in cross-origin iframe via Target.setAutoAttach + sessionId
+// This is the proper way to interact with isolated iframe contexts (e.g. CyberSource payment)
+async function iframeTargetEval(tabId, urlPattern, code) {
+  try {
+    await ensureDebuggerAttached(tabId);
+
+    // Enable required domains
+    await chrome.debugger.sendCommand({ tabId }, 'Target.setAutoAttach', {
+      autoAttach: true,
+      flatten: true,
+      waitForDebuggerOnStart: false
+    });
+    await chrome.debugger.sendCommand({ tabId }, 'Runtime.enable');
+
+    // Wait a bit for iframes to attach
+    await new Promise(r => setTimeout(r, 500));
+
+    // Get all targets
+    const { targetInfos } = await chrome.debugger.sendCommand({ tabId }, 'Target.getTargets');
+    console.log('[ChromeControl] Available targets:', JSON.stringify(targetInfos, null, 2));
+
+    // Find iframe matching the pattern
+    const iframeTarget = targetInfos.find(t =>
+      t.type === 'iframe' && t.url && t.url.includes(urlPattern)
+    );
+
+    if (!iframeTarget) {
+      return {
+        success: false,
+        error: `No iframe found matching "${urlPattern}"`,
+        availableTargets: targetInfos.filter(t => t.type === 'iframe').map(t => ({
+          type: t.type,
+          url: t.url
+        }))
+      };
+    }
+
+    console.log('[ChromeControl] Found iframe target:', iframeTarget);
+
+    // Attach to the iframe target specifically
+    const { sessionId } = await chrome.debugger.sendCommand({ tabId }, 'Target.attachToTarget', {
+      targetId: iframeTarget.targetId,
+      flatten: true
+    });
+
+    console.log('[ChromeControl] Attached to iframe, sessionId:', sessionId);
+
+    // Enable Runtime in the iframe context
+    await chrome.debugger.sendCommand({ tabId }, 'Runtime.enable', {}, sessionId);
+
+    // Execute the code in the iframe
+    const result = await chrome.debugger.sendCommand({ tabId }, 'Runtime.evaluate', {
+      expression: code,
+      returnByValue: true
+    }, sessionId);
+
+    console.log('[ChromeControl] Eval result:', result);
+
+    return {
+      success: true,
+      result: result?.result?.value,
+      targetUrl: iframeTarget.url
+    };
+  } catch (error) {
+    console.error('[ChromeControl] iframeTargetEval error:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+// Type into cross-origin iframe using Target.setAutoAttach + Input.dispatchKeyEvent with sessionId
+async function iframeTargetType(tabId, urlPattern, text) {
+  try {
+    await ensureDebuggerAttached(tabId);
+
+    // Enable auto-attach with flatten mode
+    await chrome.debugger.sendCommand({ tabId }, 'Target.setAutoAttach', {
+      autoAttach: true,
+      flatten: true,
+      waitForDebuggerOnStart: false
+    });
+
+    // Wait for iframes to attach
+    await new Promise(r => setTimeout(r, 500));
+
+    // Get all targets
+    const { targetInfos } = await chrome.debugger.sendCommand({ tabId }, 'Target.getTargets');
+
+    // Find iframe matching the pattern
+    const iframeTarget = targetInfos.find(t =>
+      t.type === 'iframe' && t.url && t.url.includes(urlPattern)
+    );
+
+    if (!iframeTarget) {
+      return {
+        success: false,
+        error: `No iframe found matching "${urlPattern}"`,
+        availableTargets: targetInfos.filter(t => t.type === 'iframe').map(t => t.url)
+      };
+    }
+
+    // Attach to the iframe target
+    const { sessionId } = await chrome.debugger.sendCommand({ tabId }, 'Target.attachToTarget', {
+      targetId: iframeTarget.targetId,
+      flatten: true
+    });
+
+    console.log('[ChromeControl] Attached to iframe for typing, sessionId:', sessionId);
+
+    // Type each character using Input.dispatchKeyEvent with sessionId
+    for (const char of text) {
+      // keyDown
+      await chrome.debugger.sendCommand({ tabId }, 'Input.dispatchKeyEvent', {
+        type: 'keyDown',
+        key: char,
+        text: char,
+        unmodifiedText: char,
+        windowsVirtualKeyCode: char.charCodeAt(0),
+        nativeVirtualKeyCode: char.charCodeAt(0)
+      }, sessionId);
+
+      // char event
+      await chrome.debugger.sendCommand({ tabId }, 'Input.dispatchKeyEvent', {
+        type: 'char',
+        key: char,
+        text: char,
+        unmodifiedText: char
+      }, sessionId);
+
+      // keyUp
+      await chrome.debugger.sendCommand({ tabId }, 'Input.dispatchKeyEvent', {
+        type: 'keyUp',
+        key: char,
+        windowsVirtualKeyCode: char.charCodeAt(0),
+        nativeVirtualKeyCode: char.charCodeAt(0)
+      }, sessionId);
+
+      await new Promise(r => setTimeout(r, 30));
+    }
+
+    return { success: true, typed: text, targetUrl: iframeTarget.url };
+  } catch (error) {
+    console.error('[ChromeControl] iframeTargetType error:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+// Accessibility tree via debugger (persistent)
 async function getAccessibilityTree(tabId) {
   try {
-    await chrome.debugger.attach({ tabId }, '1.3');
+    await ensureDebuggerAttached(tabId);
     const tree = await chrome.debugger.sendCommand({ tabId }, 'Accessibility.getFullAXTree');
-    await chrome.debugger.detach({ tabId });
     return tree;
   } catch (error) {
-    try { await chrome.debugger.detach({ tabId }); } catch {}
     return { error: error.message };
   }
 }
@@ -989,18 +1324,63 @@ function setupKeepaliveAlarm() {
   chrome.alarms.create('keepalive', { periodInMinutes: 0.4 }); // ~24 seconds
 }
 
+// Set up hourly alarm for stale tab cleanup
+function setupStaleTabCleanupAlarm() {
+  chrome.alarms.create('stale_tab_cleanup', { periodInMinutes: 60 }); // every hour
+}
+
+// Clean up stale tabs opened by the extension
+async function cleanupStaleTabs() {
+  const now = Date.now();
+  const closedTabs = [];
+
+  for (const [tabId, info] of managedTabs.entries()) {
+    // Skip if no createdAt (legacy tabs before this feature)
+    if (!info.createdAt) continue;
+
+    const age = now - info.createdAt;
+    if (age > TAB_TTL_MS) {
+      try {
+        // Check if tab still exists and is not pinned
+        const tab = await chrome.tabs.get(tabId);
+        if (!tab.pinned) {
+          await chrome.tabs.remove(tabId);
+          managedTabs.delete(tabId);
+          consoleMessages.delete(tabId);
+          networkRequests.delete(tabId);
+          closedTabs.push({ tabId, url: info.url, ageHours: Math.round(age / 3600000) });
+          console.log(`[ChromeControl] Closed stale tab ${tabId} (${info.url}) - age: ${Math.round(age / 3600000)}h`);
+        }
+      } catch (e) {
+        // Tab no longer exists, clean up tracking
+        managedTabs.delete(tabId);
+        consoleMessages.delete(tabId);
+        networkRequests.delete(tabId);
+      }
+    }
+  }
+
+  if (closedTabs.length > 0) {
+    console.log(`[ChromeControl] Stale tab cleanup: closed ${closedTabs.length} tabs`);
+  }
+
+  return closedTabs;
+}
+
 chrome.runtime.onStartup.addListener(() => {
   connectNativeHost();
   setupKeepaliveAlarm();
+  setupStaleTabCleanupAlarm();
 });
 
 chrome.runtime.onInstalled.addListener(() => {
   connectNativeHost();
   setupKeepaliveAlarm();
+  setupStaleTabCleanupAlarm();
 });
 
-// Handle keepalive alarm - prevents service worker termination
-chrome.alarms.onAlarm.addListener((alarm) => {
+// Handle alarms - keepalive and stale tab cleanup
+chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === 'keepalive') {
     if (port) {
       try {
@@ -1015,11 +1395,26 @@ chrome.alarms.onAlarm.addListener((alarm) => {
       console.log('[ChromeControl] No port, reconnecting');
       connectNativeHost();
     }
+  } else if (alarm.name === 'stale_tab_cleanup') {
+    const closedTabs = await cleanupStaleTabs();
+    // Send log to native host for file logging
+    if (closedTabs.length > 0 && port) {
+      try {
+        port.postMessage({
+          type: 'stale_tabs_closed',
+          tabs: closedTabs,
+          timestamp: new Date().toISOString()
+        });
+      } catch (e) {
+        console.log('[ChromeControl] Failed to log stale tab cleanup:', e);
+      }
+    }
   }
 });
 
 // Initial alarm setup
 setupKeepaliveAlarm();
+setupStaleTabCleanupAlarm();
 
 // Listen for console messages from content script
 chrome.runtime.onMessage.addListener((message, sender) => {
