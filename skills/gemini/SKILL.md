@@ -10,16 +10,15 @@ Chat with Google's Gemini models from the command line. Supports text and images
 ## Quick Commands
 
 ```bash
-# Simple query (uses gemini-2.5-flash by default)
+# Simple query (uses gemini-3-pro-preview by default)
 ~/.claude/skills/gemini/scripts/gemini "your prompt here"
 
-# Use a specific model
-~/.claude/skills/gemini/scripts/gemini -m gemini-2.5-pro "complex question"
-~/.claude/skills/gemini/scripts/gemini -m gemini-3-pro-preview "latest model"
-
-# Image analysis
+# Image analysis (auto-selects gemini-3-pro-image-preview for vision)
 ~/.claude/skills/gemini/scripts/gemini -i image.jpg "describe this image"
 ~/.claude/skills/gemini/scripts/gemini -i img1.jpg -i img2.jpg "compare these"
+
+# Override model if needed (e.g., for cheaper queries)
+~/.claude/skills/gemini/scripts/gemini -m gemini-2.5-flash "quick question"
 
 # Show token usage
 ~/.claude/skills/gemini/scripts/gemini -v "prompt"
@@ -41,7 +40,9 @@ cat file.txt | ~/.claude/skills/gemini/scripts/gemini "summarize this"
 
 | Model | Description |
 |-------|-------------|
-| `gemini-2.5-flash` | Fast, cheap, everyday use **(DEFAULT)** |
+| `gemini-3-pro-preview` | Latest Pro model **(DEFAULT for text)** |
+| `gemini-3-pro-image-preview` | Vision-focused Pro **(DEFAULT when images passed)** |
+| `gemini-2.5-flash` | Fast, cheap, everyday use |
 | `gemini-2.5-flash-lite` | Even faster/cheaper |
 | `gemini-2.5-pro` | Complex reasoning, coding |
 | `gemini-3-pro-preview` | Latest Pro model (preview) |

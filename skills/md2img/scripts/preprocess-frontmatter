@@ -1,0 +1,133 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["pyyaml"]
+# ///
+"""
+Preprocess markdown frontmatter into a styled header table.
+Reads from stdin or file, writes to stdout.
+"""
+
+import sys
+import re
+import yaml
+from datetime import datetime
+
+def format_value(key: str, value) -> str:
+    """Format a value for display."""
+    if value is None:
+        return "—"
+
+    # Status with emoji
+    if key == "status":
+        status_map = {
+            "active": "🟢 active",
+            "paused": "🟡 paused",
+            "completed": "✅ completed",
+            "blocked": "🔴 blocked",
+            "draft": "📝 draft",
+        }
+        return status_map.get(str(value).lower(), str(value))
+
+    # Score formatting
+    if key in ("last_review_score", "score"):
+        return f"**{value}**"
+
+    # Date formatting
+    if key in ("created", "updated", "last_updated"):
+        if isinstance(value, datetime):
+            return value.strftime("%b %d, %Y")
+        elif isinstance(value, str):
+            try:
+                dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                return dt.strftime("%b %d, %Y")
+            except:
+                return str(value)
+
+    # Lists
+    if isinstance(value, list):
+        if not value:
+            return "—"
+        return ", ".join(str(v) for v in value)
+
+    return str(value)
+
+def format_key(key: str) -> str:
+    """Format a key for display."""
+    return key.replace("_", " ").title()
+
+def frontmatter_to_table(frontmatter: dict) -> str:
+    """Convert frontmatter dict to markdown table."""
+    # Extract title for h1
+    title = frontmatter.pop("title", None)
+
+    # Skip these fields (internal/not useful to display)
+    skip_fields = {"chat_id", "contact", "backend", "implementation_path", "depends_on"}
+
+    # Filter and order fields
+    display_fields = []
+    priority_order = ["version", "status", "last_review_score", "score", "created", "tags"]
+
+    for key in priority_order:
+        if key in frontmatter and key not in skip_fields:
+            display_fields.append((key, frontmatter[key]))
+
+    # Add remaining fields
+    for key, value in frontmatter.items():
+        if key not in skip_fields and key not in priority_order:
+            display_fields.append((key, value))
+
+    # Build output
+    lines = []
+
+    if title:
+        lines.append(f"# {title}")
+        lines.append("")
+
+    if display_fields:
+        lines.append("| | |")
+        lines.append("|---|---|")
+        for key, value in display_fields:
+            formatted_value = format_value(key, value)
+            if formatted_value and formatted_value != "—":
+                lines.append(f"| **{format_key(key)}** | {formatted_value} |")
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+
+    return "\n".join(lines)
+
+def process_markdown(content: str) -> str:
+    """Process markdown, converting frontmatter to styled header."""
+    # Match YAML frontmatter
+    pattern = r'^---\s*\n(.*?)\n---\s*\n'
+    match = re.match(pattern, content, re.DOTALL)
+
+    if not match:
+        return content
+
+    yaml_content = match.group(1)
+    rest_of_doc = content[match.end():]
+
+    try:
+        frontmatter = yaml.safe_load(yaml_content)
+        if not isinstance(frontmatter, dict):
+            return content
+
+        header = frontmatter_to_table(frontmatter)
+        return header + rest_of_doc
+    except yaml.YAMLError:
+        return content
+
+def main():
+    if len(sys.argv) > 1 and sys.argv[1] != "-":
+        with open(sys.argv[1], "r") as f:
+            content = f.read()
+    else:
+        content = sys.stdin.read()
+
+    processed = process_markdown(content)
+    print(processed, end="")
+
+if __name__ == "__main__":
+    main()

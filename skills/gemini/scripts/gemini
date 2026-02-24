@@ -73,8 +73,8 @@ def load_image(path: str) -> types.Part:
 def main():
     parser = argparse.ArgumentParser(description="Chat with Gemini")
     parser.add_argument("prompt", nargs="*", help="The prompt to send")
-    parser.add_argument("-m", "--model", default="gemini-2.5-flash",
-                        help="Model to use (default: gemini-2.5-flash)")
+    parser.add_argument("-m", "--model", default=None,
+                        help="Model to use (default: gemini-3-pro-preview, or gemini-3-pro-image-preview if images provided)")
     parser.add_argument("-i", "--image", action="append", dest="images",
                         help="Image file(s) to include (can be used multiple times)")
     parser.add_argument("-s", "--session", action="store_true",
@@ -100,10 +100,11 @@ def main():
 
     if args.session:
         # Interactive session
-        print(f"Gemini interactive session ({args.model})")
+        session_model = args.model or "gemini-3-pro-preview"
+        print(f"Gemini interactive session ({session_model})")
         print("Type 'quit' or Ctrl+D to exit\n")
 
-        chat = client.chats.create(model=args.model)
+        chat = client.chats.create(model=session_model)
 
         while True:
             try:
@@ -134,6 +135,14 @@ def main():
         print("Error: No prompt provided. Use -s for interactive session.", file=sys.stderr)
         sys.exit(1)
 
+    # Determine model - auto-select vision model if images provided
+    if args.model:
+        model = args.model
+    elif args.images:
+        model = "gemini-3-pro-image-preview"  # Best for vision tasks
+    else:
+        model = "gemini-3-pro-preview"  # Default to Pro 3
+
     # Build contents list
     contents = []
 
@@ -152,11 +161,34 @@ def main():
     # Add text prompt
     contents.append(prompt_text)
 
-    # Generate response
-    response = client.models.generate_content(
-        model=args.model,
-        contents=contents
-    )
+    # Generate response with fallback chain for 503 errors
+    fallback_models = []
+    if args.images:
+        fallback_models = ["gemini-3-pro-image-preview", "gemini-3-pro-preview", "gemini-2.5-pro"]
+    else:
+        fallback_models = ["gemini-3-pro-preview", "gemini-2.5-pro"]
+
+    # If user specified model, only use that
+    if args.model:
+        fallback_models = [args.model]
+
+    response = None
+    for try_model in fallback_models:
+        try:
+            response = client.models.generate_content(
+                model=try_model,
+                contents=contents
+            )
+            if args.verbose:
+                print(f"Used model: {try_model}", file=sys.stderr)
+            break
+        except Exception as e:
+            if "503" in str(e) and try_model != fallback_models[-1]:
+                if args.verbose:
+                    print(f"Model {try_model} unavailable, trying next...", file=sys.stderr)
+                continue
+            else:
+                raise
 
     print(response.text)
 

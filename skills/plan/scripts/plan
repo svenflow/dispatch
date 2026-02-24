@@ -1,0 +1,625 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "click",
+#     "pyyaml",
+# ]
+# ///
+"""
+Plan CLI - Create and manage sandboxed project plans.
+
+Plans live in ~/transcripts/{backend}/{chat_id}/plans/
+"""
+
+import click
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+from datetime import datetime
+from pathlib import Path
+from typing import Optional
+
+import yaml
+
+
+def get_transcript_context() -> tuple[Optional[str], Optional[str], Optional[Path]]:
+    """Detect backend and chat_id from current working directory."""
+    cwd = Path.cwd()
+
+    # Check if we're in a transcript folder
+    # Pattern: ~/transcripts/{backend}/{chat_id}/
+    transcripts_dir = Path.home() / "transcripts"
+
+    try:
+        rel = cwd.relative_to(transcripts_dir)
+        parts = rel.parts
+        if len(parts) >= 2:
+            backend = parts[0]
+            chat_id = parts[1]
+            transcript_path = transcripts_dir / backend / chat_id
+            return backend, chat_id, transcript_path
+    except ValueError:
+        pass
+
+    return None, None, None
+
+
+def get_plans_dir() -> Path:
+    """Get the plans directory for the current transcript."""
+    _, _, transcript_path = get_transcript_context()
+    if transcript_path:
+        return transcript_path / "plans"
+    else:
+        # Fallback to current directory
+        return Path.cwd() / "plans"
+
+
+def get_plan_path(title: str) -> Path:
+    """Convert title to plan folder path."""
+    slug = re.sub(r'[^a-z0-9]+', '-', title.lower()).strip('-')
+    return get_plans_dir() / slug
+
+
+def get_global_index_path() -> Path:
+    """Get path to global plan index."""
+    return Path.home() / "transcripts" / ".plan-index.json"
+
+
+def load_global_index() -> dict:
+    """Load the global plan index."""
+    index_path = get_global_index_path()
+    if index_path.exists():
+        return json.loads(index_path.read_text())
+    return {"plans": [], "updated": None}
+
+
+def save_global_index(index: dict):
+    """Save the global plan index."""
+    index["updated"] = datetime.now().isoformat()
+    index_path = get_global_index_path()
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+    index_path.write_text(json.dumps(index, indent=2))
+
+
+def update_index_entry(plan_path: Path, plan_data: dict):
+    """Update or add a plan entry in the global index."""
+    index = load_global_index()
+
+    # Remove existing entry for this path
+    path_str = str(plan_path)
+    index["plans"] = [p for p in index["plans"] if p.get("path") != path_str]
+
+    # Add new entry
+    entry = {
+        "title": plan_data.get("title", plan_path.name),
+        "path": path_str,
+        "status": plan_data.get("status", "active"),
+        "created": plan_data.get("created"),
+        "contact": plan_data.get("contact"),
+        "tags": plan_data.get("tags", []),
+        "last_review_score": plan_data.get("last_review_score"),
+    }
+    index["plans"].append(entry)
+
+    save_global_index(index)
+
+
+def remove_index_entry(plan_path: Path):
+    """Remove a plan entry from the global index."""
+    index = load_global_index()
+    path_str = str(plan_path)
+    index["plans"] = [p for p in index["plans"] if p.get("path") != path_str]
+    save_global_index(index)
+
+
+def parse_plan_frontmatter(plan_path: Path) -> dict:
+    """Parse YAML frontmatter from PLAN.md."""
+    plan_md = plan_path / "PLAN.md"
+    if not plan_md.exists():
+        return {}
+
+    content = plan_md.read_text()
+    if not content.startswith("---"):
+        return {}
+
+    try:
+        # Find the closing ---
+        end = content.index("---", 3)
+        frontmatter = content[3:end].strip()
+        return yaml.safe_load(frontmatter) or {}
+    except (ValueError, yaml.YAMLError):
+        return {}
+
+
+def update_plan_frontmatter(plan_path: Path, updates: dict):
+    """Update YAML frontmatter in PLAN.md."""
+    plan_md = plan_path / "PLAN.md"
+    if not plan_md.exists():
+        return
+
+    content = plan_md.read_text()
+    if not content.startswith("---"):
+        return
+
+    try:
+        end = content.index("---", 3)
+        frontmatter = yaml.safe_load(content[3:end].strip()) or {}
+        frontmatter.update(updates)
+
+        body = content[end + 3:]
+        new_content = "---\n" + yaml.dump(frontmatter, default_flow_style=False, sort_keys=False) + "---" + body
+        plan_md.write_text(new_content)
+    except (ValueError, yaml.YAMLError):
+        pass
+
+
+def get_template_path(name: str) -> Optional[Path]:
+    """Get path to a template file."""
+    templates_dir = Path.home() / ".claude" / "skills" / "plan" / "templates"
+    template_file = templates_dir / f"{name}.md"
+    if template_file.exists():
+        return template_file
+    return None
+
+
+@click.group()
+def cli():
+    """Plan CLI - Create and manage sandboxed project plans."""
+    pass
+
+
+@cli.command()
+@click.argument("title")
+@click.option("--template", "-t", help="Template to use (app, refactor, bug, research)")
+def create(title: str, template: Optional[str]):
+    """Create a new plan folder with PLAN.md."""
+    backend, chat_id, transcript_path = get_transcript_context()
+
+    plan_path = get_plan_path(title)
+
+    if plan_path.exists():
+        click.echo(f"Error: Plan already exists at {plan_path}", err=True)
+        sys.exit(1)
+
+    # Create folder structure
+    plan_path.mkdir(parents=True)
+    (plan_path / "explorations").mkdir()
+    (plan_path / "prototypes").mkdir()
+    (plan_path / "attachments").mkdir()
+    (plan_path / "snapshots").mkdir()
+    (plan_path / "reviews").mkdir()
+
+    # Get template content or use default
+    template_content = ""
+    if template:
+        template_path = get_template_path(template)
+        if template_path:
+            template_content = template_path.read_text()
+        else:
+            click.echo(f"Warning: Template '{template}' not found, using default", err=True)
+
+    if not template_content:
+        template_content = """## Goal
+What we're trying to achieve.
+
+## Steps
+- [ ] Step 1
+- [ ] Step 2
+
+## Notes
+Additional context, decisions, open questions.
+"""
+
+    # Create PLAN.md with frontmatter
+    now = datetime.now().isoformat()
+
+    # Try to get contact name from contacts CLI
+    contact_name = ""
+    if chat_id:
+        try:
+            result = subprocess.run(
+                [str(Path.home() / ".claude/skills/contacts/scripts/contact"), "lookup", chat_id.replace("_", "+")],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if result.returncode == 0:
+                for line in result.stdout.split("\n"):
+                    if line.startswith("Name:"):
+                        contact_name = line.split(":", 1)[1].strip()
+                        break
+        except Exception:
+            pass
+
+    frontmatter = {
+        "title": title,
+        "version": 1,
+        "created": now,
+        "chat_id": chat_id.replace("_", "+") if chat_id else None,
+        "contact": contact_name or None,
+        "backend": backend,
+        "status": "active",
+        "tags": [],
+        "implementation_path": None,
+        "depends_on": [],
+        "last_review_score": None,
+    }
+
+    plan_md_content = "---\n" + yaml.dump(frontmatter, default_flow_style=False, sort_keys=False) + "---\n\n" + template_content
+
+    (plan_path / "PLAN.md").write_text(plan_md_content)
+
+    # Update global index
+    update_index_entry(plan_path, frontmatter)
+
+    click.echo(f"Created plan: {plan_path}")
+    click.echo(f"Edit: {plan_path / 'PLAN.md'}")
+
+
+@cli.command("list")
+def list_plans():
+    """List plans in current transcript."""
+    plans_dir = get_plans_dir()
+
+    if not plans_dir.exists():
+        click.echo("No plans found.")
+        return
+
+    plans = []
+    for plan_dir in sorted(plans_dir.iterdir()):
+        if plan_dir.is_dir() and (plan_dir / "PLAN.md").exists():
+            data = parse_plan_frontmatter(plan_dir)
+            plans.append({
+                "name": plan_dir.name,
+                "title": data.get("title", plan_dir.name),
+                "status": data.get("status", "unknown"),
+                "version": data.get("version", "?"),
+                "score": data.get("last_review_score", "-"),
+            })
+
+    if not plans:
+        click.echo("No plans found.")
+        return
+
+    click.echo(f"Plans in {plans_dir}:\n")
+    for p in plans:
+        score_str = f"{p['score']}/10" if p['score'] != "-" else "-"
+        click.echo(f"  {p['title']} (v{p['version']}) [{p['status']}] score: {score_str}")
+
+
+@cli.command()
+@click.argument("title")
+def show(title: str):
+    """Display a plan's PLAN.md."""
+    plan_path = get_plan_path(title)
+    plan_md = plan_path / "PLAN.md"
+
+    if not plan_md.exists():
+        click.echo(f"Error: Plan not found at {plan_path}", err=True)
+        sys.exit(1)
+
+    click.echo(plan_md.read_text())
+
+
+@cli.command()
+@click.argument("title")
+def edit(title: str):
+    """Open a plan's PLAN.md in $EDITOR. Auto-snapshots before and after."""
+    plan_path = get_plan_path(title)
+    plan_md = plan_path / "PLAN.md"
+
+    if not plan_md.exists():
+        click.echo(f"Error: Plan not found at {plan_path}", err=True)
+        sys.exit(1)
+
+    # Snapshot before edit
+    snapshot_file = auto_snapshot(plan_path)
+    if snapshot_file:
+        click.echo(f"Pre-edit snapshot: {snapshot_file}")
+
+    editor = os.environ.get("EDITOR", "vim")
+    subprocess.run([editor, str(plan_md)])
+
+    # Snapshot after edit (captures changes)
+    snapshot_file = auto_snapshot(plan_path)
+    if snapshot_file:
+        click.echo(f"Post-edit snapshot: {snapshot_file}")
+
+
+@cli.command()
+@click.argument("title")
+@click.argument("content", required=False)
+@click.option("--file", "-f", "file_path", type=click.Path(exists=True), help="Read content from file")
+@click.option("--stdin", is_flag=True, help="Read content from stdin")
+def update(title: str, content: Optional[str], file_path: Optional[str], stdin: bool):
+    """Update PLAN.md content. Auto-snapshots before writing."""
+    plan_path = get_plan_path(title)
+    plan_md = plan_path / "PLAN.md"
+
+    if not plan_md.exists():
+        click.echo(f"Error: Plan not found at {plan_path}", err=True)
+        sys.exit(1)
+
+    # Get new content
+    if stdin:
+        new_content = sys.stdin.read()
+    elif file_path:
+        new_content = Path(file_path).read_text()
+    elif content:
+        new_content = content
+    else:
+        click.echo("Error: provide content, --file, or --stdin", err=True)
+        sys.exit(1)
+
+    # Snapshot before update
+    snapshot_file = auto_snapshot(plan_path)
+    if snapshot_file:
+        click.echo(f"Snapshot saved: {snapshot_file}")
+
+    # Write new content
+    plan_md.write_text(new_content)
+    click.echo(f"Updated: {plan_md}")
+
+
+@cli.command()
+@click.argument("title")
+@click.option("--force", "-f", is_flag=True, help="Skip confirmation")
+def delete(title: str, force: bool):
+    """Delete a plan."""
+    plan_path = get_plan_path(title)
+
+    if not plan_path.exists():
+        click.echo(f"Error: Plan not found at {plan_path}", err=True)
+        sys.exit(1)
+
+    if not force:
+        confirm = click.prompt(f"Delete plan '{title}' at {plan_path}? (yes/no)", default="no")
+        if confirm.lower() != "yes":
+            click.echo("Cancelled.")
+            return
+
+    shutil.rmtree(plan_path)
+    remove_index_entry(plan_path)
+    click.echo(f"Deleted: {plan_path}")
+
+
+@cli.command()
+def templates():
+    """List available templates."""
+    templates_dir = Path.home() / ".claude" / "skills" / "plan" / "templates"
+
+    if not templates_dir.exists():
+        click.echo("No templates found.")
+        return
+
+    click.echo("Available templates:")
+    for template in sorted(templates_dir.glob("*.md")):
+        name = template.stem
+        # Read first line after frontmatter for description
+        content = template.read_text()
+        desc = ""
+        lines = content.split("\n")
+        for line in lines:
+            if line.startswith("#"):
+                desc = line.lstrip("#").strip()
+                break
+        click.echo(f"  {name}: {desc}")
+
+
+@cli.command()
+@click.argument("title")
+@click.argument("topic")
+def explore(title: str, topic: str):
+    """Create an exploration note."""
+    plan_path = get_plan_path(title)
+
+    if not plan_path.exists():
+        click.echo(f"Error: Plan not found at {plan_path}", err=True)
+        sys.exit(1)
+
+    explorations_dir = plan_path / "explorations"
+    explorations_dir.mkdir(exist_ok=True)
+
+    date = datetime.now().strftime("%Y-%m-%d")
+    slug = re.sub(r'[^a-z0-9]+', '-', topic.lower()).strip('-')
+    filename = f"{date}-{slug}.md"
+    filepath = explorations_dir / filename
+
+    # Create exploration file
+    content = f"""# {topic}
+
+Created: {datetime.now().isoformat()}
+
+## Notes
+
+"""
+    filepath.write_text(content)
+    click.echo(f"Created: {filepath}")
+
+
+@cli.command()
+@click.argument("title")
+@click.argument("filename")
+def prototype(title: str, filename: str):
+    """Create a prototype file."""
+    plan_path = get_plan_path(title)
+
+    if not plan_path.exists():
+        click.echo(f"Error: Plan not found at {plan_path}", err=True)
+        sys.exit(1)
+
+    prototypes_dir = plan_path / "prototypes"
+    prototypes_dir.mkdir(exist_ok=True)
+
+    filepath = prototypes_dir / filename
+
+    # Create with appropriate shebang for Python
+    if filename.endswith(".py"):
+        content = '''#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+"""
+Prototype: ''' + filename + '''
+"""
+
+'''
+    else:
+        content = ""
+
+    filepath.write_text(content)
+    click.echo(f"Created: {filepath}")
+
+
+@cli.command()
+@click.argument("title")
+@click.argument("file", type=click.Path(exists=True))
+def attach(title: str, file: str):
+    """Copy a file to the plan's attachments."""
+    plan_path = get_plan_path(title)
+
+    if not plan_path.exists():
+        click.echo(f"Error: Plan not found at {plan_path}", err=True)
+        sys.exit(1)
+
+    attachments_dir = plan_path / "attachments"
+    attachments_dir.mkdir(exist_ok=True)
+
+    src = Path(file)
+    dst = attachments_dir / src.name
+    shutil.copy2(src, dst)
+    click.echo(f"Attached: {dst}")
+
+
+def auto_snapshot(plan_path: Path) -> Optional[Path]:
+    """Auto-save snapshot if PLAN.md changed since last snapshot. Returns snapshot path if created."""
+    plan_md = plan_path / "PLAN.md"
+    snapshots_dir = plan_path / "snapshots"
+
+    if not plan_md.exists():
+        return None
+
+    snapshots_dir.mkdir(exist_ok=True)
+
+    # Get current version
+    data = parse_plan_frontmatter(plan_path)
+    version = data.get("version", 1)
+
+    # Check if this version already has a snapshot
+    existing_snapshot = snapshots_dir / f"v{version}.md"
+    if existing_snapshot.exists():
+        # Compare content - if same, no need to snapshot
+        if existing_snapshot.read_text() == plan_md.read_text():
+            return None
+
+    # Save snapshot of current version
+    snapshot_file = snapshots_dir / f"v{version}.md"
+    shutil.copy2(plan_md, snapshot_file)
+
+    # Increment version in frontmatter
+    new_version = version + 1
+    update_plan_frontmatter(plan_path, {"version": new_version})
+
+    # Update LATEST.md symlink
+    latest_link = snapshots_dir / "LATEST.md"
+    if latest_link.exists() or latest_link.is_symlink():
+        latest_link.unlink()
+    latest_link.symlink_to(f"v{version}.md")
+
+    # Update index
+    data["version"] = new_version
+    update_index_entry(plan_path, data)
+
+    return snapshot_file
+
+
+@cli.command()
+@click.argument("title")
+@click.argument("description", required=False, default="")
+def snapshot(title: str, description: str):
+    """Save a versioned snapshot of PLAN.md."""
+    plan_path = get_plan_path(title)
+    plan_md = plan_path / "PLAN.md"
+
+    if not plan_md.exists():
+        click.echo(f"Error: Plan not found at {plan_path}", err=True)
+        sys.exit(1)
+
+    snapshot_file = auto_snapshot(plan_path)
+
+    if snapshot_file:
+        data = parse_plan_frontmatter(plan_path)
+        click.echo(f"Saved snapshot: {snapshot_file}")
+        click.echo(f"Now at version: v{data.get('version', '?')}")
+    else:
+        click.echo("No changes to snapshot.")
+
+
+@cli.command()
+@click.argument("title")
+def review(title: str):
+    """Run subagent-review on the plan. Auto-snapshots before review."""
+    plan_path = get_plan_path(title)
+    plan_md = plan_path / "PLAN.md"
+
+    if not plan_md.exists():
+        click.echo(f"Error: Plan not found at {plan_path}", err=True)
+        sys.exit(1)
+
+    # Auto-snapshot before review
+    snapshot_file = auto_snapshot(plan_path)
+    if snapshot_file:
+        click.echo(f"Auto-snapshot saved: {snapshot_file}")
+
+    reviews_dir = plan_path / "reviews"
+    reviews_dir.mkdir(exist_ok=True)
+
+    date = datetime.now().strftime("%Y-%m-%d")
+    review_file = reviews_dir / f"{date}-review.md"
+
+    # Read plan content
+    plan_content = plan_md.read_text()
+
+    click.echo(f"Running subagent-review on {title}...")
+    click.echo(f"Plan content will be reviewed. Output saved to: {review_file}")
+    click.echo(f"\nTo run manually:")
+    click.echo(f"  Read {plan_md} and use /subagent-review skill")
+    click.echo(f"  Save output to {review_file}")
+    click.echo(f"  Update last_review_score in PLAN.md frontmatter")
+
+
+@cli.command()
+@click.argument("query")
+def search(query: str):
+    """Search across all plans using ripgrep."""
+    transcripts_dir = Path.home() / "transcripts"
+
+    # Find all plans directories
+    result = subprocess.run(
+        ["rg", "-l", query, "--glob", "**/plans/**/PLAN.md", str(transcripts_dir)],
+        capture_output=True,
+        text=True
+    )
+
+    if result.returncode != 0 and not result.stdout:
+        click.echo("No matches found.")
+        return
+
+    click.echo(f"Plans matching '{query}':\n")
+    for line in result.stdout.strip().split("\n"):
+        if line:
+            # Extract plan title from path
+            path = Path(line)
+            plan_dir = path.parent
+            data = parse_plan_frontmatter(plan_dir)
+            title = data.get("title", plan_dir.name)
+            click.echo(f"  {title}: {plan_dir}")
+
+
+if __name__ == "__main__":
+    cli()
