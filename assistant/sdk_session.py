@@ -370,6 +370,7 @@ class SDKSession:
             model=self.model,
             fallback_model="sonnet",  # Only triggers on 529 (server overloaded), not normal usage
             max_turns=turn_limit,
+            max_buffer_size=10 * 1024 * 1024,  # 10MB - prevents crash on large Task outputs
             extra_args={"session-id": fresh_session_id},  # Force fresh session
             hooks={
                 "PreToolUse": [HookMatcher(matcher="Read", hooks=[self._resize_image_hook])],

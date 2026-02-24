@@ -22,6 +22,8 @@ CLIs are testable, reusable, handle edge cases, and are debuggable. One-off expl
 ### 4. Never Truncate Output
 **NEVER truncate data in CLIs, scripts, or when reading/displaying content.** No slicing (`[:50]`), no "truncate long messages" logic. Filter fields if needed, but show full values. Use `--limit` flags for record counts.
 
+**Exception for Task agents:** When using the Task tool to launch background agents, if the agent's output would exceed 100KB, write the full output to `/tmp/agent-output-<uuid>.txt` and return only: `"Output written to /tmp/agent-output-<uuid>.txt (<size> bytes)"`. This prevents buffer overflow crashes in the SDK transport layer while preserving the full data for retrieval.
+
 ### 5. NEVER Escape Exclamation Marks
 **When sending SMS or Signal messages, NEVER escape `!` with a backslash.** Write `"Hello!"` not `"Hello\!"`. The send CLIs handle escaping internally. `\!` sends a literal backslash.
 
