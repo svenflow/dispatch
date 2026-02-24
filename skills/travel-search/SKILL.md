@@ -1,41 +1,48 @@
-# Travel Search Skill v3.4
+# Travel Search Skill v3.5
 
 **Review-aware travel search** with direct booking links, emoji-rich output, and discount hunting.
 
 **Trigger words:** travel search, find trip, plan trip, flights and airbnb, vacation search, trip to [destination]
 
-## What's New in v3.4
+## What's New in v3.5
 
-### Direct Booking Links (NOT Search Pages)
-- **Flights**: Each flight links directly to that specific itinerary (not a search results page)
-- **Airbnbs**: Each listing links to `airbnb.com/rooms/LISTING_ID` (not search page)
-- **Rental Cars**: Each car links to the specific rental or pre-filtered search
+### Booking IDs
+- **Flights**: F1, F2, F3... for easy reference when booking
+- **Airbnbs**: A1, A2, A3... for easy reference when booking
+- Say "book F2 + A3" to proceed with specific options
+
+### Price Indicators (Simplified)
+- **🔻 -12%** = Green down arrow with % below average
+- **🔺 +8%** = Red up arrow with % above average
+- No strikethrough text, cleaner display
 
 ### Enhanced Flight Output
 - **Top 5 flights** sorted by total cost (including taxes)
 - Each shows: ✈️ Airline | 💰 Total w/taxes | ⏱️ Duration | 🔄 Connections
-- **Price emojis**: 🔥 great deal | 💵 normal | 💸 expensive
+- **Price arrows**: 🔻 below average (green) | 🔺 above average (red) with %
 - **Speed emojis**: ⚡ fast (<8hrs) | 🐢 slow (>14hrs)
 - **Direct link** to book that specific flight
 
 ### Enhanced Airbnb Output
 - **10 listings** ranked by reviews + cost + location
 - Each shows:
-  - 📍 Neighborhood | ⭐ Rating (reviews) | 💰 Total price
-  - 🏷️ **Discount**: `~~$3,200~~ $2,400 - 25% OFF!` when applicable
+  - 📍 Neighborhood | ⭐ Rating (reviews)
+  - 💰 Total + per-night cost (e.g., "$2,400 ($400/night)")
+  - 🔻 -15% discount indicator when below normal price
+  - ✓ Free cancel or ✗ No free cancel
 - **Amenity emojis**: 🏊 Pool | 🛁 Hot Tub | 🎱 Pool Table | 🎮 Game Room | 🏋️ Gym | 🅿️ Parking | 🌡️ AC | 📶 WiFi | 🍳 Kitchen | 🧺 Washer
 - **Direct listing link**: `airbnb.com/rooms/[ID]`
 
-### Enhanced Transportation Output
-- **5 rental cars** from major companies (Enterprise, Hertz, Budget, Avis, National)
-- **Turo rideshare** option included
-- Each shows: 🚗 Car type | 💰 Total | 📍 Pickup | ⭐ Rating
-- **Price emojis**: 🔥 🔥 💵 💸
+### Enhanced Budget Summary
+- **Cost per day** shown for each option
+- **Aligned numbers** for easy comparison
+- **Separator lines** between options (not above totals)
+- No remaining budget or checkmarks
 
 ### Finding Discounted Listings
 - **Prioritize listings showing "X% off"** or crossed-out prices
 - **Value score**: quality_score / normalized_price
-- **Flag luxury at budget prices**: "Normally $4,500 → $2,800 this week!"
+- **Flag luxury at budget prices**: Show 🔻 -20% when normally expensive listing is discounted
 
 ## Output Format
 
@@ -43,74 +50,99 @@
 ```
 ✈️ FLIGHTS (BOS → Paris, 4 pax) - Apr 17-23
 
-1. [Air France 8:10pm direct](https://...) ⚡
-   💰 $3,200 total w/taxes 💵
-   ⏱️ 7h 15m | 🔄 Nonstop
+F1. Air France Nonstop ⚡
+    💰 $3,200 total | ⏱️ 7h 15m | 🔄 Nonstop
+    7:05pm → 8:10am+1
+    🔗 google.com/travel/flights/booking?...
 
-2. [TAP Portugal via Lisbon](https://...)
-   💰 $2,100 total w/taxes 🔥
-   ⏱️ 11h 30m | 🔄 1 stop (LIS)
+F2. TAP Portugal 🔻 -18%
+    💰 $2,100 total | ⏱️ 11h 30m | 🔄 1 stop (LIS)
+    10:40am → 7:05am+1
+    🔗 google.com/travel/flights/booking?...
+
+F3. United via Newark 🔺 +12%
+    💰 $3,600 total | ⏱️ 10h 20m | 🔄 1 stop (EWR)
+    6:00am → 9:20pm
+    🔗 google.com/travel/flights/booking?...
 ```
 
 ### Airbnb Results (Top 10)
 ```
 🏠 AIRBNBS (Apr 17-23, 6 nights, 4 guests)
 
-1. [Charming Marais Loft](https://www.airbnb.com/rooms/12345678)
-   📍 Le Marais | ⭐ 4.92 (127 reviews)
-   💰 ~~$3,200~~ $2,400 🔥 25% OFF!
-   🏊 Pool 🌡️ AC 📶 WiFi 🍳 Kitchen
+A1. Charming Marais Loft ⭐4.92 (127) 🔻 -25%
+    📍 Le Marais | $2,400 ($400/night)
+    🏊 🌡️ 📶 🍳 | ✓ Free cancel
+    🔗 airbnb.com/rooms/12345678
 
-2. [Spacious Saint-Germain Flat](https://www.airbnb.com/rooms/23456789)
-   📍 Saint-Germain (6th) | ⭐ 4.88 (89 reviews)
-   💰 $2,650 💵
-   🛁 Hot Tub 🅿️ Parking 🌡️ AC 🍳 Kitchen 🧺 Washer
+A2. Saint-Germain Family Flat ⭐4.88 (89)
+    📍 Saint-Germain (6th) | $2,650 ($442/night)
+    🛁 🅿️ 🌡️ 🍳 🧺 | ✗ No free cancel
+    🔗 airbnb.com/rooms/23456789
+
+A3. Opera Grands Boulevards ⭐4.98 (43) 🔻 -20%
+    📍 Opera (2nd) | $3,282 ($547/night)
+    🌡️ 📶 🍳 | ✓ Free cancel
+    🔗 airbnb.com/rooms/34567890
 ```
 
 ### Transportation (5 cars + Turo)
 ```
 🚗 RENTAL CARS (Apr 17-23)
 
-1. [Enterprise - Peugeot 3008](https://...)
-   💰 $380/week 🔥 | 📍 CDG Airport | ⭐ 4.2
+R1. Enterprise - Peugeot 3008 🔻 -10%
+    💰 $380/week | 📍 CDG Airport | ⭐ 4.2
+    🔗 enterprise.com/...
 
-2. [Hertz - VW Golf](https://...)
-   💰 $420/week 💵 | 📍 CDG Airport | ⭐ 4.0
+R2. Hertz - VW Golf
+    💰 $420/week | 📍 CDG Airport | ⭐ 4.0
+    🔗 hertz.com/...
 
 🚙 TURO
-1. [Tesla Model 3 - Pierre](https://turo.com/...)
-   💰 $85/day ($510/week) | 📍 Paris 11th | ⭐ 4.9 (23 trips)
+T1. Tesla Model 3 - Pierre
+    💰 $85/day ($510/week) | 📍 Paris 11th | ⭐ 4.9 (23 trips)
+    🔗 turo.com/...
 ```
 
 ### Budget Summary
 ```
 💰 BUDGET ($6,000)
 
-OPTION 1 - Best Value:
-✈️ TAP Portugal: $2,100
-🏠 Marais Loft: $2,400 (discounted!)
-🚇 Metro: $120
-─────────────
-💰 $4,620 ✅ Remaining: $1,380
+OPTION 1 - Best Value (F2 + A1)
+✈️ TAP Portugal:      $2,100
+🏠 Marais Loft:       $2,400
+🚇 Metro passes:        $120
+💰 TOTAL:             $4,620  ($770/day)
+───────────────────────────────
 
-OPTION 2 - Most Convenient:
-✈️ Air France Direct: $3,200
-🏠 Saint-Germain: $2,650
-🚗 Enterprise: $380
-─────────────
-💰 $6,230 ⚠️ Over budget
+OPTION 2 - Central Location (F2 + A3)
+✈️ TAP Portugal:      $2,100
+🏠 Opera Apt:         $3,282
+🚇 Metro passes:        $120
+💰 TOTAL:             $5,502  ($917/day)
+───────────────────────────────
+
+OPTION 3 - Direct Flight (F1 + A1)
+✈️ Air France:        $3,200
+🏠 Marais Loft:       $2,400
+🚇 Metro passes:        $120
+💰 TOTAL:             $5,720  ($953/day)
 ```
 
 ## Emoji Reference
 
 ### Price Indicators
-- 🔥 **Great Deal** - Below average
-- 💵 **Normal** - Average price
-- 💸 **Expensive** - Above average
+- 🔻 **Below Average** - Green down arrow with % (e.g., 🔻 -15%)
+- 🔺 **Above Average** - Red up arrow with % (e.g., 🔺 +8%)
+- No indicator = average/normal price
 
 ### Speed (Flights)
 - ⚡ **Fast** - Under 8 hours
 - 🐢 **Slow** - Over 14 hours
+
+### Cancellation
+- ✓ Free cancel
+- ✗ No free cancel
 
 ### Amenities (Airbnb)
 | Emoji | Amenity |
@@ -360,7 +392,17 @@ Use browser automation (chrome-control skill) to:
 
 ## Changelog
 
-### v3.4 (Current)
+### v3.5 (Current)
+- **Booking IDs** - F1, F2, A1, A2, R1, T1 for easy reference
+- **Simplified price indicators** - 🔻 -15% (below avg) or 🔺 +8% (above avg)
+- **Per-night pricing** on Airbnbs ($2,400 ($400/night))
+- **Cancellation policy** shown on every listing (✓ Free cancel / ✗ No free cancel)
+- **Cost per day** in budget summary
+- **Aligned numbers** for easy comparison
+- **Separator lines** between options, not above totals
+- Removed: strikethrough text, remaining budget, checkmarks
+
+### v3.4
 - **Direct booking links** - Each flight, Airbnb, rental car links to specific listing
 - **Top 5 flights** sorted by cost with airline, duration, stops, price/speed emojis
 - **Top 10 Airbnbs** with direct room links, amenity emojis, discount hunting
