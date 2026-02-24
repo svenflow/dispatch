@@ -164,3 +164,94 @@ def timed_fn(metric: str, *, sample_rate: int = 1, **labels: Any):
 def error(error_type: str, **labels: Any) -> None:
     """Record an error occurrence."""
     incr("error_count", error_type=error_type, **labels)
+
+
+# ── Tool Execution Logging ──────────────────────────────────────────────
+
+import re
+import shlex
+from urllib.parse import urlparse
+
+SKILL_PATTERN = re.compile(r'\.claude/skills/([^/]+)/scripts/([^/\s]+)')
+
+
+def parse_bash(tool_input: dict[str, Any]) -> dict[str, Any]:
+    """Parse Bash command into structured fields."""
+    command = tool_input.get("command", "")
+    result: dict[str, Any] = {"command": command}
+
+    try:
+        result["cmd_argv"] = shlex.split(command)
+    except ValueError:
+        result["cmd_argv"] = command.split()
+
+    # Detect skill from path
+    match = SKILL_PATTERN.search(command)
+    if match:
+        result["skill"] = match.group(1)
+        result["cmd_name"] = match.group(2)
+    elif result["cmd_argv"]:
+        result["cmd_name"] = Path(result["cmd_argv"][0]).name
+
+    return result
+
+
+def parse_file_tool(tool_input: dict[str, Any]) -> dict[str, Any]:
+    """Parse Read/Write/Edit file path."""
+    file_path = tool_input.get("file_path", "")
+    result = dict(tool_input)
+    if file_path:
+        p = Path(file_path)
+        result["extension"] = p.suffix or None
+        result["directory"] = str(p.parent)
+    return result
+
+
+def parse_web_fetch(tool_input: dict[str, Any]) -> dict[str, Any]:
+    """Parse WebFetch URL."""
+    url = tool_input.get("url", "")
+    result = dict(tool_input)
+    if url:
+        parsed = urlparse(url)
+        result["domain"] = parsed.netloc or None
+    return result
+
+
+TOOL_PARSERS: dict[str, Any] = {
+    "Bash": parse_bash,
+    "Read": parse_file_tool,
+    "Write": parse_file_tool,
+    "Edit": parse_file_tool,
+    "WebFetch": parse_web_fetch,
+    # Grep, Glob, Task, WebSearch: raw input is already good
+}
+
+
+def log_tool_execution(
+    session: str,
+    tool: str,
+    tool_input: dict[str, Any],
+    duration_ms: float,
+    is_error: bool = False,
+) -> None:
+    """Log tool execution timing to perf JSONL.
+
+    Each tool gets smart parsing to extract queryable fields:
+    - Bash: skill, cmd_name, cmd_argv
+    - Read/Write/Edit: extension, directory
+    - WebFetch: domain
+    - Others: raw input passthrough
+    """
+    # Smart parse based on tool type
+    parser = TOOL_PARSERS.get(tool)
+    parsed_input = parser(tool_input) if parser else dict(tool_input)
+
+    _log_metric(
+        "tool_execution",
+        duration_ms,
+        event="tool_execution",
+        session=session,
+        tool=tool,
+        is_error=is_error,
+        input=parsed_input,
+    )

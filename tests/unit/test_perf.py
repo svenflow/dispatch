@@ -219,3 +219,105 @@ class TestIntegration:
             "response_ms",
             "error_count",
         }
+
+
+class TestToolExecutionLogging:
+    """Tests for tool execution performance logging."""
+
+    def test_parse_bash_skill_detection(self):
+        result = perf.parse_bash({"command": "~/.claude/skills/contacts/scripts/contact-lookup +1617"})
+        assert result["skill"] == "contacts"
+        assert result["cmd_name"] == "contact-lookup"
+        assert result["cmd_argv"] == ["~/.claude/skills/contacts/scripts/contact-lookup", "+1617"]
+
+    def test_parse_bash_no_skill(self):
+        result = perf.parse_bash({"command": "ls -la /tmp"})
+        assert "skill" not in result
+        assert result["cmd_name"] == "ls"
+
+    def test_parse_bash_quoted_args(self):
+        result = perf.parse_bash({"command": 'send-sms "+1234" "hello world"'})
+        assert result["cmd_argv"] == ["send-sms", "+1234", "hello world"]
+
+    def test_parse_bash_invalid_quotes_fallback(self):
+        # shlex.split fails on unclosed quotes, should fallback to simple split
+        result = perf.parse_bash({"command": 'echo "unclosed'})
+        assert result["cmd_argv"] == ['echo', '"unclosed']
+
+    def test_parse_file_tool(self):
+        result = perf.parse_file_tool({"file_path": "/Users/sven/code/example.py"})
+        assert result["extension"] == ".py"
+        assert result["directory"] == "/Users/sven/code"
+
+    def test_parse_file_tool_no_extension(self):
+        result = perf.parse_file_tool({"file_path": "/Users/sven/code/Makefile"})
+        assert result["extension"] is None
+        assert result["directory"] == "/Users/sven/code"
+
+    def test_parse_web_fetch(self):
+        result = perf.parse_web_fetch({"url": "https://api.example.com/v1/data"})
+        assert result["domain"] == "api.example.com"
+
+    def test_parse_web_fetch_no_url(self):
+        result = perf.parse_web_fetch({"prompt": "get data"})
+        assert result.get("domain") is None
+
+    def test_log_tool_execution_bash(self, temp_perf_dir):
+        perf.log_tool_execution(
+            session="imessage/+1617",
+            tool="Bash",
+            tool_input={"command": "~/.claude/skills/contacts/scripts/contact-lookup +1617"},
+            duration_ms=72.5,
+            is_error=False,
+        )
+
+        entries = read_perf_log(temp_perf_dir)
+        assert len(entries) == 1
+        entry = entries[0]
+        assert entry["metric"] == "tool_execution"
+        assert entry["tool"] == "Bash"
+        assert entry["session"] == "imessage/+1617"
+        assert entry["value"] == 72.5
+        assert entry["is_error"] is False
+        assert entry["input"]["skill"] == "contacts"
+        assert entry["input"]["cmd_name"] == "contact-lookup"
+
+    def test_log_tool_execution_read(self, temp_perf_dir):
+        perf.log_tool_execution(
+            session="imessage/+1617",
+            tool="Read",
+            tool_input={"file_path": "/Users/sven/code/example.py", "offset": 0, "limit": 100},
+            duration_ms=5.0,
+        )
+
+        entries = read_perf_log(temp_perf_dir)
+        entry = entries[0]
+        assert entry["tool"] == "Read"
+        assert entry["input"]["extension"] == ".py"
+        assert entry["input"]["directory"] == "/Users/sven/code"
+
+    def test_log_tool_execution_unknown_tool(self, temp_perf_dir):
+        """Unknown tools should pass through with raw input."""
+        perf.log_tool_execution(
+            session="imessage/+1617",
+            tool="SomeNewTool",
+            tool_input={"foo": "bar", "baz": 123},
+            duration_ms=100.0,
+        )
+
+        entries = read_perf_log(temp_perf_dir)
+        entry = entries[0]
+        assert entry["tool"] == "SomeNewTool"
+        assert entry["input"] == {"foo": "bar", "baz": 123}
+
+    def test_log_tool_execution_with_error(self, temp_perf_dir):
+        perf.log_tool_execution(
+            session="imessage/+1617",
+            tool="Bash",
+            tool_input={"command": "false"},
+            duration_ms=10.0,
+            is_error=True,
+        )
+
+        entries = read_perf_log(temp_perf_dir)
+        assert entries[0]["is_error"] is True

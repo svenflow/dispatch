@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import subprocess
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -28,6 +29,8 @@ from claude_agent_sdk import (
     SystemMessage,
     TextBlock,
     ToolUseBlock,
+    ToolResultBlock,
+    UserMessage,
     PermissionResultAllow,
     PermissionResultDeny,
     HookMatcher,
@@ -52,6 +55,7 @@ if TYPE_CHECKING:
     )
 
 from assistant.common import SKILLS_DIR, UV
+from assistant import perf
 
 log = logging.getLogger(__name__)
 
@@ -128,6 +132,9 @@ class SDKSession:
         self._needs_system_prompt: bool = False
         self._system_prompt_args: tuple | None = None
         self._system_prompt_type: str | None = None  # "individual" or "group"
+
+        # Tool execution timing: maps tool_use_id -> (start_time, tool_input, tool_name)
+        self._pending_tools: dict[str, tuple[float, dict, str]] = {}
 
         # Per-session logger
         from assistant.common import get_session_name
@@ -303,6 +310,8 @@ class SDKSession:
                     self._pending_queries = 0  # Reset: merged queries produce 1 ResultMessage
                     self._error_count = 0
                     # Note: _consecutive_error_turns is tracked in _handle_message
+                    # Cleanup stale pending tools (edge case: tool call never got result)
+                    self._cleanup_stale_pending_tools()
         except asyncio.CancelledError:
             pass
         except Exception as e:
@@ -317,6 +326,21 @@ class SDKSession:
             elif self._error_count >= 3:
                 self._log.error("RECEIVER_DEAD | Stopping session")
                 self.running = False
+
+    def _cleanup_stale_pending_tools(self) -> None:
+        """Remove pending tools older than 30 minutes.
+
+        Edge case handling: if a tool call never receives a result (e.g. session
+        killed mid-call), the entry would stay forever. This cleans them up.
+        """
+        now = time.perf_counter()
+        stale_ids = [
+            tid for tid, (start_time, _, _) in self._pending_tools.items()
+            if now - start_time > 1800  # 30 minutes
+        ]
+        for tid in stale_ids:
+            self._log.warning(f"PENDING_TOOL_STALE | tool_use_id={tid}")
+            self._pending_tools.pop(tid, None)
 
     def _build_options(self, resume_id: Optional[str] = None) -> ClaudeAgentOptions:
         """Build ClaudeAgentOptions based on contact tier."""
@@ -504,6 +528,31 @@ class SDKSession:
                     self._log.info(f"OUT | {block.text}")
                 elif isinstance(block, ToolUseBlock):
                     self._log.info(f"TOOL_USE | {block.name}")
+                    # Track tool start time for performance logging
+                    self._pending_tools[block.id] = (
+                        time.perf_counter(),
+                        block.input if isinstance(block.input, dict) else {},
+                        block.name,
+                    )
+
+        elif isinstance(message, UserMessage):
+            # UserMessage contains tool results - track completion timing
+            for block in (message.content if isinstance(message.content, list) else []):
+                if isinstance(block, ToolResultBlock):
+                    tool_use_id = block.tool_use_id
+                    if tool_use_id in self._pending_tools:
+                        start_time, tool_input, tool_name = self._pending_tools.pop(tool_use_id)
+                        duration_ms = (time.perf_counter() - start_time) * 1000
+                        session_name = f"{self.source}/{self.chat_id}"
+                        perf.log_tool_execution(
+                            session=session_name,
+                            tool=tool_name,
+                            tool_input=tool_input,
+                            duration_ms=duration_ms,
+                            is_error=block.is_error or False,
+                        )
+                    else:
+                        self._log.warning(f"TOOL_RESULT_ORPHAN | tool_use_id={tool_use_id}")
 
         elif isinstance(message, ResultMessage):
             self.turn_count += message.num_turns or 0
