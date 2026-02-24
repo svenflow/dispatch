@@ -59,6 +59,7 @@ from assistant.common import (
     ensure_transcript_dir,
 )
 from assistant.sdk_backend import SDKBackend, SessionRegistry
+from assistant import perf
 
 # Import SignalDB for message persistence (lazy import to avoid startup errors)
 _signal_db = None
@@ -142,12 +143,13 @@ class ContactsManager:
 
     def lookup_identifier(self, identifier: str) -> Optional[Dict[str, str]]:
         """Lookup contact by phone OR email via SQLite."""
-        contact = self._lookup_phone(identifier)
-        if contact:
-            return contact
-        if '@' in identifier:
-            return self._lookup_email(identifier)
-        return None
+        with perf.timed("contact_lookup_ms", component="daemon"):
+            contact = self._lookup_phone(identifier)
+            if contact:
+                return contact
+            if '@' in identifier:
+                return self._lookup_email(identifier)
+            return None
 
     def list_blessed_contacts(self) -> list:
         """Get all contacts with blessed tiers (admin, wife, family, favorite)."""
@@ -1073,9 +1075,10 @@ class IPCServer:
             return {"ok": ok, "message": f"Killed {chat_id}" if ok else "Session not found"}
         elif cmd == "restart_session":
             chat_id = request.get("chat_id")
+            tier = request.get("tier")  # Optional tier override
             if not chat_id:
                 return {"ok": False, "error": "Missing chat_id"}
-            session = await self.backend.restart_session(chat_id)
+            session = await self.backend.restart_session(chat_id, tier_override=tier)
             return {"ok": session is not None, "message": f"Restarted {chat_id}" if session else "Failed to restart"}
         elif cmd == "set_model":
             chat_id = request.get("chat_id")
@@ -1121,6 +1124,7 @@ class IPCServer:
         tier = req.get("tier")
         source = req.get("source", "imessage")
         reply_to = req.get("reply_to")
+        attachment = req.get("attachment")  # Optional: {"path": "/path/to/image.jpg"}
 
         if not chat_id or not prompt:
             return {"ok": False, "error": "chat_id and prompt required"}
@@ -1141,6 +1145,15 @@ class IPCServer:
         # Determine if this is a group
         is_group = is_group_chat_id(chat_id)
 
+        # Build attachments list if attachment provided
+        attachments = None
+        message_timestamp = None
+        if attachment:
+            attachments = [attachment]
+            # Use current time as message timestamp for CLI injections
+            from datetime import datetime
+            message_timestamp = datetime.now()
+
         try:
             if is_bg:
                 await self.backend.inject_consolidation(contact_name or "Unknown", chat_id)
@@ -1151,12 +1164,16 @@ class IPCServer:
                     sender_name=contact_name or "Admin",
                     sender_tier=tier or "admin",
                     text=final_prompt,
+                    attachments=attachments,
                     source=source,
+                    message_timestamp=message_timestamp,
                 )
             else:
                 await self.backend.inject_message(
                     contact_name or "Unknown", chat_id, final_prompt, tier or "admin",
+                    attachments=attachments,
                     source=source,
+                    message_timestamp=message_timestamp,
                 )
 
             reg_data = self.registry.get(chat_id)
@@ -1589,6 +1606,7 @@ You have 15 minutes. Work efficiently.
         audio_transcription = msg.get("audio_transcription")
         thread_originator_guid = msg.get("thread_originator_guid")
         source = msg.get("source", "imessage")  # Default to iMessage for backwards compat
+        message_timestamp = msg.get("timestamp")  # datetime for Gemini vision context
 
         # Log message preview
         text_preview = (text[:50] + "...") if text else "(attachment only)"
@@ -1689,7 +1707,8 @@ You have 15 minutes. Work efficiently.
                     attachments=attachments,
                     audio_transcription=audio_transcription,
                     thread_originator_guid=thread_originator_guid,
-                    source=source
+                    source=source,
+                    message_timestamp=message_timestamp,
                 )
             elif existing_session:
                 # Unknown sender but we've already engaged with this group
@@ -1703,7 +1722,8 @@ You have 15 minutes. Work efficiently.
                     attachments=attachments,
                     audio_transcription=audio_transcription,
                     thread_originator_guid=thread_originator_guid,
-                    source=source
+                    source=source,
+                    message_timestamp=message_timestamp,
                 )
             elif await asyncio.get_event_loop().run_in_executor(
                 None, self.messages._group_has_blessed_participant, chat_identifier, self.contacts
@@ -1719,7 +1739,8 @@ You have 15 minutes. Work efficiently.
                     attachments=attachments,
                     audio_transcription=audio_transcription,
                     thread_originator_guid=thread_originator_guid,
-                    source=source
+                    source=source,
+                    message_timestamp=message_timestamp,
                 )
             else:
                 # Ignore group messages from non-blessed contacts if no existing session
@@ -1736,7 +1757,8 @@ You have 15 minutes. Work efficiently.
             await self.sessions.inject_message(
                 sender_name or phone, phone, text, sender_tier,
                 attachments, audio_transcription, thread_originator_guid,
-                source=source
+                source=source,
+                message_timestamp=message_timestamp,
             )
         else:
             # Contact exists but has unknown/unrecognized tier
@@ -2041,6 +2063,10 @@ Keep the text concise - this is a nightly check-in, not a full report.
                         None, self.messages.get_new_messages, self.last_rowid
                     )
                     poll_duration_ms = (time.time() - poll_start) * 1000
+                    # Perf: log poll cycle (sample every 10th to avoid log bloat)
+                    perf.timing("poll_cycle_ms", poll_duration_ms, sample_rate=10, component="daemon")
+                    if messages:
+                        perf.incr("messages_read", count=len(messages), component="daemon", source="imessage")
                     if imessage_error_logged:
                         log.info("iMessage chat.db access restored")
                         imessage_error_logged = False
@@ -2087,12 +2113,16 @@ Keep the text concise - this is a nightly check-in, not a full report.
                         self._save_state(reaction["rowid"])
 
                 # Process Signal messages from queue
+                signal_count = 0
                 while not self.signal_queue.empty():
                     try:
                         signal_msg = self.signal_queue.get_nowait()
                         await self.process_message(signal_msg)
+                        signal_count += 1
                     except queue.Empty:
                         break
+                if signal_count > 0:
+                    perf.incr("messages_read", count=signal_count, component="daemon", source="signal")
 
                 # Process test messages from queue
                 while not self.test_queue.empty():

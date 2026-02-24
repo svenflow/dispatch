@@ -38,6 +38,19 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import uvicorn
 
+
+def log_perf(metric: str, value: float, **labels) -> None:
+    """Log a perf metric to the shared JSONL file."""
+    try:
+        perf_dir = Path.home() / "dispatch" / "logs"
+        perf_dir.mkdir(parents=True, exist_ok=True)
+        path = perf_dir / f"perf-{datetime.now():%Y-%m-%d}.jsonl"
+        entry = {"v": 1, "ts": datetime.now().isoformat(), "metric": metric, "value": value, "component": "sven-api", **labels}
+        with open(path, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception:
+        pass  # Never fail on perf logging
+
 # Configure logging
 LOG_DIR = Path.home() / "dispatch" / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -70,6 +83,9 @@ async def log_requests(request: Request, call_next):
     # Log response
     duration_ms = (time.time() - start_time) * 1000
     logger.info(f"← {request.method} {request.url.path} → {response.status_code} ({duration_ms:.1f}ms)")
+
+    # Perf logging
+    log_perf("request_ms", duration_ms, endpoint=request.url.path, method=request.method, status=response.status_code)
 
     return response
 

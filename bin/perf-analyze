@@ -1,0 +1,240 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+"""
+Analyze performance metrics from JSONL logs.
+
+Usage:
+    perf-analyze                          # Summary of all metrics from today
+    perf-analyze poll_cycle_ms            # Details for one metric
+    perf-analyze --days 7                 # Last 7 days
+    perf-analyze --component daemon       # Filter by component
+    perf-analyze --raw                    # Output raw JSON
+
+Examples:
+    perf-analyze                          # Quick overview
+    perf-analyze send_sms_ms --days 3     # Send latency last 3 days
+    perf-analyze --component session      # All session metrics
+"""
+
+import argparse
+import json
+import sys
+from collections import defaultdict
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Any
+
+PERF_DIR = Path.home() / "dispatch" / "logs"
+
+
+def load_metrics(days: int = 1) -> list[dict]:
+    """Load metrics from the last N days of JSONL files."""
+    metrics = []
+    today = datetime.now().date()
+
+    for i in range(days):
+        date = today - timedelta(days=i)
+        path = PERF_DIR / f"perf-{date:%Y-%m-%d}.jsonl"
+        if path.exists():
+            with open(path) as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        try:
+                            metrics.append(json.loads(line))
+                        except json.JSONDecodeError:
+                            continue
+    return metrics
+
+
+def filter_metrics(
+    metrics: list[dict],
+    metric_name: str | None = None,
+    component: str | None = None,
+) -> list[dict]:
+    """Filter metrics by name and/or component."""
+    result = metrics
+    if metric_name:
+        result = [m for m in result if m.get("metric") == metric_name]
+    if component:
+        result = [m for m in result if m.get("component") == component]
+    return result
+
+
+def percentile(values: list[float], p: float) -> float:
+    """Calculate percentile (0-100)."""
+    if not values:
+        return 0.0
+    sorted_values = sorted(values)
+    k = (len(sorted_values) - 1) * (p / 100)
+    f = int(k)
+    c = f + 1 if f + 1 < len(sorted_values) else f
+    return sorted_values[f] + (k - f) * (sorted_values[c] - sorted_values[f])
+
+
+def analyze_metric(metrics: list[dict]) -> dict[str, Any]:
+    """Analyze a list of metrics of the same type."""
+    values = [m["value"] for m in metrics if isinstance(m.get("value"), (int, float))]
+    if not values:
+        return {"count": 0}
+
+    return {
+        "count": len(values),
+        "min": min(values),
+        "max": max(values),
+        "p50": percentile(values, 50),
+        "p95": percentile(values, 95),
+        "p99": percentile(values, 99),
+        "avg": sum(values) / len(values),
+    }
+
+
+def format_ms(value: float) -> str:
+    """Format milliseconds nicely."""
+    if value < 1:
+        return f"{value:.2f}ms"
+    elif value < 1000:
+        return f"{value:.1f}ms"
+    else:
+        return f"{value/1000:.2f}s"
+
+
+def print_summary(metrics: list[dict]) -> None:
+    """Print summary table of all metrics."""
+    by_metric: dict[str, list[dict]] = defaultdict(list)
+    for m in metrics:
+        by_metric[m.get("metric", "unknown")].append(m)
+
+    if not by_metric:
+        print("No metrics found.")
+        return
+
+    # Header
+    print(f"\n{'Metric':<30} {'Count':>8} {'P50':>10} {'P95':>10} {'P99':>10} {'Max':>10}")
+    print("-" * 80)
+
+    # Sort by metric name
+    for name in sorted(by_metric.keys()):
+        stats = analyze_metric(by_metric[name])
+        if stats["count"] == 0:
+            continue
+
+        # Determine if this is a timing metric (ends in _ms or _seconds)
+        is_timing = name.endswith("_ms") or name.endswith("_seconds")
+
+        if is_timing:
+            print(
+                f"{name:<30} {stats['count']:>8} "
+                f"{format_ms(stats['p50']):>10} "
+                f"{format_ms(stats['p95']):>10} "
+                f"{format_ms(stats['p99']):>10} "
+                f"{format_ms(stats['max']):>10}"
+            )
+        else:
+            print(
+                f"{name:<30} {stats['count']:>8} "
+                f"{stats['p50']:>10.1f} "
+                f"{stats['p95']:>10.1f} "
+                f"{stats['p99']:>10.1f} "
+                f"{stats['max']:>10.1f}"
+            )
+
+    print()
+
+
+def print_detail(name: str, metrics: list[dict]) -> None:
+    """Print detailed analysis of a single metric."""
+    if not metrics:
+        print(f"No metrics found for '{name}'")
+        return
+
+    stats = analyze_metric(metrics)
+    if stats["count"] == 0:
+        print(f"No numeric values found for '{name}'")
+        return
+
+    is_timing = name.endswith("_ms") or name.endswith("_seconds")
+
+    print(f"\n=== {name} ===")
+    print(f"Count: {stats['count']}")
+    if is_timing:
+        print(f"Min:   {format_ms(stats['min'])}")
+        print(f"P50:   {format_ms(stats['p50'])}")
+        print(f"P95:   {format_ms(stats['p95'])}")
+        print(f"P99:   {format_ms(stats['p99'])}")
+        print(f"Max:   {format_ms(stats['max'])}")
+        print(f"Avg:   {format_ms(stats['avg'])}")
+    else:
+        print(f"Min:   {stats['min']:.2f}")
+        print(f"P50:   {stats['p50']:.2f}")
+        print(f"P95:   {stats['p95']:.2f}")
+        print(f"P99:   {stats['p99']:.2f}")
+        print(f"Max:   {stats['max']:.2f}")
+        print(f"Avg:   {stats['avg']:.2f}")
+
+    # Show breakdown by component if present
+    by_component: dict[str, list[dict]] = defaultdict(list)
+    for m in metrics:
+        comp = m.get("component", "unknown")
+        by_component[comp].append(m)
+
+    if len(by_component) > 1:
+        print(f"\nBy component:")
+        for comp in sorted(by_component.keys()):
+            comp_stats = analyze_metric(by_component[comp])
+            if is_timing:
+                print(f"  {comp}: count={comp_stats['count']}, p50={format_ms(comp_stats['p50'])}, p95={format_ms(comp_stats['p95'])}")
+            else:
+                print(f"  {comp}: count={comp_stats['count']}, p50={comp_stats['p50']:.1f}, p95={comp_stats['p95']:.1f}")
+
+    # Show other labels
+    all_labels = set()
+    for m in metrics:
+        all_labels.update(k for k in m.keys() if k not in ("v", "ts", "metric", "value", "component"))
+
+    if all_labels:
+        print(f"\nLabels found: {', '.join(sorted(all_labels))}")
+
+    print()
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Analyze performance metrics",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
+    )
+    parser.add_argument("metric", nargs="?", help="Specific metric to analyze")
+    parser.add_argument("--days", "-d", type=int, default=1, help="Number of days to analyze (default: 1)")
+    parser.add_argument("--component", "-c", help="Filter by component")
+    parser.add_argument("--raw", "-r", action="store_true", help="Output raw JSON")
+
+    args = parser.parse_args()
+
+    # Load metrics
+    metrics = load_metrics(args.days)
+    if not metrics:
+        print(f"No metrics found in the last {args.days} day(s)")
+        print(f"Looking in: {PERF_DIR}")
+        sys.exit(1)
+
+    # Filter
+    filtered = filter_metrics(metrics, args.metric, args.component)
+
+    if args.raw:
+        for m in filtered:
+            print(json.dumps(m))
+        return
+
+    if args.metric:
+        print_detail(args.metric, filtered)
+    else:
+        print_summary(filtered)
+        print(f"Total: {len(filtered)} entries from last {args.days} day(s)")
+
+
+if __name__ == "__main__":
+    main()

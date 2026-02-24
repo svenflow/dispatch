@@ -33,6 +33,7 @@ from assistant.common import (
 )
 from assistant.health import get_transcript_entries_since, check_fatal_regex, check_deep_haiku
 from assistant.sdk_session import SDKSession
+from assistant import perf
 
 log = logging.getLogger(__name__)
 
@@ -106,6 +107,8 @@ Briefly describe what you see in this image, keeping the sender's context in min
 
     # Call Gemini CLI
     try:
+        import time
+        gemini_start = time.perf_counter()
         proc = await asyncio.create_subprocess_exec(
             str(GEMINI_CLI),
             "-m", "gemini-3-pro-image-preview",
@@ -115,6 +118,8 @@ Briefly describe what you see in this image, keeping the sender's context in min
             stderr=asyncio.subprocess.PIPE,
         )
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60.0)
+        gemini_ms = (time.perf_counter() - gemini_start) * 1000
+        perf.timing("gemini_vision_ms", gemini_ms, component="daemon")
 
         if proc.returncode == 0 and stdout:
             description = stdout.decode().strip()
@@ -122,6 +127,7 @@ Briefly describe what you see in this image, keeping the sender's context in min
             return description
         else:
             log.warning(f"Gemini vision failed: {stderr.decode()[:200]}")
+            perf.error("gemini_vision_failed", component="daemon")
             return None
     except asyncio.TimeoutError:
         log.warning(f"Gemini vision: timeout for {image_path}")
@@ -439,7 +445,11 @@ class SDKBackend:
             source=source,
             model=model,
         )
+        import time
+        spawn_start = time.perf_counter()
         await session.start(resume_session_id=None)
+        spawn_ms = (time.perf_counter() - spawn_start) * 1000
+        perf.timing("session_spawn_ms", spawn_ms, component="daemon", tier=tier, source=source)
         self.sessions[chat_id] = session
 
         # System prompt injection deferred to _inject_system_prompt_if_needed()
@@ -499,6 +509,8 @@ class SDKBackend:
         """Inject a message into an existing session.
         Creates session on-demand if missing (lazy creation).
         """
+        import time
+        inject_start = time.perf_counter()
         if not chat_id:
             raise ValueError(f"chat_id cannot be empty for contact {contact_name}")
 
@@ -546,6 +558,8 @@ class SDKBackend:
         )
         await session.inject(wrapped)
         self.registry.update_last_message_time(normalized)
+        inject_ms = (time.perf_counter() - inject_start) * 1000
+        perf.timing("inject_ms", inject_ms, component="daemon", source=source, tier=tier)
         log.info(f"Injected message for {chat_id} via {source}")
 
         # Spawn async Gemini vision analysis for image attachments
@@ -1138,6 +1152,10 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
         results = {}
         for chat_id in list(self.sessions.keys()):
             results[chat_id] = await self.check_session_health(chat_id)
+
+        # Perf: track active session count
+        alive_count = sum(1 for s in self.sessions.values() if s.is_alive())
+        perf.gauge("active_sessions", alive_count, component="daemon")
 
         lifecycle_log.info(f"HEALTH_CHECK_ALL | COMPLETE | {sum(results.values())}/{len(results)} healthy")
         return results
