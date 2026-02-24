@@ -12,14 +12,14 @@
 - Say "book F2 + A3" to proceed with specific options
 
 ### Price Indicators (Simplified)
-- **🔻 -12%** = Green down arrow with % below average
-- **🔺 +8%** = Red up arrow with % above average
+- **🟢🔻 -12%** = Green down arrow (good - below average price)
+- **🔴🔺 +8%** = Red up arrow (bad - above average price)
 - No strikethrough text, cleaner display
 
 ### Enhanced Flight Output
 - **Top 5 flights** sorted by total cost (including taxes)
 - Each shows: ✈️ Airline | 💰 Total w/taxes | ⏱️ Duration | 🔄 Connections
-- **Price arrows**: 🔻 below average (green) | 🔺 above average (red) with %
+- **Price arrows**: 🟢🔻 below average (good) | 🔴🔺 above average (bad) with %
 - **Speed emojis**: ⚡ fast (<8hrs) | 🐢 slow (>14hrs)
 - **Direct link** to book that specific flight
 
@@ -28,7 +28,7 @@
 - Each shows:
   - 📍 Neighborhood | ⭐ Rating (reviews)
   - 💰 Total + per-night cost (e.g., "$2,400 ($400/night)")
-  - 🔻 -15% discount indicator when below normal price
+  - 🟢🔻 -15% discount indicator when below normal price
   - ✓ Free cancel or ✗ No free cancel
 - **Amenity emojis**: 🏊 Pool | 🛁 Hot Tub | 🎱 Pool Table | 🎮 Game Room | 🏋️ Gym | 🅿️ Parking | 🌡️ AC | 📶 WiFi | 🍳 Kitchen | 🧺 Washer
 - **Direct listing link**: `airbnb.com/rooms/[ID]`
@@ -42,7 +42,7 @@
 ### Finding Discounted Listings
 - **Prioritize listings showing "X% off"** or crossed-out prices
 - **Value score**: quality_score / normalized_price
-- **Flag luxury at budget prices**: Show 🔻 -20% when normally expensive listing is discounted
+- **Flag luxury at budget prices**: Show 🟢🔻 -20% when normally expensive listing is discounted
 
 ## Output Format
 
@@ -55,12 +55,12 @@ F1. Air France Nonstop ⚡
     7:05pm → 8:10am+1
     🔗 google.com/travel/flights/booking?...
 
-F2. TAP Portugal 🔻 -18%
+F2. TAP Portugal 🟢🔻 -18%
     💰 $2,100 total | ⏱️ 11h 30m | 🔄 1 stop (LIS)
     10:40am → 7:05am+1
     🔗 google.com/travel/flights/booking?...
 
-F3. United via Newark 🔺 +12%
+F3. United via Newark 🔴🔺 +12%
     💰 $3,600 total | ⏱️ 10h 20m | 🔄 1 stop (EWR)
     6:00am → 9:20pm
     🔗 google.com/travel/flights/booking?...
@@ -70,7 +70,7 @@ F3. United via Newark 🔺 +12%
 ```
 🏠 AIRBNBS (Apr 17-23, 6 nights, 4 guests)
 
-A1. Charming Marais Loft ⭐4.92 (127) 🔻 -25%
+A1. Charming Marais Loft ⭐4.92 (127) 🟢🔻 -25%
     📍 Le Marais | $2,400 ($400/night)
     🏊 🌡️ 📶 🍳 | ✓ Free cancel
     🔗 airbnb.com/rooms/12345678
@@ -80,7 +80,7 @@ A2. Saint-Germain Family Flat ⭐4.88 (89)
     🛁 🅿️ 🌡️ 🍳 🧺 | ✗ No free cancel
     🔗 airbnb.com/rooms/23456789
 
-A3. Opera Grands Boulevards ⭐4.98 (43) 🔻 -20%
+A3. Opera Grands Boulevards ⭐4.98 (43) 🟢🔻 -20%
     📍 Opera (2nd) | $3,282 ($547/night)
     🌡️ 📶 🍳 | ✓ Free cancel
     🔗 airbnb.com/rooms/34567890
@@ -90,7 +90,7 @@ A3. Opera Grands Boulevards ⭐4.98 (43) 🔻 -20%
 ```
 🚗 RENTAL CARS (Apr 17-23)
 
-R1. Enterprise - Peugeot 3008 🔻 -10%
+R1. Enterprise - Peugeot 3008 🟢🔻 -10%
     💰 $380/week | 📍 CDG Airport | ⭐ 4.2
     🔗 enterprise.com/...
 
@@ -132,8 +132,8 @@ OPTION 3 - Direct Flight (F1 + A1)
 ## Emoji Reference
 
 ### Price Indicators
-- 🔻 **Below Average** - Green down arrow with % (e.g., 🔻 -15%)
-- 🔺 **Above Average** - Red up arrow with % (e.g., 🔺 +8%)
+- 🟢🔻 **Below Average** - Green = good deal (e.g., 🟢🔻 -15%)
+- 🔴🔺 **Above Average** - Red = bad/expensive (e.g., 🔴🔺 +8%)
 - No indicator = average/normal price
 
 ### Speed (Flights)
