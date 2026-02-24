@@ -418,7 +418,7 @@ sleep 3
 
 # 2. Click email field and enter email (from secrets.env)
 chrome iframe-click <tab_id> 'input[type="text"]'
-chrome insert-text <tab_id> 'nicklaudethorat@gmail.com'
+chrome insert-text <tab_id> '${APPLE_ID_EMAIL}'  # from secrets.env
 
 # 3. Click Continue
 chrome iframe-click <tab_id> 'button#sign-in'
@@ -567,10 +567,8 @@ Even if testers are already in Users and Access from other apps, you must:
 This is a common gotcha: testers in Users and Access can test ANY app they're added to, but they must be explicitly added to each app's testing group.
 
 **Pre-configured internal testers (already in Users and Access):**
-- nsthorat@gmail.com (Nikhil Thorat) - Admin
-- sammcgrail@gmail.com (Sam McGrail) - Admin
-- nicklaudethorat@gmail.com (Nicklaude Thorat) - Account Holder, Admin
-- rneck79@gmail.com (Ryan/Pang Lunis) - Developer
+- See App Store Connect for current tester list
+- Includes account admins and developers
 
 For new apps, create a testing group and add these users to it - they're already set up in Users and Access.
 
@@ -789,8 +787,7 @@ asc groups add-tester "Internal Testers" "email@example.com" --app "App Name"
 ```
 
 **Pre-configured internal testers (already in Users and Access):**
-- sammcgrail@gmail.com (Sam McGrail) - Admin
-- nsthorat@gmail.com (Nikhil Thorat) - Admin
+Use `asc groups list-testers "Internal Testers"` to see current testers.
 
 ### Creating Apps (Chrome + API Hybrid)
 

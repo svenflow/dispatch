@@ -44,112 +44,6 @@ log = logging.getLogger(__name__)
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif"}
 
 GEMINI_CLI = Path.home() / ".claude" / "skills" / "gemini" / "scripts" / "gemini"
-MESSAGES_DB = Path.home() / "Library" / "Messages" / "chat.db"
-
-
-def get_message_context_for_image(chat_identifier: str, image_rowid: int | None = None,
-                                   before: int = 10, after: int = 1) -> str:
-    """Get recent messages around an image from chat.db for context.
-
-    Args:
-        chat_identifier: The chat ID (phone number or group hex ID)
-        image_rowid: Optional rowid of the image message to anchor around
-        before: Number of messages before the image
-        after: Number of messages after the image
-
-    Returns:
-        Formatted string of recent messages for Gemini context
-    """
-    import sqlite3
-
-    if not MESSAGES_DB.exists():
-        return ""
-
-    try:
-        conn = sqlite3.connect(str(MESSAGES_DB))
-        cursor = conn.cursor()
-
-        # Get messages from this chat, ordered by date
-        # If we have a rowid, get messages around it; otherwise get recent messages
-        if image_rowid:
-            # Get messages before the image
-            cursor.execute("""
-                SELECT
-                    m.ROWID,
-                    m.text,
-                    m.is_from_me,
-                    h.id as sender
-                FROM message m
-                LEFT JOIN handle h ON m.handle_id = h.ROWID
-                LEFT JOIN chat_message_join cmj ON m.ROWID = cmj.message_id
-                LEFT JOIN chat c ON cmj.chat_id = c.ROWID
-                WHERE c.chat_identifier = ?
-                  AND m.ROWID < ?
-                  AND m.text IS NOT NULL
-                  AND m.text != ''
-                ORDER BY m.ROWID DESC
-                LIMIT ?
-            """, (chat_identifier, image_rowid, before))
-            before_msgs = list(reversed(cursor.fetchall()))
-
-            # Get messages after the image
-            cursor.execute("""
-                SELECT
-                    m.ROWID,
-                    m.text,
-                    m.is_from_me,
-                    h.id as sender
-                FROM message m
-                LEFT JOIN handle h ON m.handle_id = h.ROWID
-                LEFT JOIN chat_message_join cmj ON m.ROWID = cmj.message_id
-                LEFT JOIN chat c ON cmj.chat_id = c.ROWID
-                WHERE c.chat_identifier = ?
-                  AND m.ROWID > ?
-                  AND m.text IS NOT NULL
-                  AND m.text != ''
-                ORDER BY m.ROWID ASC
-                LIMIT ?
-            """, (chat_identifier, image_rowid, after))
-            after_msgs = cursor.fetchall()
-
-            messages = before_msgs + after_msgs
-        else:
-            # No rowid - just get recent messages
-            cursor.execute("""
-                SELECT
-                    m.ROWID,
-                    m.text,
-                    m.is_from_me,
-                    h.id as sender
-                FROM message m
-                LEFT JOIN handle h ON m.handle_id = h.ROWID
-                LEFT JOIN chat_message_join cmj ON m.ROWID = cmj.message_id
-                LEFT JOIN chat c ON cmj.chat_id = c.ROWID
-                WHERE c.chat_identifier = ?
-                  AND m.text IS NOT NULL
-                  AND m.text != ''
-                ORDER BY m.ROWID DESC
-                LIMIT ?
-            """, (chat_identifier, before + after))
-            messages = list(reversed(cursor.fetchall()))
-
-        conn.close()
-
-        if not messages:
-            return ""
-
-        # Format messages
-        lines = []
-        for rowid, text, is_from_me, sender in messages:
-            if text and text.strip():
-                who = "Me" if is_from_me else (sender or "Them")
-                lines.append(f"{who}: {text.strip()}")
-
-        return "\n".join(lines)
-
-    except Exception as e:
-        log.warning(f"Failed to get message context: {e}")
-        return ""
 
 
 async def analyze_image_with_gemini(image_path: str, message_context: str | None = None) -> Optional[str]:
@@ -600,6 +494,7 @@ class SDKBackend:
         audio_transcription: str | None = None,
         thread_originator_guid: str | None = None,
         source: str = "imessage",
+        message_timestamp: datetime | None = None,
     ) -> bool:
         """Inject a message into an existing session.
         Creates session on-demand if missing (lazy creation).
@@ -623,8 +518,19 @@ class SDKBackend:
         # Only hold the lock for session creation check + creation.
         # Once we have the session, inject outside the lock (session has its own queue).
         async with self._lock:
-            if normalized not in self.sessions or not self.sessions[normalized].is_alive():
+            existing = self.sessions.get(normalized)
+            if not existing or not existing.is_alive():
                 await self._create_session_unlocked(contact_name, normalized, tier, source)
+            elif existing.tier != tier:
+                # Tier mismatch! Session was created with different tier.
+                # Must restart to apply correct permissions (e.g., favorite -> admin).
+                log.info(f"Tier mismatch for {chat_id}: session has {existing.tier}, inject wants {tier}. Restarting...")
+                # Release lock, restart, and re-acquire
+                self._lock.release()
+                try:
+                    await self.restart_session(normalized, tier_override=tier)
+                finally:
+                    await self._lock.acquire()
             session = self.sessions.get(normalized)
 
         if not session:
@@ -650,8 +556,9 @@ class SDKBackend:
                     asyncio.create_task(
                         self._inject_gemini_vision(
                             session, normalized, image_path,
-                            chat_identifier=chat_id,  # Original chat_id for chat.db lookup
-                            message_rowid=att.get("rowid"),  # For message context anchoring
+                            source=source,
+                            chat_id=chat_id,
+                            message_timestamp=message_timestamp,
                         ),
                         name=f"gemini-vision-{normalized}",
                     )
@@ -695,10 +602,11 @@ class SDKBackend:
     async def _inject_gemini_vision(
         self,
         session: SDKSession,
-        chat_id: str,
+        normalized_chat_id: str,
         image_path: str,
-        chat_identifier: str | None = None,
-        message_rowid: int | None = None,
+        source: str = "imessage",
+        chat_id: str | None = None,
+        message_timestamp: datetime | None = None,
     ) -> None:
         """Background task: analyze image with Gemini and inject result into session.
 
@@ -706,25 +614,35 @@ class SDKBackend:
 
         Args:
             session: The SDK session to inject into
-            chat_id: Internal chat ID (normalized)
+            normalized_chat_id: Internal chat ID (normalized, for logging)
             image_path: Path to the image file
-            chat_identifier: Chat identifier for chat.db lookup (phone or group hex)
-            message_rowid: Optional rowid of the image message for context anchoring
+            source: Backend source ("imessage", "signal", "sven-app")
+            chat_id: Original chat identifier for context lookup
+            message_timestamp: Timestamp of the image message for context anchoring
         """
         try:
-            # Get conversation context from chat.db (10 before, 1 after)
+            # Get conversation context using the appropriate reader
             conversation_context = ""
-            if chat_identifier:
-                # Run blocking DB query in executor to avoid blocking event loop
-                loop = asyncio.get_event_loop()
-                conversation_context = await loop.run_in_executor(
-                    None,
-                    get_message_context_for_image,
-                    chat_identifier,
-                    message_rowid,
-                    10,  # before
-                    1,   # after
-                )
+
+            from assistant.backends import get_backend
+            backend_config = get_backend(source)
+
+            if backend_config.supports_image_context and chat_id and message_timestamp:
+                from assistant.readers import get_reader, format_context_for_gemini
+                reader = get_reader(source)
+
+                if reader:
+                    # Run blocking DB query in executor to avoid blocking event loop
+                    loop = asyncio.get_event_loop()
+                    messages = await loop.run_in_executor(
+                        None,
+                        reader.get_context_around,
+                        chat_id,
+                        message_timestamp,
+                        10,  # before
+                        1,   # after
+                    )
+                    conversation_context = format_context_for_gemini(messages)
 
             description = await analyze_image_with_gemini(image_path, conversation_context)
             if description:
@@ -737,11 +655,11 @@ Gemini analyzed the attached image:
 ---END VISION---
 """
                     await session.inject(vision_msg)
-                    log.info(f"Injected Gemini vision for {chat_id}")
+                    log.info(f"Injected Gemini vision for {normalized_chat_id}")
                 else:
-                    log.debug(f"Session {chat_id} died before vision inject")
+                    log.debug(f"Session {normalized_chat_id} died before vision inject")
         except Exception as e:
-            log.warning(f"Gemini vision task failed for {chat_id}: {e}")
+            log.warning(f"Gemini vision task failed for {normalized_chat_id}: {e}")
 
     # ──────────────────────────────────────────────────────────────
     # Group sessions
@@ -885,6 +803,7 @@ Gemini analyzed the attached image:
         audio_transcription: str | None = None,
         thread_originator_guid: str | None = None,
         source: str = "imessage",
+        message_timestamp: datetime | None = None,
     ) -> bool:
         """Inject a message into a group session."""
         if not chat_id:
@@ -920,8 +839,9 @@ Gemini analyzed the attached image:
                     asyncio.create_task(
                         self._inject_gemini_vision(
                             session, chat_id, image_path,
-                            chat_identifier=chat_id,  # Group chat_id is the chat_identifier
-                            message_rowid=att.get("rowid"),
+                            source=source,
+                            chat_id=chat_id,
+                            message_timestamp=message_timestamp,
                         ),
                         name=f"gemini-vision-{chat_id}",
                     )
@@ -1159,8 +1079,13 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
             except Exception as e:
                 log.warning(f"Failed to delete session index {index_file}: {e}")
 
-    async def restart_session(self, chat_id: str) -> Optional[SDKSession]:
-        """Kill and recreate a session."""
+    async def restart_session(self, chat_id: str, tier_override: str | None = None) -> Optional[SDKSession]:
+        """Kill and recreate a session.
+
+        Args:
+            chat_id: The chat ID to restart
+            tier_override: Optional tier to use instead of registry value
+        """
         # Save session info before killing
         reg = self.registry.get(chat_id)
 
@@ -1174,8 +1099,8 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
             lifecycle_log.info(f"RESTART | {reg.get('session_name', chat_id)} | START")
             # Group chats use display_name; individuals use contact_name
             contact_name = reg.get("contact_name") or reg.get("display_name", "Unknown")
-            # Group chats don't have tier; default to admin for restart
-            tier = reg.get("tier", "admin")
+            # Use tier_override if provided, else fall back to registry or default
+            tier = tier_override or reg.get("tier", "admin")
             session = await self.create_session(
                 contact_name,
                 chat_id,
@@ -1880,7 +1805,7 @@ All other system documentation applies normally (see ~/.claude/CLAUDE.md via sym
         that was extracted by the nightly consolidation job.
         """
         try:
-            # session_name format: imessage/_15555550001 or imessage/ab3876ca...
+            # session_name format: imessage/_15555550100 or imessage/ab3876ca...
             parts = session_name.split("/", 1)
             if len(parts) == 2:
                 backend, chat_id = parts

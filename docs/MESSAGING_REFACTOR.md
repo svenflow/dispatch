@@ -147,3 +147,66 @@ Directory layout (inbox already exists for TestMessageWatcher):
 - No `if source ==` branches remain
 - Adding a 4th backend = adding one entry to `BACKENDS`
 - Test flow: inbox JSON → daemon → session → test-send → outbox → test-read
+
+---
+
+## MessageReader Protocol (Implemented 2026-02-23)
+
+For Gemini vision analysis, each backend that supports images needs a `MessageReader` to retrieve conversation context around the image timestamp.
+
+### Design
+
+```python
+# assistant/readers.py
+
+@dataclass
+class ContextMessage:
+    text: str | None
+    sender: str
+    is_from_me: bool
+    timestamp: datetime
+    attachments: list[str] = field(default_factory=list)
+
+class MessageReader(Protocol):
+    def get_context_around(
+        self,
+        chat_id: str,
+        anchor_timestamp: datetime,
+        before: int = 10,
+        after: int = 1,
+    ) -> list[ContextMessage]: ...
+```
+
+### Implementations
+
+| Backend | Reader | Timestamp Source | DB Location |
+|---------|--------|------------------|-------------|
+| iMessage | `IMessageReader` | macOS nanoseconds (since 2001-01-01) | `~/Library/Messages/chat.db` |
+| Signal | `SignalReader` | Unix milliseconds | `~/Library/Application Support/signal-cli/messages.db` |
+| sven-app | `DispatchAppReader` | SQLite DATETIME string | `~/dispatch/state/sven-messages.db` |
+| test | None | N/A | (no image support) |
+
+### Usage
+
+```python
+from assistant.readers import get_reader, format_context_for_gemini
+
+reader = get_reader(source)  # Returns None if unsupported
+if reader:
+    messages = reader.get_context_around(chat_id, timestamp)
+    context = format_context_for_gemini(messages)
+```
+
+### Configuration
+
+Backends declare image support via `supports_image_context: bool` in `BackendConfig`:
+
+```python
+# backends.py
+BACKENDS = {
+    "imessage": BackendConfig(..., supports_image_context=True),
+    "signal": BackendConfig(..., supports_image_context=True),
+    "sven-app": BackendConfig(..., supports_image_context=True),
+    "test": BackendConfig(..., supports_image_context=False),
+}
+```

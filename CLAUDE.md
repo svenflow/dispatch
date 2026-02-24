@@ -82,6 +82,16 @@ SDK sessions do NOT auto-send text output as SMS. Claude calls `send-sms` explic
 5. `SDKSession._run_loop()` pulls from queue → `client.query()` → processes response
 6. Claude calls `send-sms` via Bash when it wants to reply
 
+### Image handling (Gemini Vision)
+
+When a message includes an image attachment:
+1. Image saved locally (iMessage: `~/Library/Messages/Attachments/`, Signal: `~/.local/share/signal-cli/attachments/`)
+2. `MessageReader` retrieves conversation context around the image timestamp
+3. Context + image sent to Gemini for description
+4. Description injected into Claude session as additional context
+
+Supported backends: iMessage, Signal, sven-app (via `supports_image_context` flag in `BackendConfig`)
+
 ### Session resume
 
 Sessions save their `session_id` to `session_registry.json` on shutdown. On restart, `ClaudeSDKClient` resumes from that ID so conversation context is preserved.

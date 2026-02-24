@@ -22,6 +22,10 @@ class BackendConfig(BaseModel, frozen=True):
     send_group_cmd: str    # same or different for groups
     history_cmd: str       # CLI template or "" if unavailable
 
+    # Whether this backend supports image context for Gemini vision analysis.
+    # If True, a MessageReader implementation must exist for this backend.
+    supports_image_context: bool = False
+
 
 BACKENDS: dict[str, BackendConfig] = {
     "imessage": BackendConfig(
@@ -32,6 +36,7 @@ BACKENDS: dict[str, BackendConfig] = {
         send_cmd='~/.claude/skills/sms-assistant/scripts/send-sms "{chat_id}"',
         send_group_cmd='~/.claude/skills/sms-assistant/scripts/send-sms "{chat_id}"',
         history_cmd='~/.claude/skills/sms-assistant/scripts/read-sms --chat "{chat_id}" --limit {limit}',
+        supports_image_context=True,
     ),
     "signal": BackendConfig(
         name="signal",
@@ -41,6 +46,7 @@ BACKENDS: dict[str, BackendConfig] = {
         send_cmd='~/.claude/skills/signal/scripts/send-signal "{chat_id}"',
         send_group_cmd='~/.claude/skills/signal/scripts/send-signal-group "{chat_id}"',
         history_cmd='~/.claude/skills/signal/scripts/read-signal --chat "{chat_id}" --limit {limit}',
+        supports_image_context=True,
     ),
     "test": BackendConfig(
         name="test",
@@ -50,6 +56,7 @@ BACKENDS: dict[str, BackendConfig] = {
         send_cmd='~/dispatch/tools/test-send "{chat_id}"',
         send_group_cmd='~/dispatch/tools/test-send "{chat_id}"',
         history_cmd='~/dispatch/tools/test-read --chat "{chat_id}" --limit {limit}',
+        supports_image_context=False,
     ),
     "sven-app": BackendConfig(
         name="sven-app",
@@ -59,6 +66,7 @@ BACKENDS: dict[str, BackendConfig] = {
         send_cmd='~/.claude/skills/sven-app/scripts/reply-sven "{chat_id}"',
         send_group_cmd='~/.claude/skills/sven-app/scripts/reply-sven "{chat_id}"',
         history_cmd="",
+        supports_image_context=True,
     ),
 }
 

@@ -5,6 +5,7 @@
 #     "fastapi",
 #     "uvicorn",
 #     "pydantic",
+#     "python-multipart",
 # ]
 # ///
 """
@@ -32,7 +33,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, File, UploadFile, Form
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import uvicorn
@@ -78,6 +79,7 @@ ALLOWED_TOKENS_FILE = Path(__file__).parent / "allowed_tokens.json"
 APNS_TOKENS_FILE = Path.home() / "dispatch" / "state" / "sven-apns-tokens.json"
 DB_PATH = Path.home() / "dispatch" / "state" / "sven-messages.db"
 AUDIO_DIR = Path.home() / "dispatch" / "state" / "sven-audio"
+IMAGE_DIR = Path.home() / "dispatch" / "state" / "sven-images"
 RATE_LIMIT_WINDOW = 60  # seconds
 RATE_LIMIT_MAX = 30  # requests per window
 
@@ -130,10 +132,16 @@ def init_db():
             id TEXT PRIMARY KEY,
             role TEXT NOT NULL,
             content TEXT NOT NULL,
+            image_path TEXT,
             audio_path TEXT,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    # Add image_path column if it doesn't exist (migration)
+    try:
+        conn.execute("ALTER TABLE messages ADD COLUMN image_path TEXT")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
     conn.commit()
     conn.close()
 
@@ -169,49 +177,67 @@ def is_rate_limited(token: str) -> bool:
     return False
 
 
-def store_user_message(message_id: str, content: str):
+def store_user_message(message_id: str, content: str, image_path: str | None = None):
     """Store user message in SQLite database."""
     init_db()
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
-        "INSERT INTO messages (id, role, content) VALUES (?, ?, ?)",
-        (message_id, "user", content)
+        "INSERT INTO messages (id, role, content, image_path) VALUES (?, ?, ?, ?)",
+        (message_id, "user", content, image_path)
     )
     conn.commit()
     conn.close()
 
 
-def inject_prompt_to_sven_session(transcript: str) -> bool:
-    """Inject the transcript into the dedicated sven-app session."""
+async def inject_prompt_to_sven_session(transcript: str, image_path: str | None = None) -> bool:
+    """Inject the transcript into the dedicated sven-app session.
+
+    Uses async subprocess to avoid blocking the FastAPI event loop.
+    """
+    import asyncio
+
     try:
         logger.info(f"inject_prompt: calling inject-prompt CLI...")
         # Use inject-prompt to send to the sven-app session
         # The session will respond via reply-sven CLI which stores in message bus
-        result = subprocess.run(
-            [
-                "/Users/sven/dispatch/bin/claude-assistant", "inject-prompt",
-                "sven-app:voice",  # Dedicated sven-app session
-                "--sven-app",  # Format for Sven iOS app
-                "--admin",  # Admin tier access (Nikhil is admin)
-                transcript
-            ],
-            capture_output=True,
-            text=True,
-            timeout=30
+        cmd = [
+            "/Users/sven/dispatch/bin/claude-assistant", "inject-prompt",
+            "sven-app:voice",  # Dedicated sven-app session
+            "--sms",  # Wrap with SMS format (includes tier in prompt)
+            "--sven-app",  # Format for Sven iOS app (adds 🎤 prefix)
+            "--admin",  # Admin tier access (Nikhil is admin)
+        ]
+
+        # Add image attachment if present
+        if image_path:
+            cmd.extend(["--attachment", image_path])
+
+        cmd.append(transcript)
+
+        # Use async subprocess to avoid blocking the event loop
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
 
-        if result.returncode != 0:
-            logger.error(f"inject_prompt: failed with code {result.returncode}")
-            logger.error(f"inject_prompt: stderr={result.stderr}")
-            logger.error(f"inject_prompt: stdout={result.stdout}")
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            logger.error("inject_prompt: timed out after 30s")
+            return False
+
+        if proc.returncode != 0:
+            logger.error(f"inject_prompt: failed with code {proc.returncode}")
+            logger.error(f"inject_prompt: stderr={stderr.decode()}")
+            logger.error(f"inject_prompt: stdout={stdout.decode()}")
             return False
 
         logger.info(f"inject_prompt: success - {transcript[:50]}...")
         return True
 
-    except subprocess.TimeoutExpired:
-        logger.error("inject_prompt: timed out after 30s")
-        return False
     except Exception as e:
         logger.error(f"inject_prompt: exception: {type(e).__name__}: {e}")
         return False
@@ -310,7 +336,7 @@ async def receive_prompt(request: PromptRequest):
 
     # Inject into sven-app session
     logger.info(f"POST /prompt: injecting into sven-app session...")
-    success = inject_prompt_to_sven_session(transcript)
+    success = await inject_prompt_to_sven_session(transcript)
 
     if not success:
         logger.error(f"POST /prompt: failed to inject prompt for request_id={request_id[:8]}")
@@ -320,6 +346,94 @@ async def receive_prompt(request: PromptRequest):
     return PromptResponse(
         status="ok",
         message="Prompt received. Poll /messages for response.",
+        request_id=request_id
+    )
+
+
+@app.post("/prompt-with-image", response_model=PromptResponse)
+async def receive_prompt_with_image(
+    transcript: str = Form(...),
+    token: str = Form(...),
+    image: UploadFile | None = File(None),
+):
+    """
+    Receive voice transcript with optional image from Sven iOS app.
+
+    Uses multipart/form-data to support file uploads.
+    Stores user message and injects into sven-app session with image attachment.
+    Response will appear via GET /messages polling.
+    """
+    token_short = token[:8] if token else "none"
+    has_image = image is not None and image.filename
+    logger.info(f"POST /prompt-with-image: token={token_short}... transcript={transcript[:100] if transcript else 'empty'}... has_image={has_image}")
+
+    # Validate transcript
+    if not transcript or not transcript.strip():
+        logger.warning(f"POST /prompt-with-image: empty transcript from token={token_short}")
+        raise HTTPException(status_code=400, detail="Empty transcript")
+
+    transcript = transcript.strip()
+
+    # Token validation
+    allowed_tokens = load_allowed_tokens()
+    logger.debug(f"Allowed tokens: {len(allowed_tokens)} registered")
+
+    if not allowed_tokens:
+        logger.info(f"First token registration: {token_short}...")
+        allowed_tokens.add(token)
+        save_allowed_tokens(allowed_tokens)
+    elif token not in allowed_tokens:
+        logger.warning(f"POST /prompt-with-image: unauthorized token={token_short}")
+        raise HTTPException(status_code=401, detail="Unknown device token")
+
+    # Rate limiting
+    if is_rate_limited(token):
+        logger.warning(f"POST /prompt-with-image: rate limited token={token_short}")
+        raise HTTPException(status_code=429, detail="Too many requests")
+
+    # Generate request ID
+    request_id = str(uuid.uuid4())
+    logger.info(f"POST /prompt-with-image: created request_id={request_id[:8]}...")
+
+    # Handle image upload
+    image_path = None
+    if image and image.filename:
+        try:
+            IMAGE_DIR.mkdir(parents=True, exist_ok=True)
+            # Preserve file extension
+            ext = Path(image.filename).suffix.lower() or ".jpg"
+            image_path = str(IMAGE_DIR / f"{request_id}{ext}")
+
+            # Read and save image
+            image_data = await image.read()
+            with open(image_path, "wb") as f:
+                f.write(image_data)
+
+            logger.info(f"POST /prompt-with-image: saved image to {image_path} ({len(image_data)} bytes)")
+        except Exception as e:
+            logger.error(f"POST /prompt-with-image: failed to save image: {e}")
+            # Continue without image - don't fail the whole request
+
+    # Store user message in message bus
+    try:
+        store_user_message(request_id, transcript, image_path=image_path)
+        logger.info(f"POST /prompt-with-image: stored user message {request_id[:8]}...")
+    except Exception as e:
+        logger.error(f"POST /prompt-with-image: failed to store message: {e}")
+        raise HTTPException(status_code=500, detail="Failed to store message")
+
+    # Inject into sven-app session
+    logger.info(f"POST /prompt-with-image: injecting into sven-app session...")
+    success = await inject_prompt_to_sven_session(transcript, image_path=image_path)
+
+    if not success:
+        logger.error(f"POST /prompt-with-image: failed to inject prompt for request_id={request_id[:8]}")
+        raise HTTPException(status_code=500, detail="Failed to inject prompt")
+
+    logger.info(f"POST /prompt-with-image: success! request_id={request_id[:8]}...")
+    return PromptResponse(
+        status="ok",
+        message="Prompt received with image. Poll /messages for response.",
         request_id=request_id
     )
 

@@ -12,7 +12,7 @@ All my credentials are stored in macOS Keychain using the `security` CLI. This i
 ### Account Credentials
 | Service | Account | Purpose |
 |---------|---------|---------|
-| `google-account` | nicklaudethorat@gmail.com | My Google/Gmail account |
+| `google-account` | (stored in keychain) | My Google/Gmail account |
 | `apple-id-password` | sven | My iCloud/Apple ID |
 
 ### API Keys & Secrets

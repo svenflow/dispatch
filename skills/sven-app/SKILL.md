@@ -53,6 +53,24 @@ Called by Claude to send responses. Stores message in SQLite and generates TTS a
 
 ## API Endpoints (sven-api)
 
-- `POST /prompt` - Receive transcript, inject into session
+- `POST /prompt` - Receive transcript, inject into session (JSON body)
+- `POST /prompt-with-image` - Receive transcript + image via multipart/form-data
 - `GET /messages?since=<timestamp>` - Poll for new messages
 - `GET /audio/<id>` - Download TTS audio file
+- `DELETE /messages` - Clear all messages (reset)
+- `POST /restart-session` - Restart the Claude session
+
+## Image Support
+
+The iOS app can send images along with voice transcripts:
+
+1. **Upload**: `POST /prompt-with-image` with multipart form-data
+   - `transcript` (string) - Voice transcript
+   - `token` (string) - Device auth token
+   - `image` (file, optional) - Photo attachment
+
+2. **Storage**: Images saved to `~/dispatch/state/sven-images/`
+
+3. **Vision**: Gemini analyzes images with conversation context via `DispatchAppReader`
+
+4. **Schema**: Messages table includes `image_path TEXT` column
