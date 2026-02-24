@@ -28,7 +28,22 @@ import re
 import shutil
 import time
 import argparse
+import json
+from datetime import datetime
 from pathlib import Path
+
+
+def log_perf(metric: str, value: float, **labels) -> None:
+    """Log a perf metric to the shared JSONL file."""
+    try:
+        perf_dir = Path.home() / "dispatch" / "logs"
+        perf_dir.mkdir(parents=True, exist_ok=True)
+        path = perf_dir / f"perf-{datetime.now():%Y-%m-%d}.jsonl"
+        entry = {"v": 1, "ts": datetime.now().isoformat(), "metric": metric, "value": value, "component": "session", **labels}
+        with open(path, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception:
+        pass  # Never fail on perf logging
 
 
 def is_group_chat_id(identifier: str) -> bool:
@@ -325,6 +340,7 @@ def send_file_group(chat_id: str, file_path: str) -> bool:
 
 
 def main():
+    start_time = time.perf_counter()
     parser = argparse.ArgumentParser(
         description="Send iMessage/SMS",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -413,6 +429,10 @@ Examples:
             success = send_file_group(args.chat_id, args.file)
         else:
             success = send_file_individual(args.chat_id, args.file)
+
+    # Log perf metric
+    elapsed_ms = (time.perf_counter() - start_time) * 1000
+    log_perf("send_sms_ms", elapsed_ms, success=success, is_group=is_group, has_image=bool(args.image))
 
     sys.exit(0 if success else 1)
 
