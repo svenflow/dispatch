@@ -1,0 +1,37 @@
+{
+  "name": "travel-search-puppeteer",
+  "version": "1.0.0",
+  "description": "Fast Puppeteer-based travel search scraper for Google Flights and Airbnb",
+  "main": "scrape.js",
+  "bin": {
+    "travel-scrape": "./scrape.js"
+  },
+  "scripts": {
+    "search": "node scrape.js",
+    "test": "node scrape.js --dest \"Paris\" --checkin \"2026-04-17\" --checkout \"2026-04-23\" --guests 4 --origin \"BOS\"",
+    "test:message": "node scrape.js --dest \"Paris\" --checkin \"2026-04-17\" --checkout \"2026-04-23\" --guests 4 --format message"
+  },
+  "keywords": [
+    "puppeteer",
+    "scraper",
+    "travel",
+    "flights",
+    "airbnb",
+    "google-flights"
+  ],
+  "author": "Claude",
+  "license": "MIT",
+  "dependencies": {
+    "better-sqlite3": "^12.6.2",
+    "puppeteer": "^22.0.0",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "local"
+  }
+}
