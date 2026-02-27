@@ -887,6 +887,8 @@ class ReminderPoller:
 
         # Process one-time due reminders
         due_reminders = self.check_due_reminders()
+        if due_reminders:
+            log.info(f"REMINDER_POLL | found {len(due_reminders)} due reminders")
         for r in due_reminders:
             # Skip cron reminders here (handled separately)
             if r.get("cron"):
@@ -914,17 +916,22 @@ class ReminderPoller:
             log.debug(f"Skipping reminder without contact: {r['title']}")
             return
 
-        # Look up contact's chat_id (phone number)
-        contact_info = self.contacts.lookup_phone_by_name(contact)
-        if not contact_info:
-            log.warning(f"Could not find chat_id for contact {contact}, skipping reminder")
-            return
-        chat_id = contact_info.get("phone")
-        if not chat_id:
-            log.warning(f"No phone for contact {contact}, skipping reminder")
-            return
-
-        tier = contact_info.get("tier", "admin")
+        # Check if contact is already a chat_id (hex string for group chats or phone number)
+        if re.match(r'^[0-9a-f]{32}$', contact) or contact.startswith('+'):
+            # Already a chat_id (group chat hex or phone number), use directly
+            chat_id = contact
+            tier = "admin"  # Default to admin for direct chat_id reminders
+        else:
+            # Look up contact's chat_id (phone number) by name
+            contact_info = self.contacts.lookup_phone_by_name(contact)
+            if not contact_info:
+                log.warning(f"Could not find chat_id for contact {contact}, skipping reminder")
+                return
+            chat_id = contact_info.get("phone")
+            if not chat_id:
+                log.warning(f"No phone for contact {contact}, skipping reminder")
+                return
+            tier = contact_info.get("tier", "admin")
 
         # Build reminder injection message
         title = r.get("title", "Reminder")
