@@ -903,20 +903,20 @@ Gemini analyzed the attached image:
             await session.start()
             self.sessions[bg_id] = session
 
-            # Inject BG-specific prompt
-            bg_prompt = f"""BACKGROUND SESSION - Memory consolidation for {contact_name}.
+            # Inject BG-specific prompt - general purpose task runner
+            bg_prompt = f"""BACKGROUND SESSION - Task runner for {contact_name}.
 
-This session handles nightly memory processing. Wait for consolidation trigger.
+This is a headless background session for executing scheduled tasks (reminders, cron jobs, etc).
+You receive task injections and execute them, then wait for the next task.
 
-When triggered, run:
-uv run ~/.claude/skills/memory/scripts/memory.py consolidate "{fg_session_name}"
+When you receive a task:
+1. Execute it immediately
+2. If it involves sending a message, use the appropriate send command
+3. Report completion if requested
+4. Wait for next task
 
-Then review the output and save important memories using:
-uv run ~/.claude/skills/memory/scripts/memory.py save "{fg_session_name}" "memory text" --type TYPE
-
-Finally sync: uv run ~/.claude/skills/memory/scripts/memory.py sync "{fg_session_name}"
-
-Waiting for nightly trigger...
+Session: {fg_session_name}
+Ready for tasks...
 """
             await session.inject(bg_prompt)
 
