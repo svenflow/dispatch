@@ -85,6 +85,7 @@ SEARCH_DAEMON_DIR = ASSISTANT_DIR / "services" / "memory-search"
 SEARCH_DAEMON_SCRIPT = SEARCH_DAEMON_DIR / "src" / "daemon.ts"
 SEARCH_DAEMON_PORT = 7890
 SEARCH_DAEMON_ENABLED = os.environ.get("DISABLE_SEARCH_DAEMON", "").lower() not in ("1", "true", "yes")
+SIGNAL_ENABLED = os.environ.get("DISABLE_SIGNAL", "").lower() not in ("1", "true", "yes")
 
 # Sven API config - lives in dispatch/services/sven-api
 SVEN_API_DIR = ASSISTANT_DIR / "services" / "sven-api"
@@ -1229,6 +1230,9 @@ class Manager:
         # Shutdown flag
         self._shutdown_flag = False
 
+        # Health check background task flag (prevents overlapping runs)
+        self._health_check_running = False
+
     def _load_state(self) -> int:
         """Load the last processed message ROWID."""
         STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -1409,6 +1413,81 @@ class Manager:
                 self.sven_api_daemon.kill()
             self.sven_api_daemon = None
             log.info("Stopped Sven API daemon")
+
+    async def _run_health_checks(self):
+        """Run all health checks in background (non-blocking).
+
+        This runs as a separate async task so health checks don't block
+        the main message processing loop. Includes:
+        - Session health_check_all (liveness)
+        - Tier 2 deep Haiku analysis
+        - Search daemon health
+        - Signal daemon health
+        - Sven API health
+        """
+        try:
+            log.info("Running session health check (background)...")
+
+            # Session liveness check
+            await self.sessions.health_check_all()
+
+            # Tier 2: Haiku deep analysis (skip recently healed)
+            try:
+                recently_healed = set(self.sessions._recently_healed.keys())
+                await self.sessions.deep_health_check(skip_chat_ids=recently_healed)
+            except Exception as e:
+                log.error(f"Deep health check failed: {e}")
+
+            # Check search daemon health
+            if self.search_daemon is not None:
+                if self.search_daemon.poll() is not None:
+                    log.warning("Search daemon died, restarting...")
+                    lifecycle_log.info(f"SEARCH_DAEMON | DIED | restarting")
+                    self.search_daemon = self._spawn_search_daemon()
+                elif not self._check_search_daemon_health():
+                    log.warning("Search daemon not responding, restarting...")
+                    lifecycle_log.info(f"SEARCH_DAEMON | UNRESPONSIVE | restarting")
+                    self.search_daemon.kill()
+                    self.search_daemon = self._spawn_search_daemon()
+
+            # Check Signal daemon health
+            if self.signal_daemon is not None:
+                if self.signal_daemon.poll() is not None:
+                    log.warning("Signal daemon died, restarting...")
+                    lifecycle_log.info(f"SIGNAL_DAEMON | DIED | restarting")
+                    self.signal_daemon = self._spawn_signal_daemon()
+                    if self.signal_daemon:
+                        self._start_signal_listener()
+                elif not SIGNAL_SOCKET.exists():
+                    log.warning("Signal socket missing, restarting daemon...")
+                    lifecycle_log.info(f"SIGNAL_DAEMON | SOCKET_MISSING | restarting")
+                    self.signal_daemon.terminate()
+                    try:
+                        self.signal_daemon.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        self.signal_daemon.kill()
+                    self.signal_daemon = self._spawn_signal_daemon()
+                    if self.signal_daemon:
+                        self._start_signal_listener()
+
+            # Check Sven API health
+            if self.sven_api_daemon is not None:
+                if self.sven_api_daemon.poll() is not None:
+                    log.warning("Sven API died, restarting...")
+                    lifecycle_log.info(f"SVEN_API | DIED | restarting")
+                    self.sven_api_daemon = self._spawn_sven_api_daemon()
+                elif not self._check_sven_api_health():
+                    log.warning("Sven API not responding, restarting...")
+                    lifecycle_log.info(f"SVEN_API | UNRESPONSIVE | restarting")
+                    self.sven_api_daemon.kill()
+                    self.sven_api_daemon = self._spawn_sven_api_daemon()
+
+            log.info("Health check completed (background)")
+
+        except Exception as e:
+            log.error(f"Background health check failed: {e}")
+        finally:
+            self._health_check_running = False
 
     def _send_sms(self, phone: str, message: str) -> bool:
         """Send an SMS message via the send-sms CLI.
@@ -2017,11 +2096,14 @@ Keep the text concise - this is a nightly check-in, not a full report.
         if recreated:
             log.info(f"Recreated {recreated} sessions with pending context from previous shutdown")
 
-        # Start Signal daemon and listener
-        log.info("Starting Signal integration...")
-        self.signal_daemon = self._spawn_signal_daemon()
-        if self.signal_daemon:
-            self._start_signal_listener()
+        # Start Signal daemon and listener (if not disabled)
+        if SIGNAL_ENABLED:
+            log.info("Starting Signal integration...")
+            self.signal_daemon = self._spawn_signal_daemon()
+            if self.signal_daemon:
+                self._start_signal_listener()
+        else:
+            log.info("Signal integration disabled via DISABLE_SIGNAL env var")
 
         # Start test message watcher
         log.info("Starting test message watcher...")
@@ -2152,62 +2234,16 @@ Keep the text concise - this is a nightly check-in, not a full report.
                         log.error(f"Fast health check failed: {e}")
                     last_fast_health = time.time()
 
-                # Periodic health check (existing + Tier 2 deep analysis)
+                # Periodic health check (runs in background, non-blocking)
                 if time.time() - last_health_check > HEALTH_CHECK_INTERVAL:
-                    log.info("Running session health check...")
-                    await self.sessions.health_check_all()
-
-                    # Tier 2: Haiku deep analysis (skip recently healed)
-                    try:
-                        recently_healed = set(self.sessions._recently_healed.keys())
-                        await self.sessions.deep_health_check(skip_chat_ids=recently_healed)
-                    except Exception as e:
-                        log.error(f"Deep health check failed: {e}")
-
-                    # Check search daemon health
-                    if self.search_daemon is not None:
-                        if self.search_daemon.poll() is not None:
-                            log.warning("Search daemon died, restarting...")
-                            lifecycle_log.info(f"SEARCH_DAEMON | DIED | restarting")
-                            self.search_daemon = self._spawn_search_daemon()
-                        elif not self._check_search_daemon_health():
-                            log.warning("Search daemon not responding, restarting...")
-                            lifecycle_log.info(f"SEARCH_DAEMON | UNRESPONSIVE | restarting")
-                            self.search_daemon.kill()
-                            self.search_daemon = self._spawn_search_daemon()
-
-                    # Check Signal daemon health
-                    if self.signal_daemon is not None:
-                        if self.signal_daemon.poll() is not None:
-                            log.warning("Signal daemon died, restarting...")
-                            lifecycle_log.info(f"SIGNAL_DAEMON | DIED | restarting")
-                            self.signal_daemon = self._spawn_signal_daemon()
-                            if self.signal_daemon:
-                                self._start_signal_listener()
-                        elif not SIGNAL_SOCKET.exists():
-                            log.warning("Signal socket missing, restarting daemon...")
-                            lifecycle_log.info(f"SIGNAL_DAEMON | SOCKET_MISSING | restarting")
-                            self.signal_daemon.terminate()
-                            try:
-                                self.signal_daemon.wait(timeout=5)
-                            except subprocess.TimeoutExpired:
-                                self.signal_daemon.kill()
-                            self.signal_daemon = self._spawn_signal_daemon()
-                            if self.signal_daemon:
-                                self._start_signal_listener()
-
-                    # Check Sven API health
-                    if self.sven_api_daemon is not None:
-                        if self.sven_api_daemon.poll() is not None:
-                            log.warning("Sven API died, restarting...")
-                            lifecycle_log.info(f"SVEN_API | DIED | restarting")
-                            self.sven_api_daemon = self._spawn_sven_api_daemon()
-                        elif not self._check_sven_api_health():
-                            log.warning("Sven API not responding, restarting...")
-                            lifecycle_log.info(f"SVEN_API | UNRESPONSIVE | restarting")
-                            self.sven_api_daemon.kill()
-                            self.sven_api_daemon = self._spawn_sven_api_daemon()
-
+                    if not self._health_check_running:
+                        self._health_check_running = True
+                        asyncio.create_task(
+                            self._run_health_checks(),
+                            name="health-check-background"
+                        )
+                    else:
+                        log.debug("Health check still running, skipping this cycle")
                     last_health_check = time.time()
 
                 # Periodic idle session check

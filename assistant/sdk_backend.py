@@ -356,9 +356,10 @@ class SDKBackend:
                 f"tier={tier} chat_id={chat_id} source={source}"
             )
 
-            # Resolve model: check registry for explicit override, else default to opus
+            # Resolve model and session_id: check registry for explicit overrides
             existing_entry = self.registry.get(chat_id)
             model = existing_entry.get("model", "opus") if existing_entry else "opus"
+            resume_id = existing_entry.get("session_id") if existing_entry else None
 
             session = SDKSession(
                 chat_id=chat_id,
@@ -369,7 +370,7 @@ class SDKBackend:
                 source=source,
                 model=model,
             )
-            await session.start(resume_session_id=None)
+            await session.start(resume_session_id=resume_id)
             self.sessions[chat_id] = session
 
             # Defer system prompt to outside the lock
@@ -432,9 +433,10 @@ class SDKBackend:
             f"tier={tier} chat_id={chat_id} source={source}"
         )
 
-        # Resolve model: check registry for explicit override, else default to opus
+        # Resolve model and session_id: check registry for explicit overrides
         existing_entry = self.registry.get(chat_id)
         model = existing_entry.get("model", "opus") if existing_entry else "opus"
+        resume_id = existing_entry.get("session_id") if existing_entry else None
 
         session = SDKSession(
             chat_id=chat_id,
@@ -447,7 +449,7 @@ class SDKBackend:
         )
         import time
         spawn_start = time.perf_counter()
-        await session.start(resume_session_id=None)
+        await session.start(resume_session_id=resume_id)
         spawn_ms = (time.perf_counter() - spawn_start) * 1000
         perf.timing("session_spawn_ms", spawn_ms, component="daemon", tier=tier, source=source)
         self.sessions[chat_id] = session
@@ -717,6 +719,10 @@ Gemini analyzed the attached image:
             session_name = self.get_group_session_name(chat_id, display_name, source)
             transcript_dir = ensure_transcript_dir(session_name)
 
+            # Check for existing session_id to resume
+            existing_entry = self.registry.get(chat_id)
+            resume_id = existing_entry.get("session_id") if existing_entry else None
+
             session = SDKSession(
                 chat_id=chat_id,
                 contact_name=display_name or chat_id,
@@ -725,7 +731,7 @@ Gemini analyzed the attached image:
                 session_type="group",
                 source=source,
             )
-            await session.start(resume_session_id=None)
+            await session.start(resume_session_id=resume_id)
             self.sessions[chat_id] = session
 
             # Always inject system prompt - session reads old messages for context
@@ -777,6 +783,10 @@ Gemini analyzed the attached image:
         session_name = self.get_group_session_name(chat_id, display_name, source)
         transcript_dir = ensure_transcript_dir(session_name)
 
+        # Check for existing session_id to resume
+        existing_entry = self.registry.get(chat_id)
+        resume_id = existing_entry.get("session_id") if existing_entry else None
+
         session = SDKSession(
             chat_id=chat_id,
             contact_name=display_name or chat_id,
@@ -785,7 +795,7 @@ Gemini analyzed the attached image:
             session_type="group",
             source=source,
         )
-        await session.start(resume_session_id=None)
+        await session.start(resume_session_id=resume_id)
         self.sessions[chat_id] = session
 
         # Defer system prompt to outside the lock
