@@ -680,7 +680,7 @@ struct ProfileView: View {
                         Text("Server URL")
                             .font(.caption)
                             .foregroundColor(.secondary)
-                        TextField("e.g. 100.91.58.120:8080", text: $serverURL)
+                        TextField("e.g. 100.91.58.120:9091", text: $serverURL)
                             .textFieldStyle(.roundedBorder)
                             .autocapitalization(.none)
                             .autocorrectionDisabled()

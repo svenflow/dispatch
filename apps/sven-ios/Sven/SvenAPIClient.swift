@@ -10,9 +10,9 @@ class SvenAPIClient {
 
     // Default URLs for different environments
     #if targetEnvironment(simulator)
-    private static let defaultURL = "http://localhost:8080"
+    private static let defaultURL = "http://localhost:9091"
     #else
-    private static let defaultURL = "http://localhost:8080"  // User must configure via settings
+    private static let defaultURL = "http://localhost:9091"  // User must configure via settings
     #endif
 
     // Get the configured server URL (or default)

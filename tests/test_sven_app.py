@@ -290,7 +290,7 @@ class TestSvenAPIIntegration:
     @pytest.fixture
     def api_base(self):
         """Base URL for API tests."""
-        return "http://localhost:8080"
+        return "http://localhost:9091"
 
     @pytest.mark.integration
     def test_health_endpoint(self, api_base):

@@ -86,7 +86,7 @@ struct SvenShortcuts: AppShortcutsProvider {
 ### 5. API Client
 ```swift
 func sendToMac(transcript: String) async throws {
-    let url = URL(string: "http://100.127.42.15:8080/prompt")!
+    let url = URL(string: "http://100.127.42.15:9091/prompt")!
     var request = URLRequest(url: url)
     request.httpMethod = "POST"
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -130,7 +130,7 @@ async def receive_prompt(request: PromptRequest):
 ### Running the Server
 ```bash
 # Start on boot via launchd or systemd
-uvicorn sven_api:app --host 0.0.0.0 --port 8080
+uvicorn sven_api:app --host 0.0.0.0 --port 9091
 ```
 
 ## Testing Strategy
@@ -165,7 +165,7 @@ uvicorn sven_api:app --host 0.0.0.0 --port 8080
 2. [x] Deploy to TestFlight
 3. [x] Set up Tailscale between phone and mac
 4. [x] Fix transcript overwrite bug - switched to Moonshine, accumulates lines
-5. [x] Create API server on mac (port 8080) - ~/dispatch/services/sven-api/server.py
+5. [x] Create API server on mac (port 9091) - ~/dispatch/services/sven-api/server.py
 6. [ ] Add App Attest to iOS app
 7. [ ] Update iOS app to POST to mac
 8. [ ] Test end-to-end flow

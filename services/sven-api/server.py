@@ -15,7 +15,7 @@ and provides in-app responses with TTS audio.
 Run with: uv run server.py
 Or: ./server.py (if executable)
 
-Listens on: http://0.0.0.0:8080
+Listens on: http://0.0.0.0:9091
 
 Endpoints:
 - POST /prompt - Receive transcript, inject into sven-app session
@@ -668,11 +668,11 @@ if __name__ == "__main__":
     logger.info(f"Allowed tokens file: {ALLOWED_TOKENS_FILE}")
     logger.info(f"Database: {DB_PATH}")
     logger.info(f"Audio directory: {AUDIO_DIR}")
-    logger.info("Listening on http://0.0.0.0:8080")
-    logger.info("Tailscale IP: 100.127.42.15:8080")
+    logger.info("Listening on http://0.0.0.0:9091")
+    logger.info("Tailscale IP: 100.127.42.15:9091")
     logger.info("=" * 60)
 
     # Initialize database on startup
     init_db()
 
-    uvicorn.run(app, host="0.0.0.0", port=8080, log_level="warning")
+    uvicorn.run(app, host="0.0.0.0", port=9091, log_level="warning")

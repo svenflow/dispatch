@@ -60,7 +60,7 @@ CREATE TABLE messages (
 ## Running
 
 ```bash
-# Start server (listens on 0.0.0.0:8080)
+# Start server (listens on 0.0.0.0:9091)
 uv run server.py
 
 # Or as executable

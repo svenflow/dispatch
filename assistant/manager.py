@@ -89,7 +89,7 @@ SEARCH_DAEMON_ENABLED = os.environ.get("DISABLE_SEARCH_DAEMON", "").lower() not 
 # Sven API config - lives in dispatch/services/sven-api
 SVEN_API_DIR = ASSISTANT_DIR / "services" / "sven-api"
 SVEN_API_SCRIPT = SVEN_API_DIR / "server.py"
-SVEN_API_PORT = 8080
+SVEN_API_PORT = 9091
 
 # macOS epoch offset (2001-01-01 to 1970-01-01)
 MACOS_EPOCH_OFFSET = 978307200
