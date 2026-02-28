@@ -381,11 +381,6 @@ class SDKSession:
         else:
             turn_limit = 30
 
-        # Generate fresh session ID to prevent auto-resume from sessions-index.json
-        # The SDK/CLI auto-resumes from ~/.claude/projects/<cwd>/sessions-index.json
-        # unless we explicitly provide a new session ID
-        fresh_session_id = str(uuid.uuid4())
-
         opts = ClaudeAgentOptions(
             cwd=self.cwd,
             allowed_tools=tools,
@@ -395,7 +390,6 @@ class SDKSession:
             fallback_model="sonnet",  # Only triggers on 529 (server overloaded), not normal usage
             max_turns=turn_limit,
             max_buffer_size=10 * 1024 * 1024,  # 10MB - prevents crash on large Task outputs
-            extra_args={"session-id": fresh_session_id},  # Force fresh session
             hooks={
                 "PreToolUse": [HookMatcher(matcher="Read", hooks=[self._resize_image_hook])],
                 "Stop": [HookMatcher(hooks=[self._stop_hook])],
@@ -407,7 +401,14 @@ class SDKSession:
             opts.can_use_tool = self._permission_check
 
         if resume_id:
+            # Resume existing session with full conversation context
             opts.resume = resume_id
+        else:
+            # Generate fresh session ID to prevent auto-resume from sessions-index.json
+            # The SDK/CLI auto-resumes from ~/.claude/projects/<cwd>/sessions-index.json
+            # unless we explicitly provide a new session ID
+            fresh_session_id = str(uuid.uuid4())
+            opts.extra_args = {"session-id": fresh_session_id}
 
         return opts
 
