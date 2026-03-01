@@ -400,15 +400,13 @@ class SDKSession:
         if self.tier in ("favorite", "family"):
             opts.can_use_tool = self._permission_check
 
-        if resume_id:
-            # Resume existing session with full conversation context
-            opts.resume = resume_id
-        else:
-            # Generate fresh session ID to prevent auto-resume from sessions-index.json
-            # The SDK/CLI auto-resumes from ~/.claude/projects/<cwd>/sessions-index.json
-            # unless we explicitly provide a new session ID
-            fresh_session_id = str(uuid.uuid4())
-            opts.extra_args = {"session-id": fresh_session_id}
+        # Always use fresh session ID to prevent auto-resume from sessions-index.json
+        # The SDK/CLI auto-resumes from ~/.claude/projects/<cwd>/sessions-index.json
+        # unless we explicitly provide a new session ID.
+        # We intentionally DO NOT resume SDK sessions - the custom compact system
+        # handles context persistence via transcript files and handoff briefings.
+        fresh_session_id = str(uuid.uuid4())
+        opts.extra_args = {"session-id": fresh_session_id}
 
         return opts
 
