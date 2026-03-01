@@ -252,29 +252,31 @@ chrome close 123456
 ## CSP-Protected Pages & Cross-Origin Iframe Automation
 
 Some sites have strict Content Security Policy (CSP) that blocks normal JS injection:
-- Google Cloud Console (blocks `eval()` via Trusted Types)
+- Discord, Google Cloud Console (blocks `eval()` via Trusted Types)
 - Apple Sign-In iframes (cross-origin restrictions)
 - Many enterprise/banking sites
 
-**Solution:** Use `iframe-click` and `insert-text` commands which use Chrome Debugger API with `Page.createIsolatedWorld` to bypass CSP restrictions.
+**Good news:** The `text`, `html`, `iframe-click`, and `insert-text` commands all use Chrome Debugger API with `Page.createIsolatedWorld` to bypass CSP restrictions automatically.
 
-**IMPORTANT:** If normal `chrome click` or `chrome js` fails with CSP/Trusted Types errors, use `iframe-click` instead - it works on BOTH iframes AND main frame content.
-
-### Commands for CSP-Protected Pages
+**All these commands work on CSP-protected pages:**
 
 ```bash
-# Click element on CSP-protected pages (works on main frame OR iframes)
+# Text/HTML extraction (bypasses CSP automatically)
+chrome text <tab_id>   # Get page text - works on discord.com, etc.
+chrome html <tab_id>   # Get page HTML - works on CSP-protected sites
+
+# Click element (works on main frame OR iframes)
 chrome iframe-click <tab_id> '<css-selector>'
 chrome iframe-click 123456 'input[type="password"]'
 chrome iframe-click 123456 'button#sign-in'
 chrome iframe-click 123456 'text:Desktop client 1'  # Click by text content
 
-# Insert text at current focus (works on CSP-protected pages)
+# Insert text at current focus
 chrome insert-text <tab_id> '<text>'
 chrome insert-text 123456 'mypassword123'
 ```
 
-**When to use:** If you see "Trusted Type assignment" errors or CSP violations, switch to `iframe-click`.
+**When to use `iframe-click`:** If normal `chrome click` fails with CSP/Trusted Types errors, use `iframe-click` instead.
 
 ### Apple Login Flow Example (App Store Connect)
 

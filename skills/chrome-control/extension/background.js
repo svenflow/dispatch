@@ -248,10 +248,12 @@ async function handleCommand(message) {
       return await findElements(params.tabId, params.query);
 
     case 'get_page_text':
-      return await executeScript(params.tabId, 'document.body.innerText');
+      // Use isolated world to bypass CSP restrictions
+      return await isolatedGetText(params.tabId);
 
     case 'get_page_html':
-      return await executeScript(params.tabId, 'document.documentElement.outerHTML');
+      // Use isolated world to bypass CSP restrictions
+      return await isolatedGetHtml(params.tabId);
 
     // Interaction
     case 'click':
@@ -1006,6 +1008,64 @@ async function iframeClick(tabId, selector) {
     return { clicked: parsedResult.success !== false, result: parsedResult, usedMainFrame: !targetFrameId };
   } catch (error) {
     return { clicked: false, error: error.message };
+  }
+}
+
+// Get page text via isolated world (bypasses CSP)
+async function isolatedGetText(tabId) {
+  try {
+    await ensureDebuggerAttached(tabId);
+    await chrome.debugger.sendCommand({ tabId }, 'Page.enable');
+
+    const frameTree = await chrome.debugger.sendCommand({ tabId }, 'Page.getFrameTree');
+    const mainFrameId = frameTree.frameTree.frame.id;
+
+    const isolatedWorld = await chrome.debugger.sendCommand({ tabId }, 'Page.createIsolatedWorld', {
+      frameId: mainFrameId,
+      worldName: 'chromeControlTextWorld',
+      grantUniveralAccess: true
+    });
+
+    const result = await chrome.debugger.sendCommand({ tabId }, 'Runtime.evaluate', {
+      expression: 'document.body.innerText',
+      contextId: isolatedWorld.executionContextId,
+      returnByValue: true
+    });
+
+    resetDebuggerIdleTimer(tabId);
+    return result?.result?.value || '';
+  } catch (error) {
+    resetDebuggerIdleTimer(tabId);
+    return { error: error.message };
+  }
+}
+
+// Get page HTML via isolated world (bypasses CSP)
+async function isolatedGetHtml(tabId) {
+  try {
+    await ensureDebuggerAttached(tabId);
+    await chrome.debugger.sendCommand({ tabId }, 'Page.enable');
+
+    const frameTree = await chrome.debugger.sendCommand({ tabId }, 'Page.getFrameTree');
+    const mainFrameId = frameTree.frameTree.frame.id;
+
+    const isolatedWorld = await chrome.debugger.sendCommand({ tabId }, 'Page.createIsolatedWorld', {
+      frameId: mainFrameId,
+      worldName: 'chromeControlHtmlWorld',
+      grantUniveralAccess: true
+    });
+
+    const result = await chrome.debugger.sendCommand({ tabId }, 'Runtime.evaluate', {
+      expression: 'document.documentElement.outerHTML',
+      contextId: isolatedWorld.executionContextId,
+      returnByValue: true
+    });
+
+    resetDebuggerIdleTimer(tabId);
+    return result?.result?.value || '';
+  } catch (error) {
+    resetDebuggerIdleTimer(tabId);
+    return { error: error.message };
   }
 }
 
