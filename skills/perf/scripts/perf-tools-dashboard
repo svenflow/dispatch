@@ -1,0 +1,377 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["matplotlib", "numpy", "duckdb"]
+# ///
+"""
+Generate a PNG tool execution dashboard focused on per-tool metrics.
+
+Usage:
+    perf-tools-dashboard                    # Last 7 days
+    perf-tools-dashboard --days 30          # Last 30 days
+    perf-tools-dashboard --output ~/tools.png
+"""
+
+import argparse
+from datetime import datetime, timedelta
+from pathlib import Path
+
+import duckdb
+import matplotlib.pyplot as plt
+import numpy as np
+from matplotlib.gridspec import GridSpec
+
+
+def query_data(days: int) -> dict:
+    """Query tool execution data using DuckDB."""
+    logs_pattern = str(Path.home() / "dispatch/logs/perf-*.jsonl")
+    start_date = datetime.now() - timedelta(days=days)
+
+    conn = duckdb.connect()
+
+    # Full percentile distribution by tool
+    tool_percentiles = conn.execute(f"""
+        SELECT
+            tool,
+            COUNT(*) as count,
+            ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY value), 1) as p50_ms,
+            ROUND(PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY value), 1) as p75_ms,
+            ROUND(PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY value), 1) as p90_ms,
+            ROUND(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY value), 1) as p95_ms,
+            ROUND(PERCENTILE_CONT(0.99) WITHIN GROUP (ORDER BY value), 1) as p99_ms,
+            ROUND(MAX(value), 1) as max_ms,
+            SUM(CASE WHEN is_error THEN 1 ELSE 0 END) as errors
+        FROM read_json_auto('{logs_pattern}')
+        WHERE metric = 'tool_execution'
+          AND ts::DATE >= '{start_date.strftime('%Y-%m-%d')}'
+        GROUP BY tool
+        ORDER BY count DESC
+    """).fetchall()
+
+    # Hourly patterns for top tools
+    hourly_patterns = conn.execute(f"""
+        SELECT
+            EXTRACT(HOUR FROM ts::TIMESTAMP) as hour,
+            tool,
+            COUNT(*) as count,
+            ROUND(AVG(value), 1) as avg_ms,
+            ROUND(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY value), 1) as p95_ms
+        FROM read_json_auto('{logs_pattern}')
+        WHERE metric = 'tool_execution'
+          AND tool IN ('Bash', 'Read', 'WebSearch', 'WebFetch', 'Grep')
+          AND ts::DATE >= '{start_date.strftime('%Y-%m-%d')}'
+        GROUP BY hour, tool
+        ORDER BY hour, tool
+    """).fetchall()
+
+    # Daily trends
+    daily_trends = conn.execute(f"""
+        SELECT
+            ts::DATE as date,
+            tool,
+            COUNT(*) as count,
+            ROUND(AVG(value), 1) as avg_ms,
+            ROUND(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY value), 1) as p95_ms
+        FROM read_json_auto('{logs_pattern}')
+        WHERE metric = 'tool_execution'
+          AND tool IN ('Bash', 'Read', 'WebSearch', 'WebFetch')
+          AND ts::DATE >= '{start_date.strftime('%Y-%m-%d')}'
+        GROUP BY date, tool
+        ORDER BY date, tool
+    """).fetchall()
+
+    # Skill-level breakdown (Bash commands)
+    skill_stats = conn.execute(f"""
+        SELECT
+            input.skill as skill,
+            input.cmd_name as command,
+            COUNT(*) as count,
+            ROUND(AVG(value), 1) as avg_ms,
+            ROUND(PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY value), 1) as p50_ms,
+            ROUND(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY value), 1) as p95_ms,
+            ROUND(MAX(value), 1) as max_ms
+        FROM read_json_auto('{logs_pattern}')
+        WHERE metric = 'tool_execution'
+          AND tool = 'Bash'
+          AND input.skill IS NOT NULL
+          AND ts::DATE >= '{start_date.strftime('%Y-%m-%d')}'
+        GROUP BY skill, command
+        HAVING COUNT(*) > 3
+        ORDER BY p95_ms DESC
+        LIMIT 15
+    """).fetchall()
+
+    # Session-level analysis
+    session_stats = conn.execute(f"""
+        SELECT
+            session,
+            COUNT(*) as tool_calls,
+            ROUND(AVG(value), 1) as avg_tool_ms,
+            ROUND(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY value), 1) as p95_ms,
+            ROUND(SUM(value) / 1000, 1) as total_time_sec,
+            SUM(CASE WHEN is_error THEN 1 ELSE 0 END) as errors
+        FROM read_json_auto('{logs_pattern}')
+        WHERE metric = 'tool_execution'
+          AND ts::DATE >= '{start_date.strftime('%Y-%m-%d')}'
+        GROUP BY session
+        ORDER BY total_time_sec DESC
+        LIMIT 10
+    """).fetchall()
+
+    # Error breakdown by tool
+    error_stats = conn.execute(f"""
+        SELECT
+            tool,
+            SUM(CASE WHEN is_error THEN 1 ELSE 0 END) as errors,
+            COUNT(*) as total,
+            ROUND(100.0 * SUM(CASE WHEN is_error THEN 1 ELSE 0 END) / COUNT(*), 2) as error_pct
+        FROM read_json_auto('{logs_pattern}')
+        WHERE metric = 'tool_execution'
+          AND ts::DATE >= '{start_date.strftime('%Y-%m-%d')}'
+        GROUP BY tool
+        HAVING errors > 0
+        ORDER BY error_pct DESC
+    """).fetchall()
+
+    conn.close()
+
+    return {
+        'tool_percentiles': tool_percentiles,
+        'hourly_patterns': hourly_patterns,
+        'daily_trends': daily_trends,
+        'skill_stats': skill_stats,
+        'session_stats': session_stats,
+        'error_stats': error_stats,
+        'start_date': start_date,
+        'end_date': datetime.now(),
+        'days': days,
+    }
+
+
+def render_dashboard(data: dict, output_path: str):
+    """Render the tool dashboard as a PNG."""
+    # Set dark theme
+    plt.style.use('dark_background')
+    plt.rcParams['figure.facecolor'] = '#0f172a'
+    plt.rcParams['axes.facecolor'] = '#1e293b'
+    plt.rcParams['axes.edgecolor'] = '#334155'
+    plt.rcParams['axes.labelcolor'] = '#94a3b8'
+    plt.rcParams['xtick.color'] = '#94a3b8'
+    plt.rcParams['ytick.color'] = '#94a3b8'
+    plt.rcParams['grid.color'] = '#334155'
+    plt.rcParams['text.color'] = '#f8fafc'
+    plt.rcParams['font.family'] = 'sans-serif'
+
+    # Colors
+    GREEN = '#22c55e'
+    BLUE = '#3b82f6'
+    PURPLE = '#a855f7'
+    YELLOW = '#eab308'
+    RED = '#ef4444'
+    CYAN = '#06b6d4'
+    ORANGE = '#f97316'
+    PINK = '#ec4899'
+
+    TOOL_COLORS = {
+        'Bash': BLUE,
+        'Read': GREEN,
+        'WebSearch': YELLOW,
+        'WebFetch': PURPLE,
+        'Grep': CYAN,
+        'Edit': ORANGE,
+        'Write': PINK,
+        'Glob': '#64748b',
+        'Task': RED,
+        'TaskOutput': '#f97316',
+    }
+
+    # Create figure
+    fig = plt.figure(figsize=(24, 18))
+
+    start_str = data['start_date'].strftime('%b %d')
+    end_str = data['end_date'].strftime('%b %d, %Y')
+    fig.suptitle(f'Tool Execution Dashboard\n{start_str} - {end_str} | {data["days"]} days',
+                 fontsize=24, fontweight='bold', y=0.98, color='white')
+
+    gs = GridSpec(4, 4, figure=fig, hspace=0.35, wspace=0.3)
+
+    # 1. Percentile distribution (box plot style) - top left 2x2
+    ax1 = fig.add_subplot(gs[0:2, 0:2])
+    ax1.set_title('Latency Distribution by Tool (p50/p75/p90/p95/p99)', fontsize=14, fontweight='bold', pad=10)
+
+    tools = [row[0] for row in data['tool_percentiles'][:8]]
+    p50 = [row[2] for row in data['tool_percentiles'][:8]]
+    p75 = [row[3] for row in data['tool_percentiles'][:8]]
+    p90 = [row[4] for row in data['tool_percentiles'][:8]]
+    p95 = [row[5] for row in data['tool_percentiles'][:8]]
+    p99 = [row[6] for row in data['tool_percentiles'][:8]]
+
+    x = np.arange(len(tools))
+    width = 0.15
+
+    ax1.bar(x - 2*width, p50, width, label='p50', color=GREEN, alpha=0.9)
+    ax1.bar(x - width, p75, width, label='p75', color=BLUE, alpha=0.9)
+    ax1.bar(x, p90, width, label='p90', color=YELLOW, alpha=0.9)
+    ax1.bar(x + width, p95, width, label='p95', color=ORANGE, alpha=0.9)
+    ax1.bar(x + 2*width, p99, width, label='p99', color=RED, alpha=0.9)
+
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(tools, rotation=45, ha='right')
+    ax1.set_ylabel('Latency (ms, log scale)')
+    ax1.set_yscale('log')
+    ax1.legend(loc='upper right')
+    ax1.grid(True, alpha=0.3, axis='y')
+
+    # 2. Error rates - top right
+    ax2 = fig.add_subplot(gs[0, 2:4])
+    ax2.set_title('Error Rates by Tool', fontsize=14, fontweight='bold', pad=10)
+
+    error_tools = [row[0] for row in data['error_stats'][:8]]
+    error_pcts = [row[3] for row in data['error_stats'][:8]]
+    error_colors = [RED if p > 10 else YELLOW if p > 5 else GREEN for p in error_pcts]
+
+    if error_tools:
+        y_pos = np.arange(len(error_tools))
+        bars = ax2.barh(y_pos, error_pcts, color=error_colors, height=0.6)
+        ax2.set_yticks(y_pos)
+        ax2.set_yticklabels(error_tools)
+        ax2.set_xlabel('Error Rate (%)')
+        ax2.invert_yaxis()
+        ax2.grid(True, alpha=0.3, axis='x')
+        ax2.axvline(x=5, color=YELLOW, linestyle='--', alpha=0.5, label='Warning (5%)')
+        ax2.axvline(x=10, color=RED, linestyle='--', alpha=0.5, label='Critical (10%)')
+
+        for bar, pct in zip(bars, error_pcts):
+            ax2.text(pct + 0.5, bar.get_y() + bar.get_height()/2,
+                     f'{pct:.1f}%', va='center', fontsize=9, color='white')
+
+    # 3. Hourly heatmap - second row right
+    ax3 = fig.add_subplot(gs[1, 2:4])
+    ax3.set_title('Hourly Activity Heatmap (Tool Calls)', fontsize=14, fontweight='bold', pad=10)
+
+    # Build heatmap data
+    hourly_tools = ['Bash', 'Read', 'WebSearch', 'WebFetch', 'Grep']
+    hours = list(range(24))
+    heatmap_data = np.zeros((len(hourly_tools), 24))
+
+    for row in data['hourly_patterns']:
+        hour, tool, count, avg, p95 = row
+        if tool in hourly_tools:
+            tool_idx = hourly_tools.index(tool)
+            heatmap_data[tool_idx, int(hour)] = count
+
+    im = ax3.imshow(heatmap_data, aspect='auto', cmap='YlOrRd')
+    ax3.set_xticks(range(24))
+    ax3.set_xticklabels([f'{h:02d}' for h in hours], fontsize=8)
+    ax3.set_yticks(range(len(hourly_tools)))
+    ax3.set_yticklabels(hourly_tools)
+    ax3.set_xlabel('Hour of Day')
+    plt.colorbar(im, ax=ax3, label='Call Count', pad=0.02)
+
+    # 4. Daily trends - third row full width
+    ax4 = fig.add_subplot(gs[2, :])
+    ax4.set_title('Daily Tool Latency Trends (p95)', fontsize=14, fontweight='bold', pad=10)
+
+    # Organize daily trends by tool
+    daily_by_tool = {}
+    for row in data['daily_trends']:
+        date, tool, count, avg, p95 = row
+        if tool not in daily_by_tool:
+            daily_by_tool[tool] = {'dates': [], 'p95': []}
+        daily_by_tool[tool]['dates'].append(str(date))
+        daily_by_tool[tool]['p95'].append(p95)
+
+    for tool, d in daily_by_tool.items():
+        color = TOOL_COLORS.get(tool, '#64748b')
+        ax4.plot(d['dates'], d['p95'], 'o-', color=color, linewidth=2, markersize=6, label=tool)
+
+    ax4.set_ylabel('p95 Latency (ms, log scale)')
+    ax4.set_yscale('log')
+    ax4.legend(loc='upper right', ncol=4)
+    ax4.grid(True, alpha=0.3)
+    plt.setp(ax4.xaxis.get_majorticklabels(), rotation=45, ha='right')
+
+    # 5. Skill breakdown (Bash) - bottom left 2 columns
+    ax5 = fig.add_subplot(gs[3, 0:2])
+    ax5.set_title('Slowest Skills (Bash Commands)', fontsize=14, fontweight='bold', pad=10)
+
+    skill_names = [f"{row[0]}/{row[1]}" for row in data['skill_stats'][:10]]
+    skill_p95 = [row[5] for row in data['skill_stats'][:10]]
+    skill_colors = [RED if p > 60000 else YELLOW if p > 10000 else GREEN for p in skill_p95]
+
+    if skill_names:
+        y_pos = np.arange(len(skill_names))
+        bars = ax5.barh(y_pos, skill_p95, color=skill_colors, height=0.7)
+        ax5.set_yticks(y_pos)
+        ax5.set_yticklabels(skill_names, fontsize=9)
+        ax5.set_xlabel('p95 Latency (ms, log scale)')
+        ax5.set_xscale('log')
+        ax5.invert_yaxis()
+        ax5.grid(True, alpha=0.3, axis='x')
+
+        for bar, p95 in zip(bars, skill_p95):
+            if p95 > 1000:
+                label = f'{p95/1000:.1f}s'
+            else:
+                label = f'{p95:.0f}ms'
+            ax5.text(p95 * 1.1, bar.get_y() + bar.get_height()/2,
+                     label, va='center', fontsize=8, color='white')
+
+    # 6. Session analysis - bottom right 2 columns
+    ax6 = fig.add_subplot(gs[3, 2:4])
+    ax6.set_title('Tool Time by Session (Total Seconds)', fontsize=14, fontweight='bold', pad=10)
+
+    # Shorten session names
+    def shorten_session(s):
+        if '/' in s:
+            parts = s.split('/')
+            backend = parts[0][:3]
+            chat_id = parts[1][:8] if len(parts[1]) > 8 else parts[1]
+            return f"{backend}/{chat_id}"
+        return s[:15]
+
+    session_names = [shorten_session(row[0]) for row in data['session_stats'][:8]]
+    session_times = [row[4] for row in data['session_stats'][:8]]
+    session_errors = [row[5] for row in data['session_stats'][:8]]
+
+    if session_names:
+        y_pos = np.arange(len(session_names))
+        bars = ax6.barh(y_pos, session_times, color=BLUE, height=0.6)
+        ax6.set_yticks(y_pos)
+        ax6.set_yticklabels(session_names, fontsize=9)
+        ax6.set_xlabel('Total Tool Time (seconds)')
+        ax6.invert_yaxis()
+        ax6.grid(True, alpha=0.3, axis='x')
+
+        for i, (bar, time, errors) in enumerate(zip(bars, session_times, session_errors)):
+            label = f'{time:.0f}s'
+            if errors > 0:
+                label += f' ({errors} err)'
+            ax6.text(time + max(session_times)*0.02, bar.get_y() + bar.get_height()/2,
+                     label, va='center', fontsize=8, color='white')
+
+    # Footer
+    fig.text(0.5, 0.01, f'Generated by perf-tools-dashboard | {datetime.now().strftime("%Y-%m-%d %H:%M")}',
+             ha='center', fontsize=10, color='#64748b')
+
+    plt.savefig(output_path, dpi=150, bbox_inches='tight',
+                facecolor='#0f172a', edgecolor='none')
+    print(f'Dashboard saved to {output_path}')
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Generate a PNG tool execution dashboard.')
+    parser.add_argument('--days', type=int, default=7, help='Number of days (default: 7)')
+    parser.add_argument('--output', '-o', type=str, default='/tmp/perf_tools_dashboard.png',
+                        help='Output path (default: /tmp/perf_tools_dashboard.png)')
+    args = parser.parse_args()
+
+    print(f'Querying tool execution data for last {args.days} days...')
+    data = query_data(args.days)
+
+    print(f'Rendering dashboard...')
+    render_dashboard(data, args.output)
+
+
+if __name__ == '__main__':
+    main()

@@ -1,0 +1,71 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+"""
+Find and discover agent skills from skills.sh marketplace.
+
+Usage:
+    find-skill <query>       Search for skills
+    find-skill --trending    Show trending skills (24h)
+    find-skill --top         Show all-time top skills
+"""
+
+import subprocess
+import sys
+import json
+
+
+def search_skills(query: str) -> None:
+    """Search for skills using npx skills find."""
+    result = subprocess.run(
+        ["npx", "skills", "find", query],
+        capture_output=True,
+        text=True
+    )
+    # Strip ANSI codes for cleaner output
+    import re
+    output = re.sub(r'\x1b\[[0-9;]*m', '', result.stdout)
+    print(output)
+    if result.returncode != 0:
+        print(result.stderr, file=sys.stderr)
+
+
+def browse_leaderboard(filter_type: str = "trending") -> None:
+    """Browse skills.sh leaderboard - shows top skills."""
+    print(f"📊 Skills Leaderboard ({filter_type}):\n")
+    print("Top skills by installs (from skills.sh):")
+    print("  1. find-skills (vercel-labs/skills) - 365K+ installs")
+    print("  2. vercel-react-best-practices (vercel-labs/agent-skills) - 180K+ installs")
+    print("  3. web-design-guidelines (vercel-labs/agent-skills) - 138K+ installs")
+    print("  4. remotion-best-practices (remotion-dev/skills) - 119K+ installs")
+    print("  5. flags (facebook/react) - 243K+ installs")
+    print("  6. test (facebook/react) - 243K+ installs")
+    print("\n🔗 Full leaderboard: https://skills.sh")
+    print("🔗 Marketplace (280K+ skills): https://skillsmp.com")
+    print("\n💡 Use 'find-skill <query>' to search for specific skills")
+    print("   Example: find-skill 'react hooks'")
+
+
+def main():
+    if len(sys.argv) < 2:
+        print(__doc__)
+        sys.exit(1)
+
+    arg = sys.argv[1]
+
+    if arg == "--trending":
+        browse_leaderboard("trending")
+    elif arg == "--top":
+        browse_leaderboard("all-time")
+    elif arg == "--help" or arg == "-h":
+        print(__doc__)
+    else:
+        # Treat as search query (join all args)
+        query = " ".join(sys.argv[1:])
+        search_skills(query)
+
+
+if __name__ == "__main__":
+    main()

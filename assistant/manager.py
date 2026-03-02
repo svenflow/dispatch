@@ -179,6 +179,12 @@ class MessagesReader:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
+        # Try PASSIVE checkpoint to improve WAL visibility (won't fail if locked)
+        try:
+            cursor.execute("PRAGMA wal_checkpoint(PASSIVE)")
+        except Exception:
+            pass  # Checkpoint failed, continue anyway - non-critical
+
         cursor.execute("""
             SELECT
                 message.ROWID,
@@ -298,6 +304,12 @@ class MessagesReader:
         """
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
+
+        # Try PASSIVE checkpoint to improve WAL visibility (won't fail if locked)
+        try:
+            cursor.execute("PRAGMA wal_checkpoint(PASSIVE)")
+        except Exception:
+            pass  # Checkpoint failed, continue anyway - non-critical
 
         # Query reactions and join to get the target message text
         cursor.execute("""
@@ -470,6 +482,11 @@ class MessagesReader:
         """Get the most recent message ROWID."""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
+        # Try PASSIVE checkpoint to improve WAL visibility (won't fail if locked)
+        try:
+            cursor.execute("PRAGMA wal_checkpoint(PASSIVE)")
+        except Exception:
+            pass  # Checkpoint failed, continue anyway - non-critical
         cursor.execute("SELECT MAX(ROWID) FROM message")
         result = cursor.fetchone()[0]
         conn.close()
@@ -2192,6 +2209,12 @@ Keep the text concise - this is a nightly check-in, not a full report.
 
                 for msg in messages:
                     msg["source"] = "imessage"  # Tag source
+                    # Log message staleness (time from message creation to discovery)
+                    if msg.get("timestamp"):
+                        staleness_ms = (time.time() - msg["timestamp"].timestamp()) * 1000
+                        perf.timing("message_staleness_ms", staleness_ms, component="daemon", source="imessage")
+                        if staleness_ms > 30000:  # Warn if >30s stale
+                            log.warning(f"STALENESS | rowid={msg['rowid']} | staleness={staleness_ms:.0f}ms")
                     try:
                         await self.process_message(msg)
                         self._save_state(msg["rowid"])

@@ -1,0 +1,308 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["httpx", "rich"]
+# ///
+"""
+Publish HTML folder to sven-pages with ACL support.
+
+Usage:
+  publish <folder> [--name <name>] [--acl <emails>] [--public]
+  publish --set-acl <folder> --acl <emails>
+  publish --set-acl <folder> --public
+  publish --list
+  publish --delete <folder>
+
+Examples:
+  # Publish a folder (private by default, only admins can access)
+  publish ./report --name q4-analysis
+
+  # Publish with specific users allowed
+  publish ./report --name q4-analysis --acl "alice@gmail.com,bob@gmail.com"
+
+  # Publish publicly (no auth required)
+  publish ./report --name q4-analysis --public
+
+  # Update ACL for existing folder
+  publish --set-acl q4-analysis --acl "alice@gmail.com,bob@gmail.com,charlie@gmail.com"
+
+  # Make existing folder public
+  publish --set-acl q4-analysis --public
+
+  # List all published folders
+  publish --list
+
+  # Delete a folder
+  publish --delete q4-analysis
+"""
+
+import argparse
+import mimetypes
+import os
+import sys
+from pathlib import Path
+
+import httpx
+from rich.console import Console
+from rich.table import Table
+
+WORKER_URL = "https://sven-pages-worker.nicklaudethorat.workers.dev"
+API_KEY_FILE = Path.home() / ".claude" / "skills" / "sven-pages" / ".api-key"
+console = Console()
+
+
+def get_api_key() -> str:
+    """Get the API key from file."""
+    if not API_KEY_FILE.exists():
+        console.print(f"[red]Error: API key file not found at {API_KEY_FILE}[/red]")
+        console.print("Run: wrangler secret put API_KEY (in worker dir)")
+        sys.exit(1)
+    return API_KEY_FILE.read_text().strip()
+
+
+def get_content_type(path: str) -> str:
+    """Get content type for a file."""
+    mime_type, _ = mimetypes.guess_type(path)
+    return mime_type or "application/octet-stream"
+
+
+def upload_file(client: httpx.Client, folder: str, file_path: Path, base_path: Path, api_key: str):
+    """Upload a single file to the worker."""
+    relative_path = file_path.relative_to(base_path)
+    remote_path = f"{folder}/{relative_path}"
+
+    content_type = get_content_type(str(file_path))
+
+    with open(file_path, "rb") as f:
+        content = f.read()
+
+    response = client.put(
+        f"{WORKER_URL}/_api/upload/{remote_path}",
+        content=content,
+        headers={
+            "Content-Type": content_type,
+            "Authorization": f"Bearer {api_key}",
+        },
+    )
+
+    if response.status_code != 200:
+        console.print(f"[red]Failed to upload {relative_path}: {response.text}[/red]")
+        return False
+
+    console.print(f"  Uploaded: {relative_path}")
+    return True
+
+
+def set_acl(client: httpx.Client, folder: str, emails: list[str] | str, api_key: str):
+    """Set ACL for a folder."""
+    response = client.put(
+        f"{WORKER_URL}/_api/acl/{folder}",
+        json={"emails": emails},
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+
+    if response.status_code != 200:
+        console.print(f"[red]Failed to set ACL: {response.text}[/red]")
+        return False
+
+    return True
+
+
+def list_files(client: httpx.Client, folder: str | None = None, api_key: str = ""):
+    """List files in a folder or all folders."""
+    url = f"{WORKER_URL}/_api/list" if not folder else f"{WORKER_URL}/_api/list/{folder}"
+    response = client.get(url, headers={"Authorization": f"Bearer {api_key}"})
+
+    if response.status_code != 200:
+        console.print(f"[red]Failed to list files: {response.text}[/red]")
+        return None
+
+    return response.json()["files"]
+
+
+def delete_folder(client: httpx.Client, folder: str, api_key: str):
+    """Delete a folder and its contents."""
+    response = client.delete(f"{WORKER_URL}/_api/delete/{folder}/", headers={"Authorization": f"Bearer {api_key}"})
+
+    if response.status_code != 200:
+        console.print(f"[red]Failed to delete: {response.text}[/red]")
+        return False
+
+    return response.json()
+
+
+def read_acl_file(folder_path: Path) -> list[str] | None:
+    """Read .acl file from folder if it exists."""
+    acl_file = folder_path / ".acl"
+    if not acl_file.exists():
+        return None
+
+    emails = []
+    for line in acl_file.read_text().strip().split("\n"):
+        line = line.strip()
+        if line and not line.startswith("#"):
+            emails.append(line)
+
+    return emails if emails else None
+
+
+def publish_folder(
+    folder_path: Path,
+    name: str,
+    acl_emails: list[str] | None = None,
+    public: bool = False,
+):
+    """Publish a folder to sven-pages."""
+    if not folder_path.is_dir():
+        console.print(f"[red]Error: {folder_path} is not a directory[/red]")
+        return False
+
+    # Check for index.html
+    if not (folder_path / "index.html").exists():
+        console.print(f"[red]Error: {folder_path} does not contain index.html[/red]")
+        return False
+
+    # Check for .acl file if no CLI ACL provided
+    if not acl_emails and not public:
+        file_acl = read_acl_file(folder_path)
+        if file_acl:
+            acl_emails = file_acl
+            console.print(f"Found .acl file with {len(file_acl)} email(s)")
+
+    # Collect all files
+    files = []
+    for root, _, filenames in os.walk(folder_path):
+        for filename in filenames:
+            file_path = Path(root) / filename
+            if not filename.startswith("."):
+                files.append(file_path)
+
+    console.print(f"Publishing {len(files)} files to [bold]{name}[/bold]...")
+    api_key = get_api_key()
+
+    with httpx.Client(timeout=60) as client:
+        # Upload files
+        success = True
+        for file_path in files:
+            if not upload_file(client, name, file_path, folder_path, api_key):
+                success = False
+
+        if not success:
+            console.print("[red]Some files failed to upload[/red]")
+            return False
+
+        # Set ACL
+        if public:
+            acl = "*"
+            console.print("Setting ACL: [bold]public[/bold] (no auth required)")
+        elif acl_emails:
+            acl = acl_emails
+            console.print(f"Setting ACL: [bold]{', '.join(acl_emails)}[/bold]")
+        else:
+            # Default: admin-only (no ACL set means 403 for non-admins)
+            acl = None
+            console.print("Setting ACL: [bold]admin-only[/bold] (default)")
+
+        if acl:
+            if not set_acl(client, name, acl, api_key):
+                return False
+
+    console.print()
+    console.print("[green]✅ Published successfully![/green]")
+    console.print()
+    console.print(f"URL: [link={WORKER_URL}/{name}/]{WORKER_URL}/{name}/[/link]")
+
+    return True
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Publish HTML folder to sven-pages")
+    parser.add_argument("folder", nargs="?", help="Folder to publish")
+    parser.add_argument("--name", "-n", help="Name/slug for the published page")
+    parser.add_argument(
+        "--acl",
+        "-a",
+        help="Comma-separated list of emails allowed to access",
+    )
+    parser.add_argument(
+        "--public",
+        "-p",
+        action="store_true",
+        help="Make page publicly accessible",
+    )
+    parser.add_argument("--set-acl", help="Update ACL for existing folder")
+    parser.add_argument("--list", "-l", action="store_true", help="List published pages")
+    parser.add_argument("--delete", "-d", help="Delete a published folder")
+
+    args = parser.parse_args()
+
+    if args.list:
+        api_key = get_api_key()
+        with httpx.Client(timeout=30) as client:
+            files = list_files(client, api_key=api_key)
+            if files is None:
+                sys.exit(1)
+
+            # Group by folder
+            folders = {}
+            for f in files:
+                parts = f["path"].split("/")
+                folder = parts[0] if parts else "root"
+                if folder not in folders:
+                    folders[folder] = []
+                folders[folder].append("/".join(parts[1:]) if len(parts) > 1 else "")
+
+            table = Table(title="Published Pages")
+            table.add_column("Folder", style="cyan")
+            table.add_column("Files", style="green")
+            table.add_column("URL")
+
+            for folder, files in sorted(folders.items()):
+                url = f"{WORKER_URL}/{folder}/"
+                table.add_row(folder, str(len(files)), url)
+
+            console.print(table)
+        return
+
+    if args.delete:
+        api_key = get_api_key()
+        with httpx.Client(timeout=30) as client:
+            result = delete_folder(client, args.delete, api_key)
+            if result:
+                console.print(
+                    f"[green]Deleted {args.delete} ({result['deleted']} files)[/green]"
+                )
+        return
+
+    if args.set_acl:
+        api_key = get_api_key()
+        with httpx.Client(timeout=30) as client:
+            if args.public:
+                acl = "*"
+            elif args.acl:
+                acl = [e.strip() for e in args.acl.split(",")]
+            else:
+                console.print("[red]Error: --set-acl requires --acl or --public[/red]")
+                sys.exit(1)
+
+            if set_acl(client, args.set_acl, acl, api_key):
+                console.print(f"[green]ACL updated for {args.set_acl}[/green]")
+        return
+
+    if not args.folder:
+        parser.print_help()
+        sys.exit(1)
+
+    folder_path = Path(args.folder).resolve()
+    name = args.name or folder_path.name
+
+    acl_emails = None
+    if args.acl:
+        acl_emails = [e.strip() for e in args.acl.split(",")]
+
+    success = publish_folder(folder_path, name, acl_emails, args.public)
+    sys.exit(0 if success else 1)
+
+
+if __name__ == "__main__":
+    main()
