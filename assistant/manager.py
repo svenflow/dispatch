@@ -180,10 +180,15 @@ class MessagesReader:
         cursor = conn.cursor()
 
         # Try PASSIVE checkpoint to improve WAL visibility (won't fail if locked)
+        # Returns (status, pages_log, pages_checkpointed) - status 0=ok, 1=busy
+        checkpoint_result = None
         try:
-            cursor.execute("PRAGMA wal_checkpoint(PASSIVE)")
-        except Exception:
-            pass  # Checkpoint failed, continue anyway - non-critical
+            checkpoint_result = cursor.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
+            perf.gauge("wal_checkpoint_status", checkpoint_result[0] if checkpoint_result else -1,
+                       component="daemon", source="imessage")
+        except Exception as e:
+            perf.gauge("wal_checkpoint_status", -2, component="daemon", source="imessage")
+            # Checkpoint failed, continue anyway - non-critical
 
         cursor.execute("""
             SELECT
@@ -2207,6 +2212,13 @@ Keep the text concise - this is a nightly check-in, not a full report.
                     else:
                         raise
 
+                # Log batch size - bursts indicate sync backlog
+                if messages:
+                    batch_size = len(messages)
+                    perf.gauge("messages_batch_size", batch_size, component="daemon", source="imessage")
+                    if batch_size > 5:
+                        log.warning(f"BATCH_BURST | count={batch_size} | possible sync backlog")
+
                 for msg in messages:
                     msg["source"] = "imessage"  # Tag source
                     # Log message staleness (time from message creation to discovery)
@@ -2216,7 +2228,10 @@ Keep the text concise - this is a nightly check-in, not a full report.
                         if staleness_ms > 30000:  # Warn if >30s stale
                             log.warning(f"STALENESS | rowid={msg['rowid']} | staleness={staleness_ms:.0f}ms")
                     try:
+                        inject_start = time.time()
                         await self.process_message(msg)
+                        inject_ms = (time.time() - inject_start) * 1000
+                        perf.timing("poll_to_inject_ms", inject_ms, component="daemon", source="imessage")
                         self._save_state(msg["rowid"])
                     except asyncio.CancelledError:
                         raise  # Don't swallow cancellation
