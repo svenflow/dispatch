@@ -208,8 +208,11 @@ class SDKSession:
 
     async def inject(self, text: str):
         """Queue a message for delivery to the Claude session."""
+        queue_depth = self._message_queue.qsize()
         await self._message_queue.put(text)
-        self._log.info(f"QUEUED | len={len(text)}")
+        # Log queue depth - if consistently >0, messages are backing up
+        perf.gauge("sdk_queue_depth", queue_depth + 1, component="session", contact=self.contact_name)
+        self._log.info(f"QUEUED | len={len(text)} | queue_depth={queue_depth + 1}")
 
     @property
     def is_busy(self) -> bool:
@@ -263,6 +266,7 @@ class SDKSession:
                 except asyncio.TimeoutError:
                     continue  # Check receiver health every 30s
 
+                wake_start = time.time()
                 self.last_activity = datetime.now()
                 self._log.info(f"IN | {msg}")
                 self._pending_queries += 1
@@ -270,6 +274,9 @@ class SDKSession:
                 try:
                     assert self._client is not None
                     await self._client.query(msg)
+                    # Log wake latency - time from queue get to query completion
+                    wake_ms = (time.time() - wake_start) * 1000
+                    perf.timing("session_wake_latency_ms", wake_ms, component="session", contact=self.contact_name)
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:

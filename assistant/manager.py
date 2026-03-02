@@ -2182,8 +2182,15 @@ Keep the text concise - this is a nightly check-in, not a full report.
         imessage_error_logged = False
         last_poll_log_time = 0  # Telemetry: log poll status every 5 minutes
         POLL_LOG_INTERVAL = 300  # 5 minutes
+        last_iteration_end = time.time()  # Track time between poll iterations
         while not self._shutdown_flag:
             try:
+                # Track poll gap - should be ~100ms, drift indicates CPU pressure
+                poll_gap_ms = (time.time() - last_iteration_end) * 1000
+                perf.timing("poll_gap_ms", poll_gap_ms, sample_rate=10, component="daemon")
+                if poll_gap_ms > 500:  # Warn if gap > 500ms (5x expected)
+                    log.warning(f"POLL_GAP | gap={poll_gap_ms:.0f}ms | expected ~100ms")
+
                 # Run blocking SQLite poll in executor
                 poll_start = time.time()
                 try:
@@ -2332,6 +2339,7 @@ Keep the text concise - this is a nightly check-in, not a full report.
                     lifecycle_log.info(f"CONSOLIDATION | COMPLETE | date={today}")
 
                 await asyncio.sleep(POLL_INTERVAL)
+                last_iteration_end = time.time()  # Update for next poll_gap measurement
                 spurious_cancel_count = 0  # Reset on successful iteration
 
             except asyncio.CancelledError:
