@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dispatch Architecture</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: #e0e0e0;
+            min-height: 100vh;
+            padding: 40px;
+        }
+
+        h1 {
+            text-align: center;
+            color: #00d4ff;
+            margin-bottom: 10px;
+            font-size: 2.5em;
+            text-shadow: 0 0 20px rgba(0, 212, 255, 0.3);
+        }
+
+        .subtitle {
+            text-align: center;
+            color: #888;
+            margin-bottom: 40px;
+            font-size: 1.1em;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .diagram {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 30px;
+            margin-bottom: 40px;
+        }
+
+        .section {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 16px;
+            padding: 24px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+        }
+
+        .section h2 {
+            color: #00d4ff;
+            font-size: 1.2em;
+            margin-bottom: 16px;
+            padding-bottom: 8px;
+            border-bottom: 2px solid rgba(0, 212, 255, 0.3);
+        }
+
+        .component {
+            background: rgba(255, 255, 255, 0.08);
+            border-radius: 10px;
+            padding: 16px;
+            margin-bottom: 12px;
+            border-left: 4px solid #00d4ff;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .component:hover {
+            transform: translateX(5px);
+            box-shadow: 0 4px 20px rgba(0, 212, 255, 0.2);
+        }
+
+        .component h3 {
+            color: #fff;
+            font-size: 1em;
+            margin-bottom: 8px;
+        }
+
+        .component p {
+            color: #aaa;
+            font-size: 0.85em;
+            line-height: 1.5;
+        }
+
+        .component code {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.8em;
+            color: #4ade80;
+        }
+
+        /* Color coding for different component types */
+        .daemon { border-left-color: #f97316; }
+        .queue { border-left-color: #8b5cf6; }
+        .session { border-left-color: #22c55e; }
+        .backend { border-left-color: #eab308; }
+        .watchdog { border-left-color: #ef4444; }
+        .service { border-left-color: #06b6d4; }
+
+        .flow-section {
+            grid-column: span 3;
+            margin-top: 20px;
+        }
+
+        .flow-diagram {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-wrap: wrap;
+            gap: 16px;
+            padding: 30px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 12px;
+        }
+
+        .flow-box {
+            background: linear-gradient(135deg, rgba(0, 212, 255, 0.2) 0%, rgba(0, 212, 255, 0.1) 100%);
+            border: 2px solid rgba(0, 212, 255, 0.5);
+            border-radius: 10px;
+            padding: 16px 24px;
+            text-align: center;
+            min-width: 140px;
+        }
+
+        .flow-box.input {
+            border-color: #f97316;
+            background: linear-gradient(135deg, rgba(249, 115, 22, 0.2) 0%, rgba(249, 115, 22, 0.1) 100%);
+        }
+        .flow-box.process {
+            border-color: #8b5cf6;
+            background: linear-gradient(135deg, rgba(139, 92, 246, 0.2) 0%, rgba(139, 92, 246, 0.1) 100%);
+        }
+        .flow-box.output {
+            border-color: #22c55e;
+            background: linear-gradient(135deg, rgba(34, 197, 94, 0.2) 0%, rgba(34, 197, 94, 0.1) 100%);
+        }
+
+        .flow-arrow {
+            font-size: 1.5em;
+            color: #00d4ff;
+        }
+
+        .legend {
+            display: flex;
+            justify-content: center;
+            gap: 30px;
+            margin-top: 30px;
+            flex-wrap: wrap;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .legend-color {
+            width: 20px;
+            height: 4px;
+            border-radius: 2px;
+        }
+
+        .legend-color.daemon { background: #f97316; }
+        .legend-color.queue { background: #8b5cf6; }
+        .legend-color.session { background: #22c55e; }
+        .legend-color.backend { background: #eab308; }
+        .legend-color.watchdog { background: #ef4444; }
+        .legend-color.service { background: #06b6d4; }
+
+        .full-width {
+            grid-column: span 3;
+        }
+
+        .two-col {
+            grid-column: span 2;
+        }
+
+        .file-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+            gap: 8px;
+            margin-top: 12px;
+        }
+
+        .file-item {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-family: monospace;
+            font-size: 0.8em;
+            color: #4ade80;
+        }
+
+        .file-item span {
+            color: #888;
+            font-family: -apple-system, sans-serif;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🤖 Dispatch Architecture</h1>
+        <p class="subtitle">Claude-powered Personal Assistant System</p>
+
+        <!-- Main Flow Diagram -->
+        <div class="section full-width flow-section">
+            <h2>📬 Message Flow</h2>
+            <div class="flow-diagram">
+                <div class="flow-box input">
+                    <strong>Messages.app</strong><br>
+                    <small>chat.db polling</small>
+                </div>
+                <div class="flow-arrow">→</div>
+                <div class="flow-box input">
+                    <strong>Signal</strong><br>
+                    <small>JSON-RPC socket</small>
+                </div>
+                <div class="flow-arrow">→</div>
+                <div class="flow-box process">
+                    <strong>Manager Daemon</strong><br>
+                    <small>Tier routing</small>
+                </div>
+                <div class="flow-arrow">→</div>
+                <div class="flow-box process">
+                    <strong>SDK Backend</strong><br>
+                    <small>Session management</small>
+                </div>
+                <div class="flow-arrow">→</div>
+                <div class="flow-box output">
+                    <strong>Claude Session</strong><br>
+                    <small>Per-contact agent</small>
+                </div>
+                <div class="flow-arrow">→</div>
+                <div class="flow-box output">
+                    <strong>send-sms/signal</strong><br>
+                    <small>Response delivery</small>
+                </div>
+            </div>
+        </div>
+
+        <div class="diagram">
+            <!-- Message Sources -->
+            <div class="section">
+                <h2>📥 Message Sources</h2>
+
+                <div class="component daemon">
+                    <h3>MessagesReader</h3>
+                    <p>Polls macOS <code>chat.db</code> every 100ms for new iMessages. Handles text, attachments, audio transcriptions, reactions, and group detection.</p>
+                </div>
+
+                <div class="component daemon">
+                    <h3>SignalListener</h3>
+                    <p>Background thread connected to <code>/tmp/signal-cli.sock</code> JSON-RPC socket. Receives push notifications from signal-cli daemon.</p>
+                </div>
+
+                <div class="component daemon">
+                    <h3>TestMessageWatcher</h3>
+                    <p>Development testing via JSON files dropped in <code>~/.claude/test-messages/</code>. Enables testing without real messaging.</p>
+                </div>
+
+                <div class="component backend">
+                    <h3>Sven App API</h3>
+                    <p>HTTP server on port 8080 for iOS voice assistant app. Creates sessions tagged <code>sven-app:</code> in registry.</p>
+                </div>
+            </div>
+
+            <!-- Core Daemon -->
+            <div class="section">
+                <h2>⚙️ Manager Daemon</h2>
+
+                <div class="component daemon">
+                    <h3>Manager</h3>
+                    <p>Main orchestrator in <code>manager.py</code>. Coordinates polling, routing, health checks, and lifecycle management. Single entry point for the system.</p>
+                </div>
+
+                <div class="component queue">
+                    <h3>ContactsManager</h3>
+                    <p>SQLite-based contact lookups from macOS Contacts.app. O(1) phone→tier resolution via in-memory cache.</p>
+                </div>
+
+                <div class="component queue">
+                    <h3>SessionRegistry</h3>
+                    <p>Persistent JSON file at <code>state/sessions.json</code>. Maps chat_id → session metadata (name, tier, source, model, timestamps).</p>
+                </div>
+
+                <div class="component backend">
+                    <h3>IPCServer</h3>
+                    <p>Unix socket at <code>/tmp/claude-assistant.sock</code>. Handles CLI commands: inject, kill, restart, status, set_model.</p>
+                </div>
+
+                <div class="component service">
+                    <h3>ReminderPoller</h3>
+                    <p>Checks macOS Reminders.app for due items. Supports one-time and cron-based recurring reminders with contact targeting.</p>
+                </div>
+            </div>
+
+            <!-- SDK Sessions -->
+            <div class="section">
+                <h2>🧠 Agent Sessions</h2>
+
+                <div class="component session">
+                    <h3>SDKBackend</h3>
+                    <p>Manages all <code>ClaudeSDKClient</code> sessions. Handles creation, injection, health checks, idle reaping, and graceful shutdown.</p>
+                </div>
+
+                <div class="component session">
+                    <h3>SDKSession</h3>
+                    <p>Per-contact Claude agent wrapper. Async message queue, concurrent send/receive loops, mid-turn steering support.</p>
+                </div>
+
+                <div class="component queue">
+                    <h3>Message Queue</h3>
+                    <p>Each session has an <code>asyncio.Queue</code>. Messages injected immediately; Claude sees them as UserMessages between tool calls.</p>
+                </div>
+
+                <div class="component backend">
+                    <h3>BackendConfig</h3>
+                    <p>Source-specific strings in <code>backends.py</code>: CLI commands, prefixes, labels. Adding new messaging backend = one entry.</p>
+                </div>
+            </div>
+
+            <!-- Health & Recovery -->
+            <div class="section">
+                <h2>🔧 Health & Recovery</h2>
+
+                <div class="component watchdog">
+                    <h3>Watchdog</h3>
+                    <p>LaunchAgent running every 60s via <code>bin/watchdog</code>. Detects daemon crashes, spawns healing Claude with <code>--dangerously-skip-permissions</code>.</p>
+                </div>
+
+                <div class="component watchdog">
+                    <h3>Fast Health Check</h3>
+                    <p>Every 60s: regex scan of session transcripts for fatal errors (400 API, context overflow, buffer crash). Auto-restarts affected sessions.</p>
+                </div>
+
+                <div class="component watchdog">
+                    <h3>Deep Health Check</h3>
+                    <p>Every 5 min: Haiku-based analysis of recent messages for subtle failure modes. Catches issues regex misses.</p>
+                </div>
+
+                <div class="component service">
+                    <h3>Idle Reaping</h3>
+                    <p>Sessions inactive >2 hours are killed to free resources. Master and background sessions exempt.</p>
+                </div>
+            </div>
+
+            <!-- Supporting Services -->
+            <div class="section">
+                <h2>🔌 Supporting Services</h2>
+
+                <div class="component service">
+                    <h3>signal-cli Daemon</h3>
+                    <p>Java process with <code>--receive-mode on-connection</code>. Provides JSON-RPC socket for bidirectional Signal messaging.</p>
+                </div>
+
+                <div class="component service">
+                    <h3>Memory Search Daemon</h3>
+                    <p>Bun-powered TypeScript service on port 7890. SQLite FTS for semantic memory search across contacts.</p>
+                </div>
+
+                <div class="component service">
+                    <h3>Gemini Vision</h3>
+                    <p>Async image analysis via <code>gemini-3-pro-image-preview</code>. Describes attachments and injects results into sessions.</p>
+                </div>
+
+                <div class="component backend">
+                    <h3>LaunchAgent</h3>
+                    <p><code>com.dispatch.claude-assistant.plist</code> ensures daemon auto-starts on boot. Uses launchctl for clean restarts.</p>
+                </div>
+            </div>
+
+            <!-- Tier System -->
+            <div class="section">
+                <h2>👥 Contact Tier System</h2>
+
+                <div class="component session">
+                    <h3>Admin</h3>
+                    <p>Full access, bypass permissions, all tools. Owner of the system.</p>
+                </div>
+
+                <div class="component session">
+                    <h3>Wife</h3>
+                    <p>Full access + warm tone. Extra care in responses.</p>
+                </div>
+
+                <div class="component queue">
+                    <h3>Family</h3>
+                    <p>Read-only mutations. Changes need admin approval. 50 turn limit.</p>
+                </div>
+
+                <div class="component backend">
+                    <h3>Favorite</h3>
+                    <p>Restricted tools, no file writes. Only whitelisted Bash commands. 30 turn limit.</p>
+                </div>
+
+                <div class="component watchdog">
+                    <h3>Bots</h3>
+                    <p>Same as favorites + loop detection. Won't respond to circular conversations.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- File Structure -->
+        <div class="section full-width">
+            <h2>📁 Key Files</h2>
+            <div class="file-list">
+                <div class="file-item">assistant/manager.py <span>Main daemon</span></div>
+                <div class="file-item">assistant/sdk_backend.py <span>Session management</span></div>
+                <div class="file-item">assistant/sdk_session.py <span>Claude wrapper</span></div>
+                <div class="file-item">assistant/backends.py <span>Backend configs</span></div>
+                <div class="file-item">assistant/cli.py <span>CLI entrypoint</span></div>
+                <div class="file-item">assistant/health.py <span>Health checks</span></div>
+                <div class="file-item">bin/watchdog <span>Auto-recovery</span></div>
+                <div class="file-item">state/sessions.json <span>Session registry</span></div>
+                <div class="file-item">state/last_rowid.txt <span>iMessage cursor</span></div>
+                <div class="file-item">logs/manager.log <span>Daemon logs</span></div>
+                <div class="file-item">logs/session_lifecycle.log <span>Session events</span></div>
+                <div class="file-item">logs/sessions/*.log <span>Per-session logs</span></div>
+            </div>
+        </div>
+
+        <!-- Legend -->
+        <div class="legend">
+            <div class="legend-item">
+                <div class="legend-color daemon"></div>
+                <span>Input/Daemon</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color queue"></div>
+                <span>Queue/Lookup</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color session"></div>
+                <span>Session/Agent</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color backend"></div>
+                <span>Config/Backend</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color watchdog"></div>
+                <span>Health/Recovery</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color service"></div>
+                <span>Service</span>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

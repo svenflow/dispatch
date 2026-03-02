@@ -1,0 +1,77 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.13"
+# dependencies = []
+# ///
+"""
+Generate 3D Gaussian splat PLY from a single image using Apple's ml-sharp.
+"""
+
+import subprocess
+import sys
+from pathlib import Path
+
+
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: image-to-splat <image> [output_dir]")
+        print("\nExamples:")
+        print("  image-to-splat photo.jpg              # Output: ./photo.ply")
+        print("  image-to-splat photo.jpg ~/splats/    # Output: ~/splats/photo.ply")
+        sys.exit(1)
+
+    image_path = Path(sys.argv[1]).expanduser().resolve()
+
+    if not image_path.exists():
+        print(f"Error: Image not found: {image_path}")
+        sys.exit(1)
+
+    # Determine output directory
+    if len(sys.argv) > 2:
+        output_dir = Path(sys.argv[2]).expanduser().resolve()
+    else:
+        output_dir = image_path.parent
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # ml-sharp repo location
+    ml_sharp_dir = Path.home() / "code" / "ml-sharp"
+
+    if not ml_sharp_dir.exists():
+        print(f"Error: ml-sharp not found at {ml_sharp_dir}")
+        print("Clone it with: git clone https://github.com/apple/ml-sharp ~/code/ml-sharp")
+        sys.exit(1)
+
+    print(f"Processing: {image_path.name}")
+    print(f"Output dir: {output_dir}")
+
+    # Run sharp predict using uv
+    cmd = [
+        "uv", "run", "--directory", str(ml_sharp_dir),
+        "sharp", "predict",
+        "-i", str(image_path),
+        "-o", str(output_dir)
+    ]
+
+    result = subprocess.run(cmd, cwd=ml_sharp_dir)
+
+    if result.returncode == 0:
+        # Find the output PLY file
+        expected_ply = output_dir / f"{image_path.stem}.ply"
+        if expected_ply.exists():
+            print(f"\n✅ Success! PLY file: {expected_ply}")
+            print(f"   Size: {expected_ply.stat().st_size / 1024 / 1024:.1f} MB")
+        else:
+            # List what was created
+            plys = list(output_dir.glob("*.ply"))
+            if plys:
+                print(f"\n✅ Success! PLY files created:")
+                for ply in plys:
+                    print(f"   {ply}")
+    else:
+        print(f"\n❌ Failed with exit code {result.returncode}")
+        sys.exit(result.returncode)
+
+
+if __name__ == "__main__":
+    main()

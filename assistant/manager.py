@@ -179,9 +179,16 @@ class MessagesReader:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
-        # Force WAL checkpoint to ensure we see Messages.app's latest writes
-        # TRUNCATE mode flushes all WAL data to main db, preventing stale reads
-        cursor.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        # Try PASSIVE checkpoint to improve WAL visibility (won't fail if locked)
+        # Returns (status, pages_log, pages_checkpointed) - status 0=ok, 1=busy
+        checkpoint_result = None
+        try:
+            checkpoint_result = cursor.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
+            perf.gauge("wal_checkpoint_status", checkpoint_result[0] if checkpoint_result else -1,
+                       component="daemon", source="imessage")
+        except Exception as e:
+            perf.gauge("wal_checkpoint_status", -2, component="daemon", source="imessage")
+            # Checkpoint failed, continue anyway - non-critical
 
         cursor.execute("""
             SELECT
@@ -303,8 +310,11 @@ class MessagesReader:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
-        # Force WAL checkpoint for visibility
-        cursor.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        # Try PASSIVE checkpoint to improve WAL visibility (won't fail if locked)
+        try:
+            cursor.execute("PRAGMA wal_checkpoint(PASSIVE)")
+        except Exception:
+            pass  # Checkpoint failed, continue anyway - non-critical
 
         # Query reactions and join to get the target message text
         cursor.execute("""
@@ -477,7 +487,11 @@ class MessagesReader:
         """Get the most recent message ROWID."""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        cursor.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        # Try PASSIVE checkpoint to improve WAL visibility (won't fail if locked)
+        try:
+            cursor.execute("PRAGMA wal_checkpoint(PASSIVE)")
+        except Exception:
+            pass  # Checkpoint failed, continue anyway - non-critical
         cursor.execute("SELECT MAX(ROWID) FROM message")
         result = cursor.fetchone()[0]
         conn.close()
@@ -2168,8 +2182,15 @@ Keep the text concise - this is a nightly check-in, not a full report.
         imessage_error_logged = False
         last_poll_log_time = 0  # Telemetry: log poll status every 5 minutes
         POLL_LOG_INTERVAL = 300  # 5 minutes
+        last_iteration_end = time.time()  # Track time between poll iterations
         while not self._shutdown_flag:
             try:
+                # Track poll gap - should be ~100ms, drift indicates CPU pressure
+                poll_gap_ms = (time.time() - last_iteration_end) * 1000
+                perf.timing("poll_gap_ms", poll_gap_ms, sample_rate=10, component="daemon")
+                if poll_gap_ms > 500:  # Warn if gap > 500ms (5x expected)
+                    log.warning(f"POLL_GAP | gap={poll_gap_ms:.0f}ms | expected ~100ms")
+
                 # Run blocking SQLite poll in executor
                 poll_start = time.time()
                 try:
@@ -2198,6 +2219,13 @@ Keep the text concise - this is a nightly check-in, not a full report.
                     else:
                         raise
 
+                # Log batch size - bursts indicate sync backlog
+                if messages:
+                    batch_size = len(messages)
+                    perf.gauge("messages_batch_size", batch_size, component="daemon", source="imessage")
+                    if batch_size > 5:
+                        log.warning(f"BATCH_BURST | count={batch_size} | possible sync backlog")
+
                 for msg in messages:
                     msg["source"] = "imessage"  # Tag source
                     # Log message staleness (time from message creation to discovery)
@@ -2207,7 +2235,10 @@ Keep the text concise - this is a nightly check-in, not a full report.
                         if staleness_ms > 30000:  # Warn if >30s stale
                             log.warning(f"STALENESS | rowid={msg['rowid']} | staleness={staleness_ms:.0f}ms")
                     try:
+                        inject_start = time.time()
                         await self.process_message(msg)
+                        inject_ms = (time.time() - inject_start) * 1000
+                        perf.timing("poll_to_inject_ms", inject_ms, component="daemon", source="imessage")
                         self._save_state(msg["rowid"])
                     except asyncio.CancelledError:
                         raise  # Don't swallow cancellation
@@ -2308,6 +2339,7 @@ Keep the text concise - this is a nightly check-in, not a full report.
                     lifecycle_log.info(f"CONSOLIDATION | COMPLETE | date={today}")
 
                 await asyncio.sleep(POLL_INTERVAL)
+                last_iteration_end = time.time()  # Update for next poll_gap measurement
                 spurious_cancel_count = 0  # Reset on successful iteration
 
             except asyncio.CancelledError:

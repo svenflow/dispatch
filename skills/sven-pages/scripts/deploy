@@ -1,0 +1,128 @@
+#!/usr/bin/env bash
+# Deploy HTML folder to sven-pages on Cloudflare Pages
+set -euo pipefail
+
+PROJECT="sven-pages"
+
+usage() {
+    cat <<EOF
+Usage: deploy <folder> [--name <name>]
+       deploy --list [--limit N]
+
+Deploy HTML folder to Cloudflare Pages.
+
+Arguments:
+  folder          Path to folder containing HTML files (must have index.html)
+
+Options:
+  --name NAME     Optional deployment message/name for identification
+  --list          List recent deployments
+  --limit N       Number of deployments to show (default: 10)
+  -h, --help      Show this help
+
+Examples:
+  deploy ./report
+  deploy ./analysis --name "Q4 Revenue Report"
+  deploy --list
+  deploy --list --limit 5
+EOF
+}
+
+list_deployments() {
+    local limit="${1:-10}"
+    echo "Recent deployments for $PROJECT:"
+    echo ""
+    wrangler pages deployment list --project-name "$PROJECT" 2>/dev/null | head -n "$((limit + 3))"
+}
+
+deploy_folder() {
+    local folder="$1"
+    local name="${2:-}"
+
+    # Validate folder
+    if [[ ! -d "$folder" ]]; then
+        echo "Error: '$folder' is not a directory" >&2
+        exit 1
+    fi
+
+    if [[ ! -f "$folder/index.html" ]]; then
+        echo "Error: '$folder' does not contain index.html" >&2
+        exit 1
+    fi
+
+    # Deploy
+    echo "Deploying $folder to $PROJECT..."
+
+    local output
+    if [[ -n "$name" ]]; then
+        output=$(wrangler pages deploy "$folder" --project-name "$PROJECT" --commit-message "$name" 2>&1)
+    else
+        output=$(wrangler pages deploy "$folder" --project-name "$PROJECT" 2>&1)
+    fi
+
+    echo "$output"
+
+    # Extract and display URLs
+    local deployment_url
+    deployment_url=$(echo "$output" | grep -oE 'https://[a-z0-9]+\.sven-pages\.pages\.dev' | head -1)
+
+    echo ""
+    echo "✅ Deployed successfully!"
+    echo ""
+    echo "URLs:"
+    echo "  Latest:     https://sven-pages.pages.dev/"
+    if [[ -n "$deployment_url" ]]; then
+        echo "  This deploy: $deployment_url"
+    fi
+}
+
+# Parse arguments
+FOLDER=""
+NAME=""
+LIST=false
+LIMIT=10
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        --list)
+            LIST=true
+            shift
+            ;;
+        --limit)
+            LIMIT="$2"
+            shift 2
+            ;;
+        --name)
+            NAME="$2"
+            shift 2
+            ;;
+        -*)
+            echo "Unknown option: $1" >&2
+            usage >&2
+            exit 1
+            ;;
+        *)
+            if [[ -z "$FOLDER" ]]; then
+                FOLDER="$1"
+            else
+                echo "Error: unexpected argument '$1'" >&2
+                usage >&2
+                exit 1
+            fi
+            shift
+            ;;
+    esac
+done
+
+if $LIST; then
+    list_deployments "$LIMIT"
+elif [[ -n "$FOLDER" ]]; then
+    deploy_folder "$FOLDER" "$NAME"
+else
+    usage
+    exit 1
+fi

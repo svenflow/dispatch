@@ -1,0 +1,363 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["matplotlib", "numpy", "duckdb"]
+# ///
+"""
+Generate a PNG performance dashboard from perf logs.
+
+Usage:
+    perf-dashboard                    # Last 7 days, output to /tmp/perf_dashboard.png
+    perf-dashboard --days 30          # Last 30 days
+    perf-dashboard --output ~/dash.png # Custom output path
+"""
+
+import argparse
+import subprocess
+import sys
+from datetime import datetime, timedelta
+from pathlib import Path
+
+import duckdb
+import matplotlib.patches as mpatches
+import matplotlib.pyplot as plt
+import numpy as np
+from matplotlib.gridspec import GridSpec
+
+
+def query_data(days: int) -> dict:
+    """Query perf data using DuckDB."""
+    logs_pattern = str(Path.home() / "dispatch/logs/perf-*.jsonl")
+
+    # Get date range
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=days)
+
+    conn = duckdb.connect()
+
+    # Daily metrics
+    daily_metrics = conn.execute(f"""
+        SELECT
+            strftime(ts::DATE, '%Y-%m-%d') as date,
+            metric,
+            COUNT(*) as count,
+            ROUND(AVG(value), 1) as avg_ms,
+            ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY value), 1) as p50_ms,
+            ROUND(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY value), 1) as p95_ms
+        FROM read_json_auto('{logs_pattern}')
+        WHERE metric IN ('poll_cycle_ms', 'inject_ms', 'send_sms_ms', 'session_spawn_ms')
+          AND ts::DATE >= '{start_date.strftime('%Y-%m-%d')}'
+        GROUP BY date, metric
+        ORDER BY date, metric
+    """).fetchall()
+
+    # Tool execution stats
+    tool_stats = conn.execute(f"""
+        SELECT
+            tool,
+            COUNT(*) as count,
+            ROUND(AVG(value), 1) as avg_ms,
+            ROUND(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY value), 1) as p95_ms,
+            ROUND(SUM(value) / 1000, 0) as total_sec
+        FROM read_json_auto('{logs_pattern}')
+        WHERE metric = 'tool_execution'
+          AND ts::DATE >= '{start_date.strftime('%Y-%m-%d')}'
+        GROUP BY tool
+        ORDER BY total_sec DESC
+    """).fetchall()
+
+    # Skill stats (Bash commands by skill)
+    skill_stats = conn.execute(f"""
+        SELECT
+            input.skill as skill,
+            COUNT(*) as count,
+            ROUND(AVG(value), 1) as avg_ms,
+            ROUND(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY value), 1) as p95_ms
+        FROM read_json_auto('{logs_pattern}')
+        WHERE metric = 'tool_execution'
+          AND tool = 'Bash'
+          AND input.skill IS NOT NULL
+          AND ts::DATE >= '{start_date.strftime('%Y-%m-%d')}'
+        GROUP BY skill
+        HAVING COUNT(*) > 5
+        ORDER BY p95_ms DESC
+        LIMIT 10
+    """).fetchall()
+
+    # Error rates
+    error_rates = conn.execute(f"""
+        SELECT
+            tool,
+            SUM(CASE WHEN is_error THEN 1 ELSE 0 END) as errors,
+            COUNT(*) as total,
+            ROUND(100.0 * SUM(CASE WHEN is_error THEN 1 ELSE 0 END) / COUNT(*), 2) as error_pct
+        FROM read_json_auto('{logs_pattern}')
+        WHERE metric = 'tool_execution'
+          AND ts::DATE >= '{start_date.strftime('%Y-%m-%d')}'
+        GROUP BY tool
+        HAVING errors > 0
+        ORDER BY error_pct DESC
+    """).fetchall()
+
+    # Totals
+    totals = conn.execute(f"""
+        SELECT
+            SUM(CASE WHEN metric = 'poll_cycle_ms' THEN 1 ELSE 0 END) as poll_cycles,
+            SUM(CASE WHEN metric = 'send_sms_ms' THEN 1 ELSE 0 END) as messages_sent,
+            SUM(CASE WHEN metric = 'tool_execution' THEN 1 ELSE 0 END) as tool_executions,
+            SUM(CASE WHEN metric = 'session_spawn_ms' THEN 1 ELSE 0 END) as sessions_spawned
+        FROM read_json_auto('{logs_pattern}')
+        WHERE ts::DATE >= '{start_date.strftime('%Y-%m-%d')}'
+    """).fetchone()
+
+    # Averages
+    avgs = conn.execute(f"""
+        SELECT
+            ROUND(AVG(CASE WHEN metric = 'poll_cycle_ms' THEN value END), 1) as avg_poll,
+            ROUND(AVG(CASE WHEN metric = 'send_sms_ms' THEN value END), 1) as avg_sms
+        FROM read_json_auto('{logs_pattern}')
+        WHERE ts::DATE >= '{start_date.strftime('%Y-%m-%d')}'
+    """).fetchone()
+
+    conn.close()
+
+    return {
+        'daily_metrics': daily_metrics,
+        'tool_stats': tool_stats,
+        'skill_stats': skill_stats,
+        'error_rates': error_rates,
+        'totals': totals,
+        'avgs': avgs,
+        'start_date': start_date,
+        'end_date': end_date,
+        'days': days,
+    }
+
+
+def render_dashboard(data: dict, output_path: str):
+    """Render the dashboard as a PNG."""
+    # Set dark theme
+    plt.style.use('dark_background')
+    plt.rcParams['figure.facecolor'] = '#0f172a'
+    plt.rcParams['axes.facecolor'] = '#1e293b'
+    plt.rcParams['axes.edgecolor'] = '#334155'
+    plt.rcParams['axes.labelcolor'] = '#94a3b8'
+    plt.rcParams['xtick.color'] = '#94a3b8'
+    plt.rcParams['ytick.color'] = '#94a3b8'
+    plt.rcParams['grid.color'] = '#334155'
+    plt.rcParams['text.color'] = '#f8fafc'
+    plt.rcParams['font.family'] = 'sans-serif'
+
+    # Colors
+    GREEN = '#22c55e'
+    BLUE = '#3b82f6'
+    PURPLE = '#a855f7'
+    YELLOW = '#eab308'
+    RED = '#ef4444'
+    CYAN = '#06b6d4'
+    ORANGE = '#f97316'
+
+    # Parse daily metrics into per-metric dicts
+    daily_by_metric = {}
+    for row in data['daily_metrics']:
+        date, metric, count, avg, p50, p95 = row
+        if metric not in daily_by_metric:
+            daily_by_metric[metric] = {'dates': [], 'avg': [], 'p95': []}
+        daily_by_metric[metric]['dates'].append(date)
+        daily_by_metric[metric]['avg'].append(avg)
+        daily_by_metric[metric]['p95'].append(p95)
+
+    # Get unique dates for x-axis
+    all_dates = sorted(set(row[0] for row in data['daily_metrics']))
+    date_labels = [d[5:] for d in all_dates]  # MM-DD format
+
+    # Create figure
+    fig = plt.figure(figsize=(20, 16))
+
+    start_str = data['start_date'].strftime('%b %d')
+    end_str = data['end_date'].strftime('%b %d, %Y')
+    fig.suptitle(f'Dispatch Performance Dashboard\n{start_str} - {end_str} | {data["days"]} days of metrics',
+                 fontsize=24, fontweight='bold', y=0.98, color='white')
+
+    gs = GridSpec(4, 3, figure=fig, hspace=0.35, wspace=0.3)
+
+    # Stats boxes at top
+    totals = data['totals']
+    avgs = data['avgs']
+    stats = [
+        ('Poll Cycles', f'{totals[0]:,}', GREEN),
+        ('Messages Sent', f'{totals[1]:,}', BLUE),
+        ('Tool Executions', f'{totals[2]:,}', PURPLE),
+        ('Sessions Spawned', f'{totals[3]:,}', YELLOW),
+        ('Avg Poll Cycle', f'{avgs[0] or 0:.1f}ms', GREEN),
+        ('Avg Send SMS', f'{avgs[1] or 0:.0f}ms', BLUE),
+    ]
+
+    ax_stats = fig.add_axes([0.05, 0.88, 0.9, 0.06])
+    ax_stats.axis('off')
+    for i, (label, value, color) in enumerate(stats):
+        x = 0.08 + i * 0.15
+        ax_stats.text(x, 0.7, label, fontsize=10, color='#94a3b8', ha='center', transform=ax_stats.transAxes)
+        ax_stats.text(x, 0.2, value, fontsize=16, color=color, fontweight='bold', ha='center', transform=ax_stats.transAxes)
+
+    # 1. Daily Overview (wide)
+    ax1 = fig.add_subplot(gs[1, :])
+    ax1.set_title('Daily Metrics Overview (p95 Latency)', fontsize=14, fontweight='bold', pad=10)
+    ax1_twin = ax1.twinx()
+
+    if 'poll_cycle_ms' in daily_by_metric:
+        d = daily_by_metric['poll_cycle_ms']
+        ax1.plot(d['dates'], d['p95'], 'o-', color=GREEN, linewidth=2, markersize=6, label='poll_cycle_ms (p95)')
+        ax1.fill_between(d['dates'], d['p95'], alpha=0.2, color=GREEN)
+    ax1.set_ylabel('poll_cycle_ms', color=GREEN)
+    ax1.set_ylim(0, 20)
+    ax1.tick_params(axis='y', labelcolor=GREEN)
+
+    if 'inject_ms' in daily_by_metric:
+        d = daily_by_metric['inject_ms']
+        ax1_twin.plot(d['dates'], d['p95'], 's-', color=BLUE, linewidth=2, markersize=6, label='inject_ms (p95)')
+    if 'send_sms_ms' in daily_by_metric:
+        d = daily_by_metric['send_sms_ms']
+        ax1_twin.plot(d['dates'], d['p95'], '^-', color=PURPLE, linewidth=2, markersize=6, label='send_sms_ms (p95)')
+    ax1_twin.set_ylabel('inject_ms / send_sms_ms', color=BLUE)
+    ax1_twin.set_yscale('log')
+    ax1_twin.tick_params(axis='y', labelcolor=BLUE)
+
+    lines1, labels1 = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax1_twin.get_legend_handles_labels()
+    ax1.legend(lines1 + lines2, labels1 + labels2, loc='upper left', framealpha=0.8)
+    ax1.grid(True, alpha=0.3)
+    plt.setp(ax1.xaxis.get_majorticklabels(), rotation=45, ha='right')
+
+    # 2. Poll Cycle Time
+    ax2 = fig.add_subplot(gs[2, 0])
+    ax2.set_title('Poll Cycle Time (Daily Avg)', fontsize=12, fontweight='bold', pad=10)
+    if 'poll_cycle_ms' in daily_by_metric:
+        d = daily_by_metric['poll_cycle_ms']
+        ax2.plot(d['dates'], d['avg'], 'o-', color=GREEN, linewidth=2, markersize=6)
+        ax2.fill_between(d['dates'], d['avg'], alpha=0.3, color=GREEN)
+    ax2.set_ylabel('milliseconds')
+    ax2.set_ylim(0, 15)
+    ax2.grid(True, alpha=0.3)
+    plt.setp(ax2.xaxis.get_majorticklabels(), rotation=45, ha='right')
+
+    # 3. SMS Latency
+    ax3 = fig.add_subplot(gs[2, 1])
+    ax3.set_title('Send SMS Latency (Daily p95)', fontsize=12, fontweight='bold', pad=10)
+    if 'send_sms_ms' in daily_by_metric:
+        d = daily_by_metric['send_sms_ms']
+        ax3.plot(d['dates'], d['p95'], 'o-', color=PURPLE, linewidth=2, markersize=6)
+        ax3.fill_between(d['dates'], d['p95'], alpha=0.3, color=PURPLE)
+    ax3.set_ylabel('milliseconds (log scale)')
+    ax3.set_yscale('log')
+    ax3.axhline(y=5000, color=RED, linestyle='--', alpha=0.7, label='Warning threshold')
+    ax3.grid(True, alpha=0.3)
+    ax3.legend(loc='upper left', framealpha=0.8)
+    plt.setp(ax3.xaxis.get_majorticklabels(), rotation=45, ha='right')
+
+    # 4. Tool Distribution (pie)
+    ax4 = fig.add_subplot(gs[2, 2])
+    ax4.set_title('Tool Execution Distribution', fontsize=12, fontweight='bold', pad=10)
+    tool_names = [row[0] for row in data['tool_stats'][:8]]
+    tool_counts = [row[1] for row in data['tool_stats'][:8]]
+    tool_colors = [BLUE, GREEN, PURPLE, YELLOW, RED, CYAN, ORANGE, '#ec4899'][:len(tool_names)]
+    if tool_names:
+        wedges, texts, autotexts = ax4.pie(tool_counts, labels=tool_names, colors=tool_colors,
+                                           autopct='%1.0f%%', pctdistance=0.75,
+                                           wedgeprops=dict(width=0.5))
+        for autotext in autotexts:
+            autotext.set_fontsize(8)
+            autotext.set_color('white')
+        for text in texts:
+            text.set_fontsize(8)
+
+    # 5. Tool Latency (horizontal bar)
+    ax5 = fig.add_subplot(gs[3, 0:2])
+    ax5.set_title('Tool Latency p95 (log scale)', fontsize=12, fontweight='bold', pad=10)
+    tool_lat_names = [row[0] for row in data['tool_stats'][:7]]
+    tool_lat_p95 = [row[3] for row in data['tool_stats'][:7]]
+    tool_lat_colors = [RED, ORANGE, BLUE, YELLOW, PURPLE, GREEN, CYAN][:len(tool_lat_names)]
+    if tool_lat_names:
+        y_pos = np.arange(len(tool_lat_names))
+        bars = ax5.barh(y_pos, tool_lat_p95, color=tool_lat_colors, height=0.6)
+        ax5.set_yticks(y_pos)
+        ax5.set_yticklabels(tool_lat_names)
+        ax5.set_xscale('log')
+        ax5.set_xlabel('milliseconds (log scale)')
+        ax5.invert_yaxis()
+        ax5.grid(True, alpha=0.3, axis='x')
+        for bar, val in zip(bars, tool_lat_p95):
+            ax5.text(val * 1.1, bar.get_y() + bar.get_height()/2,
+                     f'{val:,.0f}ms', va='center', fontsize=9, color='white')
+
+    # 6. Key Insights box
+    ax6 = fig.add_subplot(gs[3, 2])
+    ax6.axis('off')
+    ax6.set_title('Key Insights', fontsize=12, fontweight='bold', pad=10, loc='left')
+
+    # Build insights from data
+    insights = []
+
+    # Check poll cycle health
+    if 'poll_cycle_ms' in daily_by_metric:
+        max_p95 = max(daily_by_metric['poll_cycle_ms']['p95'])
+        if max_p95 < 10:
+            insights.append(('HEALTHY', f'Poll cycle <10ms p95', GREEN))
+        elif max_p95 < 100:
+            insights.append(('OK', f'Poll cycle {max_p95:.0f}ms p95', YELLOW))
+        else:
+            insights.append(('WARNING', f'Poll cycle {max_p95:.0f}ms p95', RED))
+
+    # Check SMS latency
+    if 'send_sms_ms' in daily_by_metric:
+        max_p95 = max(daily_by_metric['send_sms_ms']['p95'])
+        if max_p95 > 10000:
+            insights.append(('WARNING', f'SMS spike: {max_p95/1000:.0f}s', RED))
+        elif max_p95 < 5000:
+            insights.append(('HEALTHY', f'SMS latency <5s p95', GREEN))
+
+    # Check error rates
+    for row in data['error_rates'][:3]:
+        tool, errors, total, error_pct = row
+        if error_pct > 10:
+            insights.append(('ERROR', f'{tool} {error_pct:.0f}% error rate', RED))
+        elif error_pct > 5:
+            insights.append(('WARNING', f'{tool} {error_pct:.0f}% error rate', YELLOW))
+
+    # Check slow skills
+    for row in data['skill_stats'][:2]:
+        skill, count, avg, p95 = row
+        if p95 > 60000:
+            insights.append(('SLOW', f'{skill} p95: {p95/1000:.0f}s', YELLOW))
+
+    for i, (status, text, color) in enumerate(insights[:6]):
+        y = 0.85 - i * 0.15
+        ax6.text(0.05, y, status, fontsize=10, color=color, fontweight='bold',
+                 transform=ax6.transAxes, verticalalignment='top')
+        ax6.text(0.35, y, text, fontsize=10, color='#94a3b8',
+                 transform=ax6.transAxes, verticalalignment='top')
+
+    # Footer
+    fig.text(0.5, 0.01, f'Generated by perf-dashboard | Data from ~/dispatch/logs/perf-*.jsonl | {datetime.now().strftime("%Y-%m-%d %H:%M")}',
+             ha='center', fontsize=10, color='#64748b')
+
+    plt.savefig(output_path, dpi=150, bbox_inches='tight',
+                facecolor='#0f172a', edgecolor='none')
+    print(f'Dashboard saved to {output_path}')
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Generate a PNG performance dashboard from perf logs.')
+    parser.add_argument('--days', type=int, default=7, help='Number of days to include (default: 7)')
+    parser.add_argument('--output', '-o', type=str, default='/tmp/perf_dashboard.png', help='Output path (default: /tmp/perf_dashboard.png)')
+    args = parser.parse_args()
+
+    print(f'Querying perf data for last {args.days} days...')
+    data = query_data(args.days)
+
+    print(f'Rendering dashboard...')
+    render_dashboard(data, args.output)
+
+
+if __name__ == '__main__':
+    main()

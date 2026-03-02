@@ -1,0 +1,271 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["fal-client", "requests"]
+# ///
+"""
+Generate videos from images using fal.ai APIs.
+
+Usage:
+    generate --model kling /path/to/image.jpg "A ferrofluid pulsing and flowing"
+    generate --model veo /path/to/image.jpg "Metallic spikes undulating" -o /tmp/output.mp4
+    generate --list-models
+"""
+
+import argparse
+import base64
+import json
+import os
+import sys
+from pathlib import Path
+
+import fal_client
+import requests
+
+
+MODELS = {
+    "kling": {
+        "id": "fal-ai/kling-video/v2.6/pro/image-to-video",
+        "name": "Kling 2.6 Pro",
+        "description": "Professional quality, native audio ($0.07-0.14/sec)",
+        "default_duration": "5",
+    },
+    "kling-standard": {
+        "id": "fal-ai/kling-video/v2.1/standard/image-to-video",
+        "name": "Kling 2.1 Standard",
+        "description": "Good quality, faster ($0.05/sec)",
+        "default_duration": "5",
+    },
+    "kling3": {
+        "id": "fal-ai/kling-video/v3/standard/image-to-video",
+        "name": "Kling 3.0 Standard",
+        "description": "Latest Kling, improved motion ($0.08/sec)",
+        "default_duration": "5",
+    },
+    "veo": {
+        "id": "fal-ai/veo2/image-to-video",
+        "name": "Veo 2",
+        "description": "Google's model, smooth motion ($2.50 for 5s)",
+        "default_duration": None,  # Veo doesn't take duration param
+    },
+    "veo3": {
+        "id": "fal-ai/veo3/image-to-video",
+        "name": "Veo 3",
+        "description": "Google's newest, highest quality ($3.00 for 5s)",
+        "default_duration": None,
+    },
+    "veo3.1": {
+        "id": "fal-ai/veo3.1/image-to-video",
+        "name": "Veo 3.1",
+        "description": "Google's latest, frame interpolation, better motion (~$3.50 for 5s)",
+        "default_duration": None,
+    },
+    "veo3.1-fast": {
+        "id": "fal-ai/veo3.1/fast/image-to-video",
+        "name": "Veo 3.1 Fast",
+        "description": "Faster Veo 3.1, good for iteration (~$2.00 for 5s)",
+        "default_duration": None,
+    },
+    "minimax": {
+        "id": "fal-ai/minimax/video-01/image-to-video",
+        "name": "MiniMax Video-01",
+        "description": "Chinese model, good quality ($0.10/sec)",
+        "default_duration": None,
+    },
+}
+
+
+def load_api_key():
+    """Load FAL_KEY from secrets.env or keychain."""
+    secrets_path = Path.home() / ".claude" / "secrets.env"
+    if secrets_path.exists():
+        with open(secrets_path) as f:
+            for line in f:
+                if line.startswith("FAL_KEY="):
+                    return line.strip().split("=", 1)[1]
+
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["security", "find-generic-password", "-s", "fal-api-key", "-w"],
+            capture_output=True, text=True
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
+
+    raise RuntimeError("FAL_KEY not found in ~/.claude/secrets.env or keychain (fal-api-key)")
+
+
+def image_to_data_url(image_path: str) -> str:
+    """Convert image file to data URL."""
+    path = Path(image_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Image not found: {image_path}")
+
+    with open(path, "rb") as f:
+        image_data = base64.b64encode(f.read()).decode()
+
+    ext = path.suffix.lower()
+    mime_types = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".webp": "image/webp",
+    }
+    mime = mime_types.get(ext, "image/jpeg")
+
+    return f"data:{mime};base64,{image_data}"
+
+
+def generate_video(
+    image_path: str,
+    prompt: str,
+    model: str,
+    output_path: str = None,
+    duration: str = None,
+    aspect_ratio: str = None,
+) -> dict:
+    """Generate video from image."""
+    if model not in MODELS:
+        raise ValueError(f"Unknown model: {model}. Available: {list(MODELS.keys())}")
+
+    model_info = MODELS[model]
+
+    os.environ["FAL_KEY"] = load_api_key()
+
+    data_url = image_to_data_url(image_path)
+
+    print(f"Generating video with {model_info['name']}...")
+    print(f"Image: {image_path}")
+    print(f"Prompt: {prompt}")
+
+    # Build arguments based on model
+    args = {
+        "prompt": prompt,
+        "image_url": data_url,
+    }
+
+    # Add duration for models that support it
+    if model_info.get("default_duration"):
+        args["duration"] = duration or model_info["default_duration"]
+
+    # Add aspect ratio if specified (most models support 16:9, 9:16, 1:1)
+    if aspect_ratio:
+        args["aspect_ratio"] = aspect_ratio
+
+    # Kling-specific params
+    if model.startswith("kling"):
+        args["negative_prompt"] = "blur, distortion, low quality, artifacts"
+        args["cfg_scale"] = 0.5
+
+    print(f"Calling {model_info['id']}...")
+
+    # Call API with progress logging
+    def on_queue_update(update):
+        if hasattr(update, 'logs') and update.logs:
+            for log in update.logs:
+                if hasattr(log, 'message'):
+                    print(f"  {log.message}")
+
+    result = fal_client.subscribe(
+        model_info["id"],
+        arguments=args,
+        with_logs=True,
+        on_queue_update=on_queue_update,
+    )
+
+    # Find video URL in result
+    video_url = None
+    if "video" in result:
+        video_url = result["video"].get("url")
+    elif "video_url" in result:
+        video_url = result["video_url"]
+
+    if video_url:
+        # Determine output path
+        if output_path is None:
+            input_stem = Path(image_path).stem
+            output_path = f"/tmp/{input_stem}_{model}.mp4"
+
+        print(f"Downloading video from: {video_url}")
+        r = requests.get(video_url)
+        r.raise_for_status()
+
+        with open(output_path, "wb") as f:
+            f.write(r.content)
+
+        print(f"Saved to: {output_path}")
+        result["local_path"] = output_path
+    else:
+        print("Warning: No video URL in response")
+        print(f"Full result: {json.dumps(result, indent=2)}")
+
+    return result
+
+
+def list_models():
+    """List available models."""
+    print("Available models:\n")
+    for key, info in MODELS.items():
+        print(f"  {key:15} - {info['name']}")
+        print(f"                  {info['description']}")
+        print()
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Generate videos from images")
+    parser.add_argument("image", nargs="?", help="Path to input image")
+    parser.add_argument("prompt", nargs="?", help="Motion/animation prompt")
+    parser.add_argument("-m", "--model", default="kling",
+                       choices=list(MODELS.keys()),
+                       help="Model to use (default: kling)")
+    parser.add_argument("-o", "--output", help="Output MP4 path")
+    parser.add_argument("-d", "--duration", help="Duration in seconds (model-dependent)")
+    parser.add_argument("--aspect-ratio", help="Aspect ratio (16:9, 9:16, 1:1)")
+    parser.add_argument("--list-models", action="store_true",
+                       help="List available models")
+    parser.add_argument("--json", action="store_true",
+                       help="Output full result as JSON")
+
+    args = parser.parse_args()
+
+    if args.list_models:
+        list_models()
+        return 0
+
+    if not args.image:
+        parser.error("Image path required (or use --list-models)")
+
+    if not args.prompt:
+        parser.error("Prompt required")
+
+    try:
+        result = generate_video(
+            args.image,
+            args.prompt,
+            args.model,
+            args.output,
+            args.duration,
+            args.aspect_ratio,
+        )
+
+        if args.json:
+            print(json.dumps(result, indent=2))
+        else:
+            print("\n✅ Generation complete!")
+            if "local_path" in result:
+                print(f"   Output: {result['local_path']}")
+
+        return 0
+
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

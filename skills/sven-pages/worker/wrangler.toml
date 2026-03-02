@@ -1,0 +1,25 @@
+name = "sven-pages-worker"
+main = "src/index.js"
+compatibility_date = "2024-01-01"
+
+# Custom domain (set up in Cloudflare dashboard)
+# routes = [{ pattern = "pages.sven.dev/*", zone_name = "sven.dev" }]
+
+[vars]
+# Admin emails who can upload/manage pages (comma-separated)
+ADMIN_EMAILS = "nicklaudethorat@gmail.com,nsthorat@gmail.com"
+
+[[kv_namespaces]]
+binding = "SVEN_PAGES"
+id = "644369492ed249508c7905ae4eb4f083"
+
+# To deploy:
+# cd ~/.claude/skills/sven-pages/worker
+# wrangler deploy
+#
+# After deploying, configure Cloudflare Access:
+# 1. Go to Cloudflare Zero Trust Dashboard
+# 2. Access > Applications > Add application
+# 3. Self-hosted: sven-pages-worker.*.workers.dev/*
+# 4. Policy: Allow emails ending in @gmail.com (or specific emails)
+# 5. Authentication: One-time PIN (email) or Google OAuth
