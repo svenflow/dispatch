@@ -12,11 +12,11 @@
 webfetch - Fetch web pages using zendriver headless browser.
 
 Usage:
-    webfetch <url> [--timeout SECONDS] [--raw] [--screenshot PATH]
+    webfetch <url> [--timeout SECONDS] [--raw]
 
 Uses zendriver (undetected Chrome) for reliable fetching that bypasses
 most anti-bot protection. Automatically injects Chrome cookies for
-authenticated access.
+authenticated access. Always saves a screenshot to /tmp for debugging.
 """
 
 import argparse
@@ -27,6 +27,7 @@ import subprocess
 import sys
 import re
 import tempfile
+import time
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -284,7 +285,6 @@ def main():
     parser.add_argument(
         "--raw", action="store_true", help="Output raw HTML instead of markdown"
     )
-    parser.add_argument("--screenshot", type=str, help="Save screenshot to path")
     # Deprecated flags kept for backwards compat
     parser.add_argument(
         "--force-headless", action="store_true", help="Deprecated (now default)"
@@ -299,9 +299,14 @@ def main():
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
 
+    # Always screenshot to /tmp with timestamp
+    timestamp = int(time.time())
+    domain = urlparse(url).netloc.replace(".", "_")
+    screenshot_path = f"/tmp/webfetch_{domain}_{timestamp}.png"
+
     print("[zendriver] Fetching with headless browser + cookies...", file=sys.stderr)
 
-    html, error = fetch_with_zendriver(url, args.timeout, args.screenshot)
+    html, error = fetch_with_zendriver(url, args.timeout, screenshot_path)
 
     if error:
         print(f"[zendriver] Error: {error}", file=sys.stderr)
@@ -317,8 +322,8 @@ def main():
         print("Failed to fetch content", file=sys.stderr)
         sys.exit(1)
 
-    if args.screenshot:
-        print(f"[zendriver] Screenshot saved to {args.screenshot}", file=sys.stderr)
+    # Output screenshot path to stdout first (for retroactive debugging)
+    print(f"Screenshot: {screenshot_path}")
 
     # Output
     if args.raw:
