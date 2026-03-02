@@ -5,40 +5,194 @@
 #     "zendriver>=0.15",
 #     "markdownify>=0.11",
 #     "beautifulsoup4>=4.12",
+#     "cryptography>=41.0",
 # ]
 # ///
 """
 webfetch - Fetch web pages using zendriver headless browser.
 
 Usage:
-    webfetch <url> [--timeout SECONDS] [--raw]
+    webfetch <url> [--timeout SECONDS] [--raw] [--screenshot PATH]
 
 Uses zendriver (undetected Chrome) for reliable fetching that bypasses
-most anti-bot protection.
+most anti-bot protection. Automatically injects Chrome cookies for
+authenticated access.
 """
 
 import argparse
 import asyncio
+import hashlib
+import sqlite3
+import subprocess
 import sys
 import re
+import tempfile
+from pathlib import Path
 from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
 from markdownify import markdownify as md
 
 
-async def fetch_with_zendriver_async(url: str, timeout: int = 30) -> tuple[str | None, str | None]:
+def unpad(data: bytes) -> bytes:
+    """Remove PKCS7 padding."""
+    if not data:
+        return data
+    padding_len = data[-1]
+    if padding_len > 16 or padding_len == 0:
+        return data
+    if all(b == padding_len for b in data[-padding_len:]):
+        return data[:-padding_len]
+    return data
+
+
+def get_chrome_cookies(domain: str) -> list[dict]:
+    """Extract cookies from Chrome for a given domain."""
+    cookies_db = Path.home() / "Library/Application Support/Google/Chrome/Default/Cookies"
+    if not cookies_db.exists():
+        return []
+
+    # Copy to temp file (Chrome locks the db)
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".db") as tmp:
+        tmp.write(cookies_db.read_bytes())
+        tmp_path = tmp.name
+
+    try:
+        conn = sqlite3.connect(tmp_path)
+        cursor = conn.cursor()
+
+        # Get cookies for domain and parent domains
+        cursor.execute(
+            """
+            SELECT host_key, name, encrypted_value, path, expires_utc, is_secure, is_httponly
+            FROM cookies WHERE host_key LIKE ?
+            """,
+            (f"%{domain}%",),
+        )
+
+        rows = cursor.fetchall()
+        conn.close()
+    finally:
+        Path(tmp_path).unlink()
+
+    if not rows:
+        return []
+
+    # Get decryption key from keychain
+    key_result = subprocess.run(
+        ["security", "find-generic-password", "-s", "Chrome Safe Storage", "-w"],
+        capture_output=True,
+        text=True,
+    )
+    if key_result.returncode != 0:
+        return []
+
+    password = key_result.stdout.strip()
+
+    from cryptography.hazmat.backends import default_backend
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA1(),
+        length=16,
+        salt=b"saltysalt",
+        iterations=1003,
+        backend=default_backend(),
+    )
+    key = kdf.derive(password.encode())
+
+    cookies = []
+    for host_key, name, encrypted_value, path, expires_utc, is_secure, is_httponly in rows:
+        if not encrypted_value or len(encrypted_value) < 4:
+            continue
+
+        # v10 format (macOS)
+        if encrypted_value[:3] == b"v10":
+            encrypted_value = encrypted_value[3:]
+            iv = b" " * 16
+            cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
+            decryptor = cipher.decryptor()
+            decrypted = decryptor.update(encrypted_value) + decryptor.finalize()
+
+            # Check for domain hash prefix (newer Chrome - crrev.com/c/5792044)
+            if len(decrypted) >= 32:
+                hash_value = decrypted[:32]
+                computed = hashlib.sha256(host_key.encode()).digest()
+                if hash_value == computed:
+                    value = unpad(decrypted[32:]).decode("utf-8", errors="ignore")
+                else:
+                    value = unpad(decrypted).decode("utf-8", errors="ignore")
+            else:
+                value = unpad(decrypted).decode("utf-8", errors="ignore")
+
+            cookies.append(
+                {
+                    "name": name,
+                    "value": value,
+                    "domain": host_key,
+                    "path": path,
+                    "secure": bool(is_secure),
+                    "httpOnly": bool(is_httponly),
+                }
+            )
+
+    return cookies
+
+
+async def fetch_with_zendriver_async(
+    url: str, timeout: int = 30, screenshot_path: str | None = None
+) -> tuple[str | None, str | None]:
     """Fetch with zendriver headless. Returns (html, error)."""
     browser = None
     try:
         import zendriver as zd
 
+        # Extract domain for cookies
+        parsed = urlparse(url)
+        domain = parsed.netloc.replace("www.", "")
+
         async def do_fetch():
             nonlocal browser
             browser = await zd.start(headless=True)
+
+            # Navigate to page first (establishes domain context)
             page = await browser.get(url)
+            await asyncio.sleep(1)
+
+            # Inject cookies
+            cookies = get_chrome_cookies(domain)
+            if cookies:
+                for cookie in cookies:
+                    try:
+                        cookie_domain = cookie["domain"]
+                        if not cookie_domain.startswith("."):
+                            cookie_domain = "." + cookie_domain.lstrip(".")
+
+                        await page.send(
+                            zd.cdp.network.set_cookie(
+                                name=cookie["name"],
+                                value=cookie["value"],
+                                domain=cookie_domain,
+                                path=cookie["path"],
+                                secure=cookie["secure"],
+                                http_only=cookie["httpOnly"],
+                            )
+                        )
+                    except Exception:
+                        pass  # Some cookies may fail CDP validation
+
+                # Reload to pick up cookies
+                await page.reload()
+
             # Wait for content to render
             await asyncio.sleep(2)
+
+            # Take screenshot if requested
+            if screenshot_path:
+                await page.save_screenshot(screenshot_path)
+
             html = await page.get_content()
             return html
 
@@ -57,9 +211,11 @@ async def fetch_with_zendriver_async(url: str, timeout: int = 30) -> tuple[str |
                 pass
 
 
-def fetch_with_zendriver(url: str, timeout: int = 30) -> tuple[str | None, str | None]:
+def fetch_with_zendriver(
+    url: str, timeout: int = 30, screenshot_path: str | None = None
+) -> tuple[str | None, str | None]:
     """Sync wrapper for zendriver fetch."""
-    return asyncio.run(fetch_with_zendriver_async(url, timeout))
+    return asyncio.run(fetch_with_zendriver_async(url, timeout, screenshot_path))
 
 
 def html_to_markdown(html: str, url: str) -> str:
@@ -67,11 +223,18 @@ def html_to_markdown(html: str, url: str) -> str:
     soup = BeautifulSoup(html, "html.parser")
 
     # Remove script, style, nav, footer, header elements
-    for tag in soup.find_all(["script", "style", "nav", "footer", "header", "aside", "noscript"]):
+    for tag in soup.find_all(
+        ["script", "style", "nav", "footer", "header", "aside", "noscript"]
+    ):
         tag.decompose()
 
     # Try to find main content
-    main = soup.find("main") or soup.find("article") or soup.find(id="content") or soup.find(class_="content")
+    main = (
+        soup.find("main")
+        or soup.find("article")
+        or soup.find(id="content")
+        or soup.find(class_="content")
+    )
     if main:
         content = str(main)
     else:
@@ -83,7 +246,7 @@ def html_to_markdown(html: str, url: str) -> str:
     markdown = md(content, heading_style="ATX", strip=["img"])
 
     # Clean up excessive whitespace
-    markdown = re.sub(r'\n{3,}', '\n\n', markdown)
+    markdown = re.sub(r"\n{3,}", "\n\n", markdown)
     markdown = markdown.strip()
 
     # Add source URL
@@ -118,31 +281,44 @@ def main():
     parser = argparse.ArgumentParser(description="Fetch web pages with zendriver")
     parser.add_argument("url", help="URL to fetch")
     parser.add_argument("--timeout", type=int, default=30, help="Timeout in seconds")
-    parser.add_argument("--raw", action="store_true", help="Output raw HTML instead of markdown")
+    parser.add_argument(
+        "--raw", action="store_true", help="Output raw HTML instead of markdown"
+    )
+    parser.add_argument("--screenshot", type=str, help="Save screenshot to path")
     # Deprecated flags kept for backwards compat
-    parser.add_argument("--force-headless", action="store_true", help="Deprecated (now default)")
+    parser.add_argument(
+        "--force-headless", action="store_true", help="Deprecated (now default)"
+    )
     parser.add_argument("--force-playwright", action="store_true", help="Deprecated")
-    parser.add_argument("--no-cookies", action="store_true", help="Deprecated (cookies not used)")
+    parser.add_argument(
+        "--no-cookies", action="store_true", help="Deprecated (cookies always used)"
+    )
     args = parser.parse_args()
 
     url = args.url
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
 
-    print("[zendriver] Fetching with headless browser...", file=sys.stderr)
+    print("[zendriver] Fetching with headless browser + cookies...", file=sys.stderr)
 
-    html, error = fetch_with_zendriver(url, args.timeout)
+    html, error = fetch_with_zendriver(url, args.timeout, args.screenshot)
 
     if error:
         print(f"[zendriver] Error: {error}", file=sys.stderr)
         sys.exit(1)
 
     if html and looks_like_antibot_page(html):
-        print("[zendriver] Warning: antibot page detected. Try: ~/.claude/skills/chrome-control/scripts/chrome fetch <url>", file=sys.stderr)
+        print(
+            "[zendriver] Warning: antibot page detected. Try: ~/.claude/skills/chrome-control/scripts/chrome fetch <url>",
+            file=sys.stderr,
+        )
 
     if not html:
         print("Failed to fetch content", file=sys.stderr)
         sys.exit(1)
+
+    if args.screenshot:
+        print(f"[zendriver] Screenshot saved to {args.screenshot}", file=sys.stderr)
 
     # Output
     if args.raw:
