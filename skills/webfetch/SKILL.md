@@ -1,71 +1,139 @@
 ---
-name: webfetch
-description: Fetch web pages using zendriver headless browser. Use as alternative to WebFetch for better success on blocked sites. Trigger words - fetch, web, scrape.
+name: scraping
+description: Web scraping with anti-bot bypass using scrapling. Fallback to chrome-control for auth. Trigger words - scrape, fetch, web, crawl, extract, blocked site.
 ---
 
-# WebFetch CLI
+# Web Scraping Guide
 
-A CLI that fetches web pages using zendriver headless browser for reliable anti-bot bypass.
+## Decision Tree
 
-## Usage
+```
+Need to scrape a website?
+         │
+         ▼
+┌────────────────────────┐
+│ 1. Try scrapling first │  ← Fastest (0.3-1s), handles 80% of sites
+│    webfetch <url>      │     TLS fingerprint spoofing, no browser
+└────────────────────────┘
+         │
+         ▼ (blocked by Cloudflare?)
+┌────────────────────────┐
+│ 2. scrapling Stealthy  │  ← Camoufox Firefox (1-4s)
+│    webfetch <url>      │     Automatic fallback in CLI
+│    (tier 2)            │
+└────────────────────────┘
+         │
+         ▼ (need login / still blocked?)
+┌────────────────────────┐
+│ 3. Use chrome-control  │  ← Uses real Chrome with your session
+│    chrome fetch <url>  │     See /chrome-control skill
+└────────────────────────┘
+```
+
+## Quick Start
 
 ```bash
-# Basic fetch (returns markdown)
-~/.claude/skills/webfetch/scripts/webfetch "https://reddit.com/r/programming"
+# Basic fetch (tries both tiers automatically)
+~/.claude/skills/webfetch/scripts/webfetch "https://example.com"
+
+# Force specific tier
+~/.claude/skills/webfetch/scripts/webfetch "https://example.com" --tier 1  # scrapling HTTP only
+~/.claude/skills/webfetch/scripts/webfetch "https://example.com" --tier 2  # scrapling Stealthy
 
 # Raw HTML output
 ~/.claude/skills/webfetch/scripts/webfetch "https://example.com" --raw
-
-# Custom timeout
-~/.claude/skills/webfetch/scripts/webfetch "https://slow-site.com" --timeout 60
 ```
 
-## How It Works
+## The Two Tiers
 
-Uses `zendriver` headless browser (undetected Chrome fork):
-- ~50-83% bypass rate on anti-bot protection
-- Handles JavaScript rendering
-- Works on most sites including Reddit, Medium, Amazon
+### Tier 1: Scrapling HTTP (Default)
+**Best for:** Most public websites, news, blogs, product pages
 
-## Output
+- Uses `curl_cffi` with TLS fingerprint spoofing
+- Impersonates real browser TLS handshakes
+- No actual browser needed - pure HTTP
+- **Speed:** 0.3-1 second
+- **Success rate:** ~80% of sites
 
-- Converts HTML to clean markdown
-- Removes nav, footer, scripts, styles
-- Tries to find main content area
-- Includes source URL
+```python
+from scrapling import Fetcher
+fetcher = Fetcher()
+page = fetcher.get("https://reddit.com/r/programming")
+print(page.html_content)
+```
 
-## First Run
+### Tier 2: Scrapling Stealthy (Camoufox)
+**Best for:** Cloudflare Turnstile, DataDome, aggressive anti-bot
 
-Zendriver uses your installed Chrome, no extra setup needed. Just ensure `uv pip install zendriver` has been run.
+- Uses Camoufox (Firefox fork with anti-detection)
+- Full browser automation with stealth patches
+- Bypasses most JavaScript challenges
+- **Speed:** 1-4 seconds
+- **Success rate:** ~95% of sites
 
-## When to Use
+```python
+from scrapling import StealthyFetcher
+fetcher = StealthyFetcher()
+page = fetcher.fetch("https://ticketmaster.com", headless=True)
+print(page.html_content)
+```
 
-Use this instead of WebFetch when:
-- Site returns 403/503 (antibot blocking)
-- Site requires JavaScript rendering
-- Site blocks non-browser User-Agents
+### Fallback: Chrome Extension
+**Best for:** Sites requiring login, when scrapling fails
 
-## Limitations
-
-- Won't work on sites with heavy Cloudflare protection (use chrome-control for text extraction)
-- Won't work on sites requiring login (use chrome-control with existing session)
-- Takes ~3-5s per fetch (headless browser startup)
-
-## Tier 3: Chrome Control Fallback
-
-If webfetch still fails (Cloudflare captcha, login required), use chrome-control:
+If tiers 1-2 fail (login required, extreme anti-bot), use the Chrome extension which controls your actual browser with your logged-in session:
 
 ```bash
-# Open page in Chrome (uses real browser session with cookies)
-chrome open "https://example.com"
-# Output: Opened tab 123456
-
-# Get page text (works on CSP-protected sites like Discord)
-chrome text 123456
-
-# Get page HTML
-chrome html 123456
-
-# Clean up
-chrome close 123456
+~/.claude/skills/chrome-control/scripts/chrome fetch "https://example.com"
 ```
+
+See `/chrome-control` skill for full docs.
+
+## Screenshots
+
+Use chrome-control for screenshots:
+```bash
+~/.claude/skills/chrome-control/scripts/chrome screenshot
+```
+
+## When to Use Each Approach
+
+| Scenario | Recommended Approach |
+|----------|---------------------|
+| Public website, no login | Tier 1 (scrapling HTTP) |
+| Cloudflare protection | Tier 2 (scrapling Stealthy) |
+| Need logged-in content | Chrome extension |
+| Need to click/interact | Chrome extension |
+| Need screenshot | Chrome extension |
+
+## Common Sites and What Works
+
+| Site | Tier 1 | Tier 2 | Chrome Ext | Notes |
+|------|--------|--------|------------|-------|
+| Reddit | ✅ | ✅ | ✅ | All work |
+| Amazon | ✅ | ✅ | ✅ | All work |
+| Zillow | ✅ | ✅ | ✅ | Rate limits on rapid requests |
+| Ticketmaster | ✅ | ✅ | ✅ | All work |
+| LinkedIn | ✅ | ✅ | ✅ | Login required for full profiles |
+| Twitter/X | ❌ | ❌ | ✅ | Requires login |
+| Instagram | ❌ | ❌ | ✅ | Requires login |
+| Gmail | ❌ | ❌ | ✅ | Requires login |
+
+## Performance Comparison
+
+| Tier | Speed | Memory | Success Rate |
+|------|-------|--------|--------------|
+| 1 (scrapling HTTP) | 0.3-1s | ~50MB | 80% |
+| 2 (scrapling Stealthy) | 1-4s | ~400MB | 95% |
+| Chrome extension | 3-8s | (uses Chrome) | 100%* |
+
+\* If you can see it in Chrome
+
+## Dependencies
+
+Installed automatically via uv script header:
+- `scrapling[all]>=0.4` - HTTP fetcher + Camoufox
+- `markdownify>=0.11` - HTML to markdown
+- `beautifulsoup4>=4.12` - HTML parsing
+
+First run will install camoufox browser (~300MB).

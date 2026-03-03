@@ -2,221 +2,64 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "zendriver>=0.15",
+#     "scrapling[all]>=0.4",
 #     "markdownify>=0.11",
 #     "beautifulsoup4>=4.12",
-#     "cryptography>=41.0",
 # ]
 # ///
 """
-webfetch - Fetch web pages using zendriver headless browser.
+webfetch - Fetch web pages with anti-bot bypass using scrapling.
 
 Usage:
-    webfetch <url> [--timeout SECONDS] [--raw]
+    webfetch <url> [--timeout SECONDS] [--raw] [--tier TIER]
 
-Uses zendriver (undetected Chrome) for reliable fetching that bypasses
-most anti-bot protection. Automatically injects Chrome cookies for
-authenticated access. Always saves a screenshot to /tmp for debugging.
+Tiered fetching strategy:
+  Tier 1: scrapling HTTP (TLS fingerprint spoofing, fastest)
+  Tier 2: scrapling StealthyFetcher (Camoufox Firefox, for Cloudflare)
+  Fallback: chrome-control extension (for auth-required sites)
+
+By default, tries tiers in order until one succeeds.
 """
 
 import argparse
-import asyncio
-import hashlib
-import sqlite3
-import subprocess
 import sys
 import re
-import tempfile
-import time
-from pathlib import Path
 from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
 from markdownify import markdownify as md
 
 
-def unpad(data: bytes) -> bytes:
-    """Remove PKCS7 padding."""
-    if not data:
-        return data
-    padding_len = data[-1]
-    if padding_len > 16 or padding_len == 0:
-        return data
-    if all(b == padding_len for b in data[-padding_len:]):
-        return data[:-padding_len]
-    return data
-
-
-def get_chrome_cookies(domain: str) -> list[dict]:
-    """Extract cookies from Chrome for a given domain."""
-    cookies_db = Path.home() / "Library/Application Support/Google/Chrome/Default/Cookies"
-    if not cookies_db.exists():
-        return []
-
-    # Copy to temp file (Chrome locks the db)
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".db") as tmp:
-        tmp.write(cookies_db.read_bytes())
-        tmp_path = tmp.name
-
+def fetch_with_scrapling_http(url: str, timeout: int = 30) -> tuple[str | None, str | None]:
+    """Tier 1: Fast HTTP fetch with TLS fingerprint spoofing."""
     try:
-        conn = sqlite3.connect(tmp_path)
-        cursor = conn.cursor()
+        from scrapling import Fetcher
 
-        # Get cookies for domain and parent domains
-        cursor.execute(
-            """
-            SELECT host_key, name, encrypted_value, path, expires_utc, is_secure, is_httponly
-            FROM cookies WHERE host_key LIKE ?
-            """,
-            (f"%{domain}%",),
-        )
+        fetcher = Fetcher()
+        page = fetcher.get(url, timeout=timeout)
+        html = page.html_content if hasattr(page, 'html_content') else None
 
-        rows = cursor.fetchall()
-        conn.close()
-    finally:
-        Path(tmp_path).unlink()
-
-    if not rows:
-        return []
-
-    # Get decryption key from keychain
-    key_result = subprocess.run(
-        ["security", "find-generic-password", "-s", "Chrome Safe Storage", "-w"],
-        capture_output=True,
-        text=True,
-    )
-    if key_result.returncode != 0:
-        return []
-
-    password = key_result.stdout.strip()
-
-    from cryptography.hazmat.backends import default_backend
-    from cryptography.hazmat.primitives import hashes
-    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-
-    kdf = PBKDF2HMAC(
-        algorithm=hashes.SHA1(),
-        length=16,
-        salt=b"saltysalt",
-        iterations=1003,
-        backend=default_backend(),
-    )
-    key = kdf.derive(password.encode())
-
-    cookies = []
-    for host_key, name, encrypted_value, path, expires_utc, is_secure, is_httponly in rows:
-        if not encrypted_value or len(encrypted_value) < 4:
-            continue
-
-        # v10 format (macOS)
-        if encrypted_value[:3] == b"v10":
-            encrypted_value = encrypted_value[3:]
-            iv = b" " * 16
-            cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
-            decryptor = cipher.decryptor()
-            decrypted = decryptor.update(encrypted_value) + decryptor.finalize()
-
-            # Check for domain hash prefix (newer Chrome - crrev.com/c/5792044)
-            if len(decrypted) >= 32:
-                hash_value = decrypted[:32]
-                computed = hashlib.sha256(host_key.encode()).digest()
-                if hash_value == computed:
-                    value = unpad(decrypted[32:]).decode("utf-8", errors="ignore")
-                else:
-                    value = unpad(decrypted).decode("utf-8", errors="ignore")
-            else:
-                value = unpad(decrypted).decode("utf-8", errors="ignore")
-
-            cookies.append(
-                {
-                    "name": name,
-                    "value": value,
-                    "domain": host_key,
-                    "path": path,
-                    "secure": bool(is_secure),
-                    "httpOnly": bool(is_httponly),
-                }
-            )
-
-    return cookies
-
-
-async def fetch_with_zendriver_async(
-    url: str, timeout: int = 30, screenshot_path: str | None = None
-) -> tuple[str | None, str | None]:
-    """Fetch with zendriver headless. Returns (html, error)."""
-    browser = None
-    try:
-        import zendriver as zd
-
-        # Extract domain for cookies
-        parsed = urlparse(url)
-        domain = parsed.netloc.replace("www.", "")
-
-        async def do_fetch():
-            nonlocal browser
-            browser = await zd.start(headless=True)
-
-            # Navigate to page first (establishes domain context)
-            page = await browser.get(url)
-            await asyncio.sleep(1)
-
-            # Inject cookies
-            cookies = get_chrome_cookies(domain)
-            if cookies:
-                for cookie in cookies:
-                    try:
-                        cookie_domain = cookie["domain"]
-                        if not cookie_domain.startswith("."):
-                            cookie_domain = "." + cookie_domain.lstrip(".")
-
-                        await page.send(
-                            zd.cdp.network.set_cookie(
-                                name=cookie["name"],
-                                value=cookie["value"],
-                                domain=cookie_domain,
-                                path=cookie["path"],
-                                secure=cookie["secure"],
-                                http_only=cookie["httpOnly"],
-                            )
-                        )
-                    except Exception:
-                        pass  # Some cookies may fail CDP validation
-
-                # Reload to pick up cookies
-                await page.reload()
-
-            # Wait for content to render
-            await asyncio.sleep(2)
-
-            # Take screenshot if requested
-            if screenshot_path:
-                await page.save_screenshot(screenshot_path)
-
-            html = await page.get_content()
-            return html
-
-        # Enforce timeout
-        html = await asyncio.wait_for(do_fetch(), timeout=timeout)
-        return html, None
-    except asyncio.TimeoutError:
-        return None, f"Timeout after {timeout}s"
+        if html and len(html) > 500:
+            return html, None
+        return None, "Empty or minimal content"
     except Exception as e:
         return None, str(e)
-    finally:
-        if browser:
-            try:
-                await browser.stop()
-            except Exception:
-                pass
 
 
-def fetch_with_zendriver(
-    url: str, timeout: int = 30, screenshot_path: str | None = None
-) -> tuple[str | None, str | None]:
-    """Sync wrapper for zendriver fetch."""
-    return asyncio.run(fetch_with_zendriver_async(url, timeout, screenshot_path))
+def fetch_with_scrapling_stealthy(url: str, timeout: int = 30) -> tuple[str | None, str | None]:
+    """Tier 2: Stealthy fetch with Camoufox (Firefox-based)."""
+    try:
+        from scrapling import StealthyFetcher
+
+        fetcher = StealthyFetcher()
+        page = fetcher.fetch(url, headless=True, timeout=timeout * 1000)
+        html = page.html_content if hasattr(page, 'html_content') else None
+
+        if html and len(html) > 500:
+            return html, None
+        return None, "Empty or minimal content"
+    except Exception as e:
+        return None, str(e)
 
 
 def html_to_markdown(html: str, url: str) -> str:
@@ -256,74 +99,84 @@ def html_to_markdown(html: str, url: str) -> str:
 
 
 def looks_like_antibot_page(html: str) -> bool:
-    """Check if the page looks like an antibot challenge."""
+    """Check if the page looks like an antibot challenge (not just mentions cloudflare)."""
     if len(html) < 500:
         return True
 
-    # Common antibot indicators
-    antibot_patterns = [
+    # Only flag as antibot if these specific challenge patterns appear
+    challenge_patterns = [
         "checking your browser",
         "just a moment",
-        "please wait",
+        "please wait while we verify",
         "verify you are human",
-        "captcha",
         "cf-browser-verification",
         "challenge-running",
-        "cloudflare",
-        "security verification",
-        "ray id:",
+        "security check required",
+        "access denied",
+        "unusual traffic",
     ]
 
     html_lower = html.lower()
-    return any(pattern in html_lower for pattern in antibot_patterns)
+
+    # Must match challenge pattern AND have minimal real content
+    has_challenge = any(pattern in html_lower for pattern in challenge_patterns)
+
+    # If page has substantial content (>10KB), it's probably real even with challenge text
+    if len(html) > 10000:
+        return False
+
+    return has_challenge
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Fetch web pages with zendriver")
+    parser = argparse.ArgumentParser(description="Fetch web pages with anti-bot bypass")
     parser.add_argument("url", help="URL to fetch")
     parser.add_argument("--timeout", type=int, default=30, help="Timeout in seconds")
     parser.add_argument(
         "--raw", action="store_true", help="Output raw HTML instead of markdown"
     )
+    parser.add_argument(
+        "--tier", type=int, choices=[1, 2], default=0,
+        help="Force specific tier (1=scrapling HTTP, 2=scrapling Stealthy)"
+    )
     # Deprecated flags kept for backwards compat
-    parser.add_argument(
-        "--force-headless", action="store_true", help="Deprecated (now default)"
-    )
+    parser.add_argument("--force-headless", action="store_true", help="Deprecated")
     parser.add_argument("--force-playwright", action="store_true", help="Deprecated")
-    parser.add_argument(
-        "--no-cookies", action="store_true", help="Deprecated (cookies always used)"
-    )
+    parser.add_argument("--no-cookies", action="store_true", help="Deprecated")
     args = parser.parse_args()
 
     url = args.url
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
 
-    # Always screenshot to /tmp with timestamp
-    timestamp = int(time.time())
-    domain = urlparse(url).netloc.replace(".", "_")
-    screenshot_path = f"/tmp/webfetch_{domain}_{timestamp}.png"
+    html = None
+    error = None
+    tier_used = None
 
-    print("[zendriver] Fetching with headless browser + cookies...", file=sys.stderr)
+    # Try tiers in order (or use forced tier)
+    tiers = [args.tier] if args.tier else [1, 2]
 
-    html, error = fetch_with_zendriver(url, args.timeout, screenshot_path)
+    for tier in tiers:
+        if tier == 1:
+            print("[tier 1] scrapling HTTP (TLS fingerprint)...", file=sys.stderr)
+            html, error = fetch_with_scrapling_http(url, args.timeout)
+            if html and not looks_like_antibot_page(html):
+                tier_used = 1
+                break
+            print(f"[tier 1] failed: {error or 'antibot detected'}", file=sys.stderr)
 
-    if error:
-        print(f"[zendriver] Error: {error}", file=sys.stderr)
-        sys.exit(1)
-
-    if html and looks_like_antibot_page(html):
-        print(
-            "[zendriver] Warning: antibot page detected. Try: ~/.claude/skills/chrome-control/scripts/chrome fetch <url>",
-            file=sys.stderr,
-        )
+        elif tier == 2:
+            print("[tier 2] scrapling Stealthy (Camoufox)...", file=sys.stderr)
+            html, error = fetch_with_scrapling_stealthy(url, args.timeout)
+            if html and not looks_like_antibot_page(html):
+                tier_used = 2
+                break
+            print(f"[tier 2] failed: {error or 'antibot detected'}", file=sys.stderr)
 
     if not html:
-        print("Failed to fetch content", file=sys.stderr)
+        print(f"All tiers failed. Last error: {error}", file=sys.stderr)
+        print(f"Try chrome-control: ~/.claude/skills/chrome-control/scripts/chrome fetch \"{url}\"", file=sys.stderr)
         sys.exit(1)
-
-    # Output screenshot path to stdout first (for retroactive debugging)
-    print(f"Screenshot: {screenshot_path}")
 
     # Output
     if args.raw:
@@ -332,7 +185,7 @@ def main():
         markdown = html_to_markdown(html, url)
         print(markdown)
 
-    print("\n[Fetched with zendriver]", file=sys.stderr)
+    print(f"\n[Fetched with tier {tier_used}]", file=sys.stderr)
 
 
 if __name__ == "__main__":
