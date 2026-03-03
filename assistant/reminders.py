@@ -349,7 +349,8 @@ def add_reminder_cli(title: str, contact: str, in_duration: Optional[str] = None
 
         # For cron, compute next_fire with timezone
         if schedule_type == "cron" and cron_pattern:
-            reminder["next_fire"] = next_cron_fire(cron_pattern, tz_name or config["default_timezone"])
+            assert tz_name is not None  # guaranteed by line 323
+            reminder["next_fire"] = next_cron_fire(cron_pattern, tz_name)
 
         data["reminders"].append(reminder)
         save_reminders(data)
