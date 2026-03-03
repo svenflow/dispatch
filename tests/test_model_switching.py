@@ -226,7 +226,7 @@ class TestInjectMessageModel:
 class TestAllTiersDefaultOpus:
     """Test that all tiers default to opus (per requirement)."""
 
-    @pytest.mark.parametrize("tier", ["admin", "wife", "family", "favorite", "unknown"])
+    @pytest.mark.parametrize("tier", ["admin", "partner", "family", "favorite", "unknown"])
     async def test_tier_defaults_to_opus(self, sdk_backend, tier):
         """All tiers should default to opus model."""
         session = await sdk_backend.create_session(

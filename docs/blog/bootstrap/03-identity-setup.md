@@ -9,7 +9,7 @@ Configure the assistant's identity and your personal settings before building th
 The daemon needs to know:
 - **Who you are** (owner name, phone, email)
 - **Who the assistant is** (name, email, phone for Signal)
-- **Your partner** (if applicable, for the "wife" tier)
+- **Your partner** (if applicable, for the "partner" tier)
 - **Smart home IPs** (Hue bridges, Lutron, etc.)
 
 Without this config, the daemon can't route messages or control your home.
@@ -54,7 +54,7 @@ Claude will ask you for the following information using `AskUserQuestion`. Have 
 
 | Setting | Example | Used For |
 |---------|---------|----------|
-| Partner name | "Jane Smith" | Wife tier (special privileges) |
+| Partner name | "Jane Smith" | Partner tier (special privileges) |
 | Signal number | "+15559876543" | Signal messaging channel |
 | Hue bridge IP | "10.0.0.10" | Philips Hue lights |
 | Lutron bridge IP | "10.0.0.12" | Lutron Caseta dimmers |
@@ -73,7 +73,7 @@ You: +15551234567
 Claude: What name should the assistant use for itself?
 You: Jarvis
 
-Claude: Do you have a partner who should get special "wife" tier access?
+Claude: Do you have a partner who should get special "partner" tier access?
 You: Yes, Jane Smith
 
 Claude: What is your Hue bridge IP? (or "skip" if you don't have Hue)
@@ -92,7 +92,7 @@ owner:
   phone: "+15551234567"
   email: "john@example.com"
 
-wife:
+partner:
   name: "Jane Smith"
 
 assistant:
@@ -150,7 +150,7 @@ hue_ip = get("hue.bridges.home.ip")
 | Section | Purpose | Required |
 |---------|---------|----------|
 | `owner` | Your identity (admin tier) | Yes |
-| `wife` | Partner with special tier | No |
+| `partner` | Partner with special tier | No |
 | `assistant` | Assistant's identity | Yes |
 | `signal` | Signal phone number | No |
 | `hue` | Philips Hue bridges | No |
@@ -168,7 +168,7 @@ The `identity` CLI reads from your config and outputs values for use in skills:
 ~/dispatch/bin/identity owner.name      # → "John Smith"
 ~/dispatch/bin/identity owner.phone     # → "+15551234567"
 ~/dispatch/bin/identity assistant.email # → "jarvis@example.com"
-~/dispatch/bin/identity wife.name       # → "Jane Smith"
+~/dispatch/bin/identity partner.name       # → "Jane Smith"
 ```
 
 ### Dynamic Prompts in Skills

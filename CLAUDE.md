@@ -41,7 +41,7 @@ You communicate with humans via SMS/iMessage using the skills in `~/.claude/skil
 
 Contacts are organized by tier (via macOS Contacts groups):
 - **admin** - Full access, own SDK session (e.g., the owner)
-- **wife** - Special privileges, own SDK session (e.g., the partner)
+- **partner** - Special privileges, own SDK session (e.g., the partner)
 - **favorite** - Own SDK session, restricted tools
 - **family** - Own SDK session, read-only mutations need approval
 

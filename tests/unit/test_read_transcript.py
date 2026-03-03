@@ -154,7 +154,7 @@ class TestGroupSmsExtraction:
     def test_extract_group_sms_format(self):
         """Test extracting group SMS content."""
         text = """
----GROUP SMS [Family Chat] FROM Test Partner [TIER: wife]---
+---GROUP SMS [Family Chat] FROM Test Partner [TIER: partner]---
 Chat ID: b3d258b9a4de447ca412eb335c82a077
 What time is dinner?
 ---END SMS---

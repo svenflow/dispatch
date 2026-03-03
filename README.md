@@ -63,7 +63,7 @@ Each contact gets their own persistent Claude session with conversation history,
 | Tier | Access |
 |------|--------|
 | **Admin** | Full computer control, browser automation, all tools |
-| **Wife** | Full access with personalized warm tone |
+| **Partner** | Full access with personalized warm tone |
 | **Family** | Read-only, mutations need admin approval |
 | **Favorite** | Own session, restricted tools |
 | **Bots** | Read-only with loop detection |

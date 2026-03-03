@@ -99,7 +99,7 @@ end tell
 - **`participant`** - Creates message in chat.db but may NOT deliver (is_delivered = 0)
 - **`buddy`** - Actually delivers the message (is_delivered = 1)
 
-This was discovered when messages to the wife weren't being received despite showing in chat.db.
+This was discovered when messages to the partner weren't being received despite showing in chat.db.
 
 ### Notes
 - Messages sent via AppleScript don't populate the `text` field in chat.db

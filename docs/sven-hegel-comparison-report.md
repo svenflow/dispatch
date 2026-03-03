@@ -22,7 +22,7 @@ This report compares two independent Claude-based personal assistant implementat
 | **Session Management** | Anthropic Agent SDK with resume |
 | **Memory** | SQLite FTS5 + ML reranker (no embeddings) |
 | **Identity** | SOUL.md with dynamic template variables |
-| **Tier System** | 6 tiers (admin/wife/family/favorite/bots/unknown) |
+| **Tier System** | 6 tiers (admin/partner/family/favorite/bots/unknown) |
 | **Concurrency** | anyio with task groups, steering via SDK async iterator |
 | **Health** | Two-tier: fast regex (60s) + deep Haiku analysis (5min) |
 
@@ -107,7 +107,7 @@ Six tiers with different permissions:
 | Tier | Can Do |
 |------|--------|
 | Admin | Everything |
-| Wife | Everything + extra warmth |
+| Partner | Everything + extra warmth |
 | Family | Read-only, mutations need approval |
 | Favorite | Own session, restricted tools |
 | Bots | Like favorite + loop detection |

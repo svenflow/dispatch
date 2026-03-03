@@ -13,7 +13,7 @@ Allow per-chat model selection (opus, sonnet, haiku) with sensible tier-based de
 ```python
 TIER_MODEL_DEFAULTS = {
     "admin": "opus",
-    "wife": "opus", 
+    "partner": "opus", 
     "family": "sonnet",
     "favorite": "sonnet",
     "bots": "haiku",

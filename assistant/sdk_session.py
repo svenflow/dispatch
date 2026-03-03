@@ -351,7 +351,7 @@ class SDKSession:
 
     def _build_options(self, resume_id: Optional[str] = None) -> ClaudeAgentOptions:
         """Build ClaudeAgentOptions based on contact tier."""
-        if self.tier in ("admin", "wife"):
+        if self.tier in ("admin", "partner"):
             tools = [
                 "Read", "Write", "Edit", "Bash", "Glob", "Grep",
                 "WebSearch", "WebFetch", "Task", "NotebookEdit",
@@ -378,8 +378,8 @@ class SDKSession:
 
         # Per-turn limit prevents unbounded costs (bug #15 fix)
         # Each inject gets up to max_turns before stopping.
-        # Admin/wife get generous limits; restricted tiers get tighter limits.
-        if self.tier in ("admin", "wife"):
+        # Admin/partner get generous limits; restricted tiers get tighter limits.
+        if self.tier in ("admin", "partner"):
             turn_limit = 200
         elif self.tier == "family":
             turn_limit = 50

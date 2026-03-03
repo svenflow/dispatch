@@ -8,7 +8,7 @@ Orchestrates the SMS-based personal assistant system:
 - Manages session lifecycle (spawn, monitor, restart)
 - Ignores messages from unknown contacts (not in any tier group)
 
-Tier hierarchy: admin > wife > family > favorite
+Tier hierarchy: admin > partner > family > favorite
 """
 
 import os
@@ -153,9 +153,9 @@ class ContactsManager:
             return None
 
     def list_blessed_contacts(self) -> list:
-        """Get all contacts with blessed tiers (admin, wife, family, favorite)."""
+        """Get all contacts with blessed tiers (admin, partner, family, favorite)."""
         contacts = self._list_contacts()
-        return [c for c in contacts if c.get("tier") in ("admin", "wife", "family", "favorite")]
+        return [c for c in contacts if c.get("tier") in ("admin", "partner", "family", "favorite")]
 
     def lookup_phone_by_name(self, name: str) -> Optional[Dict[str, str]]:
         """Lookup contact by name via SQLite."""
@@ -421,7 +421,7 @@ class MessagesReader:
         return "-".join(names) if names else None
 
     def _group_has_blessed_participant(self, chat_identifier: str, contacts_manager) -> bool:
-        """Check if a group chat has any blessed contacts (admin, wife, family, favorite) as participants.
+        """Check if a group chat has any blessed contacts (admin, partner, family, favorite) as participants.
 
         This is used to allow messages from unknown senders (e.g., alternate email identifiers)
         in groups where a blessed contact participates. Without this, messages from the admin's alternate
@@ -449,7 +449,7 @@ class MessagesReader:
             # Check if any participant is a blessed contact (supports both phone and email identifiers)
             for participant_id in participants:
                 contact = contacts_manager.lookup_identifier(participant_id)
-                if contact and contact.get("tier") in ("admin", "wife", "family", "favorite"):
+                if contact and contact.get("tier") in ("admin", "partner", "family", "favorite"):
                     return True
 
             return False
@@ -1167,7 +1167,7 @@ class IPCServer:
             final_prompt = wrap_admin(final_prompt)
 
         # Append tier-specific rules reminder suffix (only for tiers with rules files)
-        if tier in ["admin", "wife", "family", "favorite", "bots", "unknown"]:
+        if tier in ["admin", "partner", "family", "favorite", "bots", "unknown"]:
             rules_file = f"~/.claude/skills/sms-assistant/{tier}-rules.md"
             suffix = f"\n\nREMINDER: If you haven't already, read {rules_file} for important behavioral guidelines for {tier} tier contacts."
             final_prompt = final_prompt + suffix
@@ -1805,7 +1805,7 @@ You have 15 minutes. Work efficiently.
             # 1. Sender is in a blessed tier, OR
             # 2. A session already exists for this group (meaning we've already engaged with it), OR
             # 3. A blessed contact is a participant in this group (handles email identifier case)
-            if sender_tier in ("admin", "wife", "family", "favorite"):
+            if sender_tier in ("admin", "partner", "family", "favorite"):
                 await self.sessions.inject_group_message(
                     chat_id=chat_identifier,
                     display_name=group_name,
@@ -1856,7 +1856,7 @@ You have 15 minutes. Work efficiently.
         elif not contact:
             # Unknown sender for individual (non-group) message - ignore
             log.info(f"Unknown sender {phone}, ignoring (not in any Claude tier group)")
-        elif sender_tier in ("admin", "wife", "family", "favorite"):
+        elif sender_tier in ("admin", "partner", "family", "favorite"):
             # Blessed individual: route to their SDK session
             # For individuals, phone IS the chat_id
             if not phone:
@@ -1908,7 +1908,7 @@ You have 15 minutes. Work efficiently.
         sender_tier = contact["tier"]
 
         # Only process reactions from blessed tiers
-        if sender_tier not in ("admin", "wife", "family", "favorite"):
+        if sender_tier not in ("admin", "partner", "family", "favorite"):
             log.debug(f"Ignoring reaction {rowid} from {sender_name} (tier: {sender_tier})")
             return
 

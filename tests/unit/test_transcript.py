@@ -23,7 +23,7 @@ Hello world
 
     def test_clean_group_sms(self):
         """Test cleaning group SMS format."""
-        content = """---GROUP SMS [Family Chat] FROM Test User [TIER: wife]---
+        content = """---GROUP SMS [Family Chat] FROM Test User [TIER: partner]---
 Group message here
 ---END SMS---"""
         cleaned, is_sms = clean_sms_content(content)

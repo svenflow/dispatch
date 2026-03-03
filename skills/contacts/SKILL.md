@@ -18,7 +18,7 @@ This skill manages contacts using the native macOS Contacts.app. Tiers are imple
 
 **Tier System via Contact Groups (priority order):**
 - `Claude Admin` - Full access users who can control the main Claude session
-- `Claude Wife` - Special tier for spouse with elevated privileges
+- `Claude Partner` - Special tier for partner with elevated privileges
 - `Claude Family` - Family members with read access, mutations need admin approval
 - `Claude Favorites` - Priority users with a dedicated locked-down Claude
 - No group = Unknown/ignored (messages from contacts not in any group are ignored)
@@ -54,7 +54,7 @@ Returns: `Name | Phone | Tier`
 # Without tier (will be ignored by system)
 ~/.claude/skills/contacts/scripts/contacts add "First" "Last" "+16175551234"
 ```
-Valid tiers: admin, wife, family, favorite
+Valid tiers: admin, partner, family, favorite
 
 ### Get/Set Contact Tier
 ```bash

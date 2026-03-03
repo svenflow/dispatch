@@ -30,9 +30,9 @@
    - Advanced Chrome capabilities: debugger API, network/console monitoring, screenshot chunking
 
 3. **Access Control via social constructs**
-   - Contact tiers (admin/wife/family/favorite/general)
+   - Contact tiers (admin/partner/family/favorite/general)
    - Managed through Contacts.app groups
-   - Wife gets special warm treatment
+   - Partner gets special warm treatment
    - Family: read-only, mutations need admin approval
    - Favorites are security-restricted
    - General public gets stateless Haiku only (NOTE: currently dead code - unknowns ignored)
@@ -148,7 +148,7 @@
 
 1. **Tier-based access**
    - Admin: full access, --dangerously-skip-permissions
-   - Wife: full access + warm treatment (wife-rules.md)
+   - Partner: full access + warm treatment (partner-rules.md)
    - Family: read-only, mutations need admin approval (family-rules.md)
    - Favorites: restricted tools, no file access (favorites-rules.md)
    - General: stateless, max 300 tokens (HaikuHandler - NOTE: not yet wired up)

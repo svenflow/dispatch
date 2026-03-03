@@ -25,7 +25,7 @@ class MockContactsManager:
         if phone.endswith('1111'):
             return 'admin'
         elif phone.endswith('2222'):
-            return 'wife'
+            return 'partner'
         elif phone.endswith('3333'):
             return 'family'
         elif phone.endswith('4444'):

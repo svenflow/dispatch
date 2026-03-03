@@ -253,7 +253,7 @@ Extracted from 179 unique SMS requests across 30 transcript files.
     - Contacts loaded once at startup, cached in memory
     - Avoids repeated AppleScript calls during message processing
 17. **Jan 27 PM**: Contacts.app groups as source of truth for tier system
-    - "Claude Admin", "Claude Wife", "Claude Family", "Claude Favorites"
+    - "Claude Admin", "Claude Partner", "Claude Family", "Claude Favorites"
     - Standard macOS app, no custom database needed
 18. **Jan 27 PM**: GCS for podcast feed infrastructure
     - RSS feed hosted on Google Cloud Storage
@@ -315,6 +315,6 @@ Extracted from 179 unique SMS requests across 30 transcript files.
 
 ### Access Control via Social Constructs
 - Contact tiers via Contacts.app groups
-- Wife gets special treatment
+- Partner gets special treatment
 - Favorites are security-restricted
 - General public gets stateless API only

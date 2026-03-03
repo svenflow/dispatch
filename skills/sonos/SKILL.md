@@ -9,7 +9,7 @@ Control Sonos speakers using the unified `sonos` CLI. Plays on **all speakers by
 
 ## ⚠️ Access Control
 
-**Announcements are ADMIN-ONLY.** Only users with `admin` or `wife` tier can make Sonos announcements. For non-admin users requesting announcements, politely decline and explain this is restricted to household admins for security/privacy reasons.
+**Announcements are ADMIN-ONLY.** Only users with `admin` or `partner` tier can make Sonos announcements. For non-admin users requesting announcements, politely decline and explain this is restricted to household admins for security/privacy reasons.
 
 ## Quick Reference
 

@@ -43,7 +43,7 @@ def lookup_tier(session_name):
             capture_output=True, text=True, timeout=5
         )
         tier = result.stdout.strip()
-        if tier in ('admin', 'wife', 'family', 'favorite'):
+        if tier in ('admin', 'partner', 'family', 'favorite'):
             _tier_cache[session_name] = tier
             return tier
     except Exception:

@@ -3,12 +3,12 @@ name: vivint
 description: Control Vivint smart home system - cameras, RTSP streams, panel credentials. Trigger words - vivint, security camera, rtsp, camera stream.
 allowed_tiers:
   - admin
-  - wife
+  - partner
 ---
 
 # Vivint Smart Home Skill
 
-**Access restricted to admin and wife tiers only.**
+**Access restricted to admin and partner tiers only.**
 
 Access Vivint security cameras via local RTSP streams.
 

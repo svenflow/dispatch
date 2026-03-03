@@ -55,9 +55,9 @@ async def main():
 
 async def handle_message(msg, source):
     contact = lookup_contact(msg.phone)  # Uses ContactsCache for O(1) lookups
-    tier = get_tier(contact)  # admin/wife/family/favorite/general
+    tier = get_tier(contact)  # admin/partner/family/favorite/general
 
-    if tier in ['admin', 'wife', 'family', 'favorite']:
+    if tier in ['admin', 'partner', 'family', 'favorite']:
         await inject_into_sdk_session(contact, msg)
     else:
         # Unknown contacts are silently ignored
@@ -159,7 +159,7 @@ Use Contacts.app groups as your ACL:
 | Tier | Who | Access |
 |------|-----|--------|
 | admin | You | Full access, --dangerously-skip-permissions |
-| wife | Partner | Full access + warm treatment (wife-rules.md) |
+| partner | Partner | Full access + warm treatment (partner-rules.md) |
 | family | Family members | Read-only, mutations need admin approval |
 | favorite | Trusted friends | Chat, web search, images, restricted bash |
 | general | Everyone else | Currently ignored (Haiku handler planned) |
@@ -416,7 +416,7 @@ claude-assistant inject-prompt "b3d258b9a4de447ca412eb335c82a077" "Message here"
 The daemon uses a cascading check for group messages:
 
 1. **Blessed sender** → Always allowed
-   - If the sender's phone is in a blessed tier (admin/wife/family/favorite), accept immediately
+   - If the sender's phone is in a blessed tier (admin/partner/family/favorite), accept immediately
 
 2. **Unknown sender + existing session** → Allowed
    - Handles email identifiers (some iMessages come from email addresses)

@@ -512,7 +512,7 @@ def _lookup_contact_tier(contact_name: str) -> Optional[str]:
     """Look up a contact's tier from Contacts.app groups."""
     tier_groups = {
         "admin": "Claude Admin",
-        "wife": "Claude Wife",
+        "partner": "Claude Partner",
         "family": "Claude Family",
         "favorite": "Claude Favorites",
     }
@@ -890,7 +890,7 @@ def main():
     restart_session_parser = subparsers.add_parser("restart-session", help="Restart a specific session (compacts first)")
     restart_session_parser.add_argument("session", help="Session name (imessage/_15555550100), chat_id, or contact name")
     restart_session_parser.add_argument("--no-compact", action="store_true", help="Skip compaction before restart")
-    restart_session_parser.add_argument("--tier", choices=["admin", "wife", "family", "favorite"], help="Override tier for restarted session")
+    restart_session_parser.add_argument("--tier", choices=["admin", "partner", "family", "favorite"], help="Override tier for restarted session")
 
     # restart-sessions
     subparsers.add_parser("restart-sessions", help="Restart all sessions")

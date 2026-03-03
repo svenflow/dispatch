@@ -32,7 +32,7 @@ Dispatch is a **personal AI assistant system** that gives Claude full computer c
 │                           ▼                                     │
 │               ┌───────────────────────┐                         │
 │               │   Tier Determination  │                         │
-│               │ admin/wife/family/... │                         │
+│               │ admin/partner/family/... │                         │
 │               └───────────┬───────────┘                         │
 │                           ▼                                     │
 │               ┌───────────────────────┐                         │
@@ -47,7 +47,7 @@ Dispatch is a **personal AI assistant system** that gives Claude full computer c
 │                  (one per contact)                              │
 │                                                                 │
 │   ┌──────────────────────────────────────────────────────┐     │
-│   │  +15551234567 (admin)  │  +15559876543 (wife)  │ ... │     │
+│   │  +15551234567 (admin)  │  +15559876543 (partner)  │ ... │     │
 │   │      SDKSession        │      SDKSession        │     │     │
 │   │   ┌─────────────────┐  │   ┌─────────────────┐  │     │     │
 │   │   │ Claude Agent SDK│  │   │ Claude Agent SDK│  │     │     │
@@ -158,7 +158,7 @@ Tiers are managed via macOS Contacts.app groups:
 | Tier | Access Level | Session | Description |
 |------|--------------|---------|-------------|
 | **admin** | Full | ✅ | Owner — browser, shell, smart home, everything |
-| **wife** | Full | ✅ | Same as admin but with warmer tone |
+| **partner** | Full | ✅ | Same as admin but with warmer tone |
 | **family** | Read-only | ✅ | Can ask questions; mutations need admin approval |
 | **favorite** | Restricted | ✅ | Trusted friends; limited tools |
 | **bots** | Read-only | ✅ | Other AIs; loop detection enabled |
@@ -166,7 +166,7 @@ Tiers are managed via macOS Contacts.app groups:
 
 Each tier has a rules file injected into the session:
 - `~/.claude/skills/sms-assistant/admin-rules.md`
-- `~/.claude/skills/sms-assistant/wife-rules.md`
+- `~/.claude/skills/sms-assistant/partner-rules.md`
 - etc.
 
 ---
@@ -294,7 +294,7 @@ owner:
   name: "Your Name"
   phone: "+1XXXXXXXXXX"
 
-wife:
+partner:
   name: "Partner Name"
 
 signal:

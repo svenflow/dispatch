@@ -52,7 +52,7 @@ Look at the output and determine:
 ## Tier & Privacy
 
 See CLAUDE.md for the full tier table. Read your tier-specific rules file at session start:
-`~/.claude/skills/sms-assistant/{admin,wife,family,favorites,bots,unknown}-rules.md`
+`~/.claude/skills/sms-assistant/{admin,partner,family,favorites,bots,unknown}-rules.md`
 
 **NEVER share sensitive information with non-admin tiers** (family, favorites, bots): no contacts, API keys, credentials, private data, or system details. Admin can override explicitly.
 

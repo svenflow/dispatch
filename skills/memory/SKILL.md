@@ -116,7 +116,7 @@ uv run ~/.claude/skills/memory/scripts/memory.py consolidate --verbose "contact-
 - Transactional details ("asked about weather")
 - System/infrastructure details
 
-**Tier-aware prompts:** Wife tier gets extra emphasis on birthdays, anniversaries, and health info. Family tier emphasizes kids' names and where they live.
+**Tier-aware prompts:** Partner tier gets extra emphasis on birthdays, anniversaries, and health info. Family tier emphasizes kids' names and where they live.
 
 **Safety:**
 - Backups saved to `~/.claude/state/notes-backup/` before each write
@@ -132,7 +132,7 @@ Claude decides the type when saving. Common types:
 - `preference` - Likes/dislikes ("prefers dark mode")
 - `lesson` - Things learned ("GCS needs no-cache headers")
 - `project` - Work completed ("built podcast system")
-- `relationship` - People connections ("wife is Jane")
+- `relationship` - People connections ("partner is Jane")
 - `context` - Ongoing situations ("working on memory system")
 
 New types can be created organically as needed.
@@ -140,7 +140,7 @@ New types can be created organically as needed.
 ## Memory Permissions
 
 **Who can see what:**
-- Admin + Wife: Can access ALL memories
+- Admin + Partner: Can access ALL memories
 - Favorites: Can ONLY see their own memories
 - Family/Unknown: No memory access (stateless)
 

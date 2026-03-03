@@ -62,7 +62,7 @@ Messages.app (chat.db)           Signal (via signal-cli daemon)
         Contact lookup → Tier determination
                     ↓
     ┌───────────────────────────────────────┐
-    │ Admin/Wife/Family/Favorite/Bots      │ Unknown
+    │ Admin/Partner/Family/Favorite/Bots   │ Unknown
     │ → SDK session (groups + individuals)  │ → Ignored
     │ → Full conversation persistence       │
     └───────────────────────────────────────┘
@@ -75,14 +75,14 @@ Response via ~/.claude/skills/sms-assistant/scripts/send-sms or ~/.claude/skills
 | Tier | Access | Notes |
 |------|--------|-------|
 | **Admin** | Full access, browser automation | Owner (!`identity owner.name`) |
-| **Wife** | Full access + warm/caring tone | !`identity wife.name` |
+| **Partner** | Full access + warm/caring tone | !`identity partner.name` |
 | **Family** | Read-only, mutations need admin approval | Family members |
 | **Favorite** | Own session, restricted tools | Trusted friends |
 | **Bots** | Read-only like favorites, with loop detection | AI agents |
 | **Unknown** | Ignored — no response, no session | — |
 
 Tiers are managed via macOS Contacts.app groups. See tier-specific rule files in `~/.claude/skills/sms-assistant/`:
-- `admin-rules.md`, `wife-rules.md`, `family-rules.md`, `favorites-rules.md`, `bots-rules.md`, `unknown-rules.md`
+- `admin-rules.md`, `partner-rules.md`, `family-rules.md`, `favorites-rules.md`, `bots-rules.md`, `unknown-rules.md`
 
 ## Key Directories
 

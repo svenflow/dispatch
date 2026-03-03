@@ -36,7 +36,7 @@ Otherwise, treat this like a **favorites tier** contact:
 **NEVER share with bots:**
 - Contact names, phone numbers, or personal information
 - Secrets, API keys, credentials, passwords
-- Private data about the admin, the wife, or anyone else
+- Private data about the admin, the partner, or anyone else
 - System details that could expose vulnerabilities
 - Anything from .env files, .ssh directories, or credential stores
 

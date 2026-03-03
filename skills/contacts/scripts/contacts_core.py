@@ -19,7 +19,7 @@ ADDRESSBOOK_DB = ADDRESSBOOK_DIR / "AddressBook-v22.abcddb"
 # Map group names to tier strings
 TIER_GROUP_MAP = {
     "Claude Admin": "admin",
-    "Claude Wife": "wife",
+    "Claude Partner": "partner",
     "Claude Family": "family",
     "Claude Favorites": "favorite",
     "Claude Bots": "bots",
@@ -128,7 +128,7 @@ def list_contacts_sqlite(tier_filter: str | None = None) -> List[Dict[str, str]]
             for row in cursor:
                 group_name = row["group_name"]
                 contact_pk = row["contact_pk"]
-                # First match wins (admin > wife > family > favorite)
+                # First match wins (admin > partner > family > favorite)
                 if contact_pk not in tier_map:
                     tier_map[contact_pk] = TIER_GROUP_MAP[group_name]
 
@@ -320,7 +320,7 @@ def get_notes_sqlite(name: str) -> Optional[str]:
 def get_tier_sqlite(name: str) -> Optional[str]:
     """Get a contact's tier by name via SQLite, querying ALL source databases.
 
-    Returns tier string ('admin', 'wife', 'family', 'favorite') or 'unknown'.
+    Returns tier string ('admin', 'partner', 'family', 'favorite') or 'unknown'.
     """
     def query_tier(conn):
         # Build tier mapping for this DB
@@ -361,7 +361,7 @@ def get_tier_sqlite(name: str) -> Optional[str]:
 GET_GROUP_MEMBERS = '''
 tell application "Contacts"
     set adminMembers to {}
-    set wifeMembers to {}
+    set partnerMembers to {}
     set familyMembers to {}
     set favMembers to {}
 
@@ -369,7 +369,7 @@ tell application "Contacts"
         set adminMembers to name of every person of group "Claude Admin"
     end try
     try
-        set wifeMembers to name of every person of group "Claude Wife"
+        set partnerMembers to name of every person of group "Claude Partner"
     end try
     try
         set familyMembers to name of every person of group "Claude Family"
@@ -463,8 +463,8 @@ def lookup_email(email: str) -> Optional[Dict[str, str]]:
                         -- Determine tier
                         if adminMembers contains n then
                             return "FOUND|" & n & "|" & em & "|admin"
-                        else if wifeMembers contains n then
-                            return "FOUND|" & n & "|" & em & "|wife"
+                        else if partnerMembers contains n then
+                            return "FOUND|" & n & "|" & em & "|partner"
                         else if familyMembers contains n then
                             return "FOUND|" & n & "|" & em & "|family"
                         else if favMembers contains n then
@@ -524,8 +524,8 @@ def lookup_phone(phone: str) -> Optional[Dict[str, str]]:
                     -- Determine tier
                     if adminMembers contains n then
                         return "FOUND|" & n & "|" & ph & "|admin"
-                    else if wifeMembers contains n then
-                        return "FOUND|" & n & "|" & ph & "|wife"
+                    else if partnerMembers contains n then
+                        return "FOUND|" & n & "|" & ph & "|partner"
                     else if familyMembers contains n then
                         return "FOUND|" & n & "|" & ph & "|family"
                     else if favMembers contains n then
@@ -558,15 +558,15 @@ end tell
 def get_tier(name: str) -> Optional[str]:
     """Get a contact's tier by name.
 
-    Returns tier string ('admin', 'wife', 'family', 'favorite') or None.
+    Returns tier string ('admin', 'partner', 'family', 'favorite') or None.
     """
     name_esc = name.replace('"', '\\"')
 
     script = GET_GROUP_MEMBERS + f'''
     if adminMembers contains "{name_esc}" then
         return "admin"
-    else if wifeMembers contains "{name_esc}" then
-        return "wife"
+    else if partnerMembers contains "{name_esc}" then
+        return "partner"
     else if familyMembers contains "{name_esc}" then
         return "family"
     else if favMembers contains "{name_esc}" then
@@ -587,10 +587,13 @@ def set_tier(name: str, tier: str) -> bool:
 
     Args:
         name: Contact's full name
-        tier: One of 'admin', 'wife', 'family', 'favorite', or 'none' to remove
+        tier: One of 'admin', 'partner', 'family', 'favorite', or 'none' to remove
 
     Returns True on success.
     """
+    # Proactively ensure Contacts.app is running before write operations
+    ensure_contacts_running()
+
     name_esc = name.replace('"', '\\"')
 
     script = f'''
@@ -604,9 +607,9 @@ tell application "Contacts"
         set adminGroup to make new group with properties {{name:"Claude Admin"}}
     end try
     try
-        set wifeGroup to group "Claude Wife"
+        set partnerGroup to group "Claude Partner"
     on error
-        set wifeGroup to make new group with properties {{name:"Claude Wife"}}
+        set partnerGroup to make new group with properties {{name:"Claude Partner"}}
     end try
     try
         set familyGroup to group "Claude Family"
@@ -624,7 +627,7 @@ tell application "Contacts"
         remove p from adminGroup
     end try
     try
-        remove p from wifeGroup
+        remove p from partnerGroup
     end try
     try
         remove p from familyGroup
@@ -636,8 +639,8 @@ tell application "Contacts"
     -- Add to new tier group
     if "{tier}" is "admin" then
         add p to adminGroup
-    else if "{tier}" is "wife" then
-        add p to wifeGroup
+    else if "{tier}" is "partner" then
+        add p to partnerGroup
     else if "{tier}" is "family" then
         add p to familyGroup
     else if "{tier}" is "favorite" then
@@ -663,9 +666,12 @@ def add_contact(first: str, last: str, phone: str, tier: str = "none") -> bool:
 
     Returns True on success.
     """
+    # Proactively ensure Contacts.app is running before write operations
+    ensure_contacts_running()
+
     tier_group_map = {
         "admin": "Claude Admin",
-        "wife": "Claude Wife",
+        "partner": "Claude Partner",
         "family": "Claude Family",
         "favorite": "Claude Favorites"
     }
@@ -716,8 +722,8 @@ def list_contacts(tier_filter: str | None = None) -> List[Dict[str, str]]:
         -- Determine tier (check in priority order)
         if adminMembers contains n then
             set tier to "admin"
-        else if wifeMembers contains n then
-            set tier to "wife"
+        else if partnerMembers contains n then
+            set tier to "partner"
         else if familyMembers contains n then
             set tier to "family"
         else if favMembers contains n then
@@ -805,6 +811,9 @@ end tell
 
 def set_notes(name: str, content: str) -> bool:
     """Set a contact's notes. Returns True on success."""
+    # Proactively ensure Contacts.app is running before write operations
+    ensure_contacts_running()
+
     name_esc = name.replace('"', '\\"')
     content_esc = content.replace('\\', '\\\\').replace('"', '\\"')
 

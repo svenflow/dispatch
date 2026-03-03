@@ -19,7 +19,7 @@ class TestKeywordMatching:
         "fact": ["fact", "info", "know", "detail", "about"],
         "project": ["project", "built", "work", "made", "created"],
         "lesson": ["lesson", "learn", "figured", "discovered", "solved"],
-        "relationship": ["relationship", "family", "friend", "wife", "husband", "partner"],
+        "relationship": ["relationship", "family", "friend", "husband", "partner"],
     }
 
     def _get_matching_types(self, prompt: str) -> list:
@@ -59,7 +59,7 @@ class TestKeywordMatching:
 
     def test_match_relationship_keywords(self):
         """Test matching relationship-related prompts."""
-        assert "relationship" in self._get_matching_types("Who is their wife?")
+        assert "relationship" in self._get_matching_types("Who is their partner?")
         assert "relationship" in self._get_matching_types("Tell me about their family")
         assert "relationship" in self._get_matching_types("Who are their friends?")
 

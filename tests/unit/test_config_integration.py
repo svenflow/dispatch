@@ -114,7 +114,7 @@ class TestConfigExampleYaml:
         example_path = config.ASSISTANT_DIR / "config.example.yaml"
         with open(example_path) as f:
             data = yaml.safe_load(f)
-        expected_sections = ["owner", "wife", "assistant", "signal", "hue", "lutron", "podcast", "chrome"]
+        expected_sections = ["owner", "partner", "assistant", "signal", "hue", "lutron", "podcast", "chrome"]
         for section in expected_sections:
             assert section in data, f"config.example.yaml missing section: {section}"
 

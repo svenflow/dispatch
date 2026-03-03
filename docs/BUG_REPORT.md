@@ -73,7 +73,7 @@ Plan specified sonnet, implementation uses opus. **Resolved:** The admin confirm
 
 ### 15. max_budget_usd and max_turns from plan not implemented
 No cost or turn limits — unbounded spending possible.
-**Fix:** Added max_turns per tier: admin/wife=200, family=50, favorites=30.
+**Fix:** Added max_turns per tier: admin/partner=200, family=50, favorites=30.
 
 ### 16. check_idle_sessions iterates sessions dict without lock
 Potential concurrent modification during iteration.

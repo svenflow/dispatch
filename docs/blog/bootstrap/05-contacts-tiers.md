@@ -17,7 +17,7 @@ Without access control, anyone who texts your assistant's number gets full acces
 | Tier | Who | Access |
 |------|-----|--------|
 | **admin** | You (the owner) | Full access, all tools, browser automation |
-| **wife/partner** | Significant other | Full access, warmer tone |
+| **partner/partner** | Significant other | Full access, warmer tone |
 | **family** | Close family | Read-only. Mutations need admin approval |
 | **favorite** | Trusted friends | Own session, restricted tools |
 | **bots** | AI agents | Like favorite, with loop detection |
@@ -27,7 +27,7 @@ Without access control, anyone who texts your assistant's number gets full acces
 
 The cleanest approach: use Contacts.app groups. The group names must be exactly:
 - `Claude Admin`
-- `Claude Wife`
+- `Claude Partner`
 - `Claude Family`
 - `Claude Favorites`
 - `Claude Bots`
@@ -37,7 +37,7 @@ The cleanest approach: use Contacts.app groups. The group names must be exactly:
 If your contacts and groups are already in iCloud and syncing to this Mac, verify:
 ```bash
 osascript -e 'tell application "Contacts" to get name of groups'
-# Should include: Claude Admin, Claude Wife, Claude Family, Claude Favorites, Claude Bots
+# Should include: Claude Admin, Claude Partner, Claude Family, Claude Favorites, Claude Bots
 ```
 
 > **Troubleshooting iCloud sync:** If contacts aren't appearing, check System Settings → Apple ID → iCloud → Show All → Contacts is ON. Toggle it off and back on to force a resync. Also check that contacts are stored in iCloud (not "On My Mac") on the source device.
@@ -50,7 +50,7 @@ Create the groups and contacts via AppleScript:
 osascript <<'APPLESCRIPT'
 tell application "Contacts"
     make new group with properties {name:"Claude Admin"}
-    make new group with properties {name:"Claude Wife"}
+    make new group with properties {name:"Claude Partner"}
     make new group with properties {name:"Claude Family"}
     make new group with properties {name:"Claude Favorites"}
     make new group with properties {name:"Claude Bots"}
@@ -127,8 +127,8 @@ def lookup_contact(phone: str) -> dict:
     # Determine tier from groups
     if 'admin' in groups:
         tier = 'admin'
-    elif 'wife' in groups:
-        tier = 'wife'
+    elif 'partner' in groups:
+        tier = 'partner'
     elif 'family' in groups:
         tier = 'family'
     elif 'favorite' in groups:
@@ -178,7 +178,7 @@ def process_message(sender: str, text: str):
 
 ACL: This contact is {tier} tier.
 - admin: Full access to all tools
-- wife: Full access, respond warmly
+- partner: Full access, respond warmly
 - family: Read-only, ask admin before mutations
 - favorite: Limited tools, be helpful but cautious
 
@@ -227,7 +227,7 @@ This creates a simple approval workflow without complex UIs.
 
 ## Verification Checklist
 
-- [ ] Contacts.app has Claude Admin, Claude Wife, Claude Family, Claude Favorites, Claude Bots groups
+- [ ] Contacts.app has Claude Admin, Claude Partner, Claude Family, Claude Favorites, Claude Bots groups
 - [ ] `lookup_phone_sqlite('+1ADMIN_PHONE')` returns `{'name': ..., 'tier': 'admin'}`
 - [ ] Unknown senders are ignored (no response in daemon logs)
 - [ ] Admin messages create a Claude session and get a response
