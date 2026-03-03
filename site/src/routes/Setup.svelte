@@ -36,56 +36,31 @@
       <li>Enable Messages in iCloud (Messages &gt; Settings &gt; iMessage &gt; Enable Messages in iCloud)</li>
     </ol>
 
-    <h3>2. Keep Mac awake</h3>
-    <p>System Settings &gt; Energy &gt; Prevent automatic sleeping when display is off</p>
-    <p class="note">Or install Amphetamine from the App Store for more control.</p>
+    <h3>2. Grant terminal Full Disk Access</h3>
+    <p>Open System Settings &gt; Privacy & Security &gt; Full Disk Access and add your terminal app (Terminal.app or iTerm).</p>
+    <p class="note">Claude will help you add the Python binary path later — it requires following symlinks.</p>
 
-    <h3>3. Grant macOS permissions</h3>
-    <p>Open System Settings &gt; Privacy & Security and grant these to your terminal:</p>
-
-    <div class="permission-list">
-      <div class="permission">
-        <div class="permission-name">Full Disk Access</div>
-        <div class="permission-desc">Required for reading Messages database. Add your terminal AND the Python binary (found after uv install).</div>
-      </div>
-      <div class="permission">
-        <div class="permission-name">Automation</div>
-        <div class="permission-desc">Required for sending messages via Messages.app. Grant when prompted.</div>
-      </div>
-      <div class="permission">
-        <div class="permission-name">Contacts</div>
-        <div class="permission-desc">Required for looking up contact tiers.</div>
-      </div>
-    </div>
-
-    <h3>4. Install prerequisites</h3>
+    <h3>3. Install prerequisites</h3>
     <pre><code># Homebrew
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 
 # Follow post-install to add brew to PATH, then:
-brew install git gh node uv
+brew install git gh node uv mas
 
 # Claude Code CLI
 npm install -g @anthropic-ai/claude-code</code></pre>
 
-    <h3>5. Clone the repo</h3>
+    <h3>4. Clone the repo</h3>
     <pre><code>gh auth login
 gh repo clone svenflow/dispatch ~/dispatch
 cd ~/dispatch
 uv sync</code></pre>
 
-    <h3>6. Add Python to Full Disk Access</h3>
-    <p>Now that uv has installed Python, add it to FDA:</p>
-    <pre><code># Find the Python binary path
-ls -la ~/dispatch/.venv/bin/python
-# Follow the symlink to the actual binary
-# Add that path to Full Disk Access in System Settings</code></pre>
-
-    <h3>7. Authenticate Claude</h3>
+    <h3>5. Authenticate Claude</h3>
     <pre><code>claude auth</code></pre>
     <p class="note">This logs you into Claude Code. No manual API key needed.</p>
 
-    <h3>8. Create contact groups</h3>
+    <h3>6. Create contact groups</h3>
     <p>In Contacts.app, create these groups:</p>
     <div class="tier-list">
       <div class="tier">
@@ -141,6 +116,8 @@ to create config.local.yaml.</code></pre>
     <h3>What happens next</h3>
     <p>Claude will work through the bootstrap guides autonomously:</p>
     <ol>
+      <li><strong>Keep-awake</strong> - Installs <a href="https://apps.apple.com/app/amphetamine/id937984704" target="_blank" rel="noopener">Amphetamine</a> via mas-cli, configures it to run indefinitely at startup</li>
+      <li><strong>Full Disk Access</strong> - Identifies the Python binary path and walks you through adding it to FDA</li>
       <li><strong>Identity setup</strong> - Creates config.local.yaml with your info</li>
       <li><strong>Messaging core</strong> - Sets up the daemon that polls iMessage</li>
       <li><strong>Contact tiers</strong> - Configures access control</li>
@@ -258,32 +235,6 @@ to create config.local.yaml.</code></pre>
     font-size: 13px;
     color: var(--text-secondary);
     margin-bottom: var(--space-4);
-  }
-
-  .permission-list {
-    display: flex;
-    flex-direction: column;
-    gap: 1px;
-    background: var(--border-default);
-    border: 1px solid var(--border-default);
-    margin: var(--space-4) 0;
-  }
-
-  .permission {
-    padding: var(--space-3) var(--space-4);
-    background: var(--bg-elevated);
-  }
-
-  .permission-name {
-    font-weight: 600;
-    font-size: 12px;
-    color: var(--text-primary);
-    margin-bottom: var(--space-1);
-  }
-
-  .permission-desc {
-    font-size: 12px;
-    color: var(--text-secondary);
   }
 
   .tier-list {
