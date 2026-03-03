@@ -1,163 +1,146 @@
 ---
 name: reminders
-description: Create and manage reminders using macOS Reminders.app. Use when asked to set a reminder, check reminders, or schedule something for later.
+description: Create and manage reminders using native JSON system. Use when asked to set a reminder, check reminders, or schedule something for later.
 ---
 
 # Reminders Skill
+
+Native reminder system with local timezone support, crash safety, and automatic retry.
 
 ## ⚠️ CRITICAL: Reminders MUST have a contact
 
 **Reminders without a contact are SILENTLY SKIPPED by the daemon.**
 
-Always use `--contact "Name"` when creating reminders, or put them in a `Claude: <Name>` list. The daemon routes reminders to sessions by contact - no contact = no injection.
-
-```bash
-# WRONG - will be silently skipped
-uv run ~/.claude/skills/reminders/scripts/add_reminder.py "Do something" --due "5m"
-
-# CORRECT - has a contact
-uv run ~/.claude/skills/reminders/scripts/add_reminder.py "Do something" --due "5m" --contact "Jane Doe"
-```
+Always use `--contact "Name"` when creating reminders. The daemon routes reminders to sessions by contact - no contact = no injection.
 
 ---
 
-**IMPORTANT**: Reminders are TASKS FOR CLAUDE TO EXECUTE, not text notifications to the user. When a reminder fires, Claude should DO the task described in the reminder title, then report results to the user (for FG) or work silently (for BG).
+**IMPORTANT**: Reminders are TASKS FOR CLAUDE TO EXECUTE, not text notifications to the user. When a reminder fires, Claude should DO the task described in the reminder title, then report results to the user.
 
 Example: "Check the weather and text forecast" → Claude checks weather API, then texts the user the forecast.
-
-Manage macOS Reminders.app with per-contact reminder lists. Each contact gets their own list (`Claude: <contact>`) so reminders can be routed back to the right person.
 
 ## Add a Reminder
 
 ```bash
-# For a specific contact (creates "Claude: John Smith" list if needed)
-uv run ~/.claude/skills/reminders/scripts/add_reminder.py "Check the chess game" --due "5m" --contact "John Smith"
+# In 2 hours
+claude-assistant remind add "Check the chess game" --contact "John Smith" --in 2h
 
-# General reminder
-uv run ~/.claude/skills/reminders/scripts/add_reminder.py "Reminder title" --due "5m"
+# At specific time (local timezone)
+claude-assistant remind add "Call Tokyo office" --contact "John Smith" --at "3pm"
+claude-assistant remind add "Morning standup" --contact "John Smith" --at "9:30am"
 
-# Background task reminder (injects into background session)
-uv run ~/.claude/skills/reminders/scripts/add_reminder.py "Consolidate memories" --due "1h" --contact "John Smith" --target bg
+# With cron (recurring)
+claude-assistant remind add "Daily standup" --contact "John Smith" --cron "0 9 * * *"
+claude-assistant remind add "Weekly review" --contact "John Smith" --cron "0 10 * * 1"
 
-# Both sessions (foreground AND background)
-uv run ~/.claude/skills/reminders/scripts/add_reminder.py "Sync all data" --due "2h" --contact "John Smith" --target both
+# With timezone override
+claude-assistant remind add "Call Tokyo" --contact "John Smith" --at "9am" --tz "Asia/Tokyo"
 ```
 
-### Due Time Formats
-- `5m`, `5 minutes` - minutes from now
-- `2h`, `2 hours` - hours from now
-- `1d`, `1 day` - days from now
-- `tomorrow` - tomorrow at 9am
-- `tomorrow 2pm` - tomorrow at 2pm
-- `2026-01-24 14:30` - specific datetime
+### Time Formats
 
-### Options
-- `--contact`, `-c` - **REQUIRED** - Contact name (auto-creates `Claude: <contact>` list)
-- `--due`, `-d` - When the reminder is due (required for timed reminders)
-- `--notes`, `-n` - Notes/body text
-- `--list`, `-l` - Explicit list name (ignored if --contact is set)
-- `--target`, `-t` - Target session: `fg` (foreground, default), `bg` (background), or `both`
+**Relative (`--in`)**:
+- `30m` - 30 minutes from now
+- `2h` - 2 hours from now
+- `1d` - 1 day from now
+- `1w` - 1 week from now
+- `2h30m` - 2 hours 30 minutes
 
-### Target Sessions
-- **fg** (default): Inject into the contact's main foreground session (for interactive tasks)
-- **bg**: Inject into the contact's background session (for automated/scheduled tasks like memory consolidation)
-- **both**: Inject into both sessions
+**Absolute (`--at`)**:
+- `3pm`, `3:30pm` - today (or tomorrow if past)
+- `15:00` - 24-hour format
+- `2026-03-03 15:00` - specific datetime
 
-## Recurring (Cron) Reminders
-
-For recurring reminders, add a cron pattern to the notes field. Cron reminders are never marked complete - they fire every time the pattern matches.
-
-**Cron reminders can have an "until" date** - set the due date to when the reminder should stop firing. After that time, the reminder is auto-completed.
-
-### Create via AppleScript (recommended for cron)
-```bash
-osascript -e '
-tell application "Reminders"
-    -- IMPORTANT: Must be in a "Claude: <Name>" list for daemon to process
-    set targetList to list "Claude: John Smith"
-
-    -- Set due date as "until" time (optional - cron stops after this)
-    set untilDate to current date
-    set hours of untilDate to 8
-    set minutes of untilDate to 0
-    -- set day/month/year as needed for future dates
-
-    make new reminder in targetList with properties {name:"Flight status check", body:"[target:fg] [cron:0 * * * *] Check flight and text update", due date:untilDate}
-end tell'
-```
-
-### Cron Pattern Format
-Standard cron: `minute hour day-of-month month day-of-week`
+**Cron (`--cron`)**:
+- `0 9 * * *` - 9am daily
 - `0 9,21 * * *` - 9am and 9pm daily
 - `30 8 * * 1-5` - 8:30am weekdays
-- `0 12 1 * *` - Noon on the 1st of each month
+- `0 12 1 * *` - Noon on 1st of month
 
-### Tags in Notes
-Both tags can be combined in the notes field:
-- `[target:fg]` or `[target:bg]` or `[target:both]`
-- `[cron:PATTERN]`
-
-Example: `[target:bg] [cron:0 9,21 * * *]` - fires at 9am/9pm, injects to background session
-
-### Cron vs One-Time
-- **One-time**: Has a due date, marked complete after firing
-- **Cron**: No due date, has cron pattern in notes, never marked complete
-
-## Poll for Due Reminders
+## List Reminders
 
 ```bash
-# Get all due reminders (past due time, not completed)
-uv run ~/.claude/skills/reminders/scripts/poll_due.py
+# All reminders
+claude-assistant remind list
 
 # Filter by contact
-uv run ~/.claude/skills/reminders/scripts/poll_due.py --contact "John Smith"
+claude-assistant remind list --contact "John Smith"
 
-# Get all incomplete reminders (including future)
-uv run ~/.claude/skills/reminders/scripts/poll_due.py --all
-
-# Output as JSON (for daemon integration)
-uv run ~/.claude/skills/reminders/scripts/poll_due.py --json
+# Show failed reminders only
+claude-assistant remind list --failed
 ```
 
-### JSON Output Format
-```json
-[
-  {
-    "id": 4,
-    "title": "Check the chess game",
-    "due_date": "2026-01-24T10:14:53",
-    "due_timestamp": 1769267693,
-    "notes": "Optional notes here",
-    "priority": 0,
-    "list": "Claude: John Smith",
-    "contact": "John Smith",
-    "target": "fg"
-  }
-]
+Output:
+```
+ID         Title                          Next Fire                 Contact
+--------------------------------------------------------------------------------
+abc12345   Check chess game               2026-03-03 03:00 PM EST   John Smith
+def67890   Daily standup                  2026-03-04 09:00 AM EST   John Smith
 ```
 
-The `target` field indicates which session to inject into: `fg`, `bg`, or `both`.
-
-## Mark Reminder Complete
+## Cancel a Reminder
 
 ```bash
-# By contact (recommended)
-uv run ~/.claude/skills/reminders/scripts/poll_due.py --complete "Check the chess game" --contact "John Smith"
+# By ID
+claude-assistant remind cancel abc12345
 
-# By explicit list
-uv run ~/.claude/skills/reminders/scripts/poll_due.py --complete "Reminder title" --list "List Name"
+# By title
+claude-assistant remind cancel --title "Daily standup"
+
+# Cancel all matching (if multiple)
+claude-assistant remind cancel --title "standup" --force
 ```
 
-## Example User Flow
+## Retry Failed Reminder
 
-1. User texts: "remind me to check the chess game in 5 minutes"
-2. Claude creates reminder: `add_reminder.py "check the chess game" --due "5m" --contact "Jane Doe"`
-3. Manager daemon polls every N seconds
-4. When due, daemon injects into user's session: `REMINDER: check the chess game`
-5. Claude in session sees reminder and takes action
-6. Reminder is marked complete
+When a reminder fails 3 times, it's marked dead. To retry:
 
-## List Naming Convention
+```bash
+claude-assistant remind retry abc12345
+```
 
-- Contact lists: `Claude: <Full Name>` (e.g., `Claude: John Smith`)
-- This allows easy identification and routing back to the correct contact session
+## Preview Cron Schedule
+
+```bash
+claude-assistant remind next "0 9 * * *"
+# Next 5 fire times for '0 9 * * *':
+#   2026-03-04 09:00 AM EST
+#   2026-03-05 09:00 AM EST
+#   ...
+
+claude-assistant remind next "0 9 * * *" --tz "Asia/Tokyo"
+```
+
+## Timezone Handling
+
+- **Default**: System timezone (typically `America/New_York`)
+- **Per-reminder override**: Use `--tz` flag
+- **Cron patterns**: Evaluated in local time, handles DST automatically
+- **Internal storage**: UTC (for reliable comparison)
+
+## How It Works
+
+1. Reminders stored in `~/dispatch/state/reminders.json`
+2. Daemon polls every 5 seconds for due reminders
+3. When due: injects task into contact's session
+4. Session executes task and reports results
+5. On success: `once` reminders deleted, `cron` reminders advance to next fire time
+6. On failure: retries 3 times with exponential backoff (1min, 2min, 4min)
+7. After 3 failures: marked dead, admin alerted
+
+## Reliability Features
+
+- **Atomic writes**: Crash-safe JSON persistence with fsync
+- **File locking**: CLI and daemon share lock to prevent corruption
+- **Catch-up**: Missed reminders (e.g., daemon restart) fire on startup (up to 24h late)
+- **Retry with backoff**: Transient failures auto-retry
+- **Admin alerts**: Dead reminders notify admin
+
+## Migration from Reminders.app
+
+The old Reminders.app-based system is deprecated. The native system:
+- No longer polls SQLite databases
+- No longer uses osascript
+- No longer requires Reminders.app
+
+Existing reminders in Reminders.app will not fire. Create new ones with `claude-assistant remind add`.

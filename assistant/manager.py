@@ -828,219 +828,245 @@ class TestMessageWatcher(threading.Thread):
 
 
 class ReminderPoller:
-    """Polls for due reminders and cron-based reminders, injecting into contact sessions."""
+    """
+    Native reminder poller using JSON-based storage.
 
-    POLL_SCRIPT = SKILLS_DIR / "reminders/scripts/poll_due.py"
+    Replaces the old Reminders.app polling approach with a native system:
+    - Cron runs in local time (handles DST automatically)
+    - Internal storage in UTC for comparison
+    - Retry with exponential backoff
+    - Catch-up on startup with 24h limit
+    - Admin alerts for dead reminders
+
+    Design: v6 (9.2/10 review score)
+    """
 
     def __init__(self, backend: SDKBackend, contacts_manager: ContactsManager):
         self.backend = backend
         self.contacts = contacts_manager
-        # Track last-fired times for cron reminders to avoid double-firing
-        # Key: reminder_id, Value: datetime of last fire
-        self.cron_last_fired = {}
+        self.reminders = []
+        self.config = {}
+        self._caught_up = False
 
-    def check_due_reminders(self) -> list:
-        """Poll for due reminders."""
-        if not self.POLL_SCRIPT.exists():
-            return []
+    def _load_reminders(self):
+        """Load reminders from JSON file."""
+        from assistant.reminders import reminders_lock, load_reminders
+        with reminders_lock():
+            data = load_reminders()
+            self.reminders = data.get("reminders", [])
+            self.config = data.get("config", {})
 
-        result = subprocess.run(
-            [UV, "run", "python", str(self.POLL_SCRIPT), "--json"],
-            capture_output=True, text=True
-        )
+    def _save_reminders(self):
+        """Save reminders to JSON file."""
+        from assistant.reminders import reminders_lock, save_reminders
+        with reminders_lock():
+            save_reminders({
+                "version": 1,
+                "config": self.config,
+                "reminders": self.reminders
+            })
 
-        if result.returncode != 0:
-            log.error(f"Reminder poll failed: {result.stderr}")
-            return []
+    def _get_reminder_timezone(self, r: dict) -> str:
+        """Get effective timezone for a reminder."""
+        return r.get("schedule", {}).get("timezone") or self.config.get("default_timezone", "America/New_York")
 
-        try:
-            return json.loads(result.stdout)
-        except json.JSONDecodeError:
-            return []
+    def _should_fire(self, r: dict, now_utc: datetime) -> bool:
+        """Check if a reminder should fire now."""
+        from datetime import timezone
 
-    def check_cron_reminders(self) -> list:
-        """Get reminders with cron patterns."""
-        if not self.POLL_SCRIPT.exists():
-            return []
+        fire_time_str = r.get("next_fire")
+        if not fire_time_str:
+            return False
 
-        # Use Python to get cron reminders directly
-        import sys
-        reminders_path = str(SKILLS_DIR / "reminders/scripts")
-        if reminders_path not in sys.path:
-            sys.path.insert(0, reminders_path)
-        try:
-            from poll_due import get_cron_reminders, find_reminders_db
-            db_path = find_reminders_db()
-            if db_path:
-                return get_cron_reminders(db_path)
-        except Exception as e:
-            log.error(f"Failed to get cron reminders: {e}")
-        return []
+        fire_time = datetime.fromisoformat(fire_time_str.replace('Z', '+00:00'))
+        if fire_time > now_utc:
+            return False
 
-    def _should_fire_cron(self, reminder_id: int, cron_pattern: str) -> bool:
-        """Check if a cron pattern matches current time and hasn't fired this minute."""
-        try:
-            from croniter import croniter
-            now = datetime.now()
+        max_retries = self.config.get("max_retries", 3)
+        if r.get("retry_count", 0) >= max_retries:
+            return False  # Dead, needs manual intervention
 
-            # Check if already fired this minute
-            last_fired = self.cron_last_fired.get(reminder_id)
-            if last_fired and last_fired.replace(second=0, microsecond=0) == now.replace(second=0, microsecond=0):
+        # Check backoff if there was an error
+        if r.get("last_error") and r.get("last_fired"):
+            backoff_list = self.config.get("backoff_seconds", [60, 120, 240])
+            retry_count = r.get("retry_count", 0)
+            idx = min(max(0, retry_count - 1), len(backoff_list) - 1)
+            backoff_secs = backoff_list[idx]
+            last_attempt = datetime.fromisoformat(r["last_fired"].replace('Z', '+00:00'))
+            if (now_utc - last_attempt).total_seconds() < backoff_secs:
                 return False
 
-            # Check if cron matches current time
-            # Get the previous scheduled time - if it's within the last minute, we should fire
-            cron = croniter(cron_pattern, now)
-            prev_time = cron.get_prev(datetime)
+        return True
 
-            # If the previous scheduled time is within the last 60 seconds, fire
-            if (now - prev_time).total_seconds() < 60:
-                self.cron_last_fired[reminder_id] = now
-                return True
+    async def catch_up_missed_reminders(self):
+        """Called once on daemon start to fire missed reminders."""
+        from datetime import timezone, timedelta
 
-            return False
-        except Exception as e:
-            log.error(f"Failed to evaluate cron pattern '{cron_pattern}': {e}")
-            return False
-
-    async def process_due_reminders(self):
-        """Check for due reminders and cron reminders, inject into contact sessions."""
-        now = datetime.now()
-        timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
-
-        # Process one-time due reminders
-        due_reminders = self.check_due_reminders()
-        if due_reminders:
-            log.info(f"REMINDER_POLL | found {len(due_reminders)} due reminders")
-        for r in due_reminders:
-            # Skip cron reminders here (handled separately)
-            if r.get("cron"):
-                continue
-            await self._inject_reminder(r, timestamp, is_cron=False)
-
-        # Process cron-based reminders
-        cron_reminders = self.check_cron_reminders()
-        for r in cron_reminders:
-            # Check if cron has an until_date and it's past
-            until_ts = r.get("until_timestamp")
-            if until_ts and now.timestamp() > until_ts:
-                log.info(f"Cron reminder expired (past until_date): {r['title']}")
-                self._complete_reminder(r["title"], r.get("list", "Reminders"))
-                continue
-
-            if self._should_fire_cron(r["id"], r["cron"]):
-                log.info(f"Cron reminder triggered: {r['title']} (pattern: {r['cron']})")
-                await self._inject_reminder(r, timestamp, is_cron=True)
-
-    async def _inject_reminder(self, r: dict, timestamp: str, is_cron: bool):
-        """Inject a reminder into the appropriate session(s) via SDK backend."""
-        contact = r.get("contact")
-        if not contact:
-            log.debug(f"Skipping reminder without contact: {r['title']}")
+        if self._caught_up:
             return
 
-        # Check if contact is already a chat_id (hex string for group chats or phone number)
+        self._load_reminders()
+        now_utc = datetime.now(timezone.utc)
+        catch_up_max_hours = self.config.get("catch_up_max_hours", 24)
+        catch_up_max = timedelta(hours=catch_up_max_hours)
+        modified = False
+
+        for r in list(self.reminders):
+            fire_time_str = r.get("next_fire")
+            if not fire_time_str:
+                continue
+
+            fire_time = datetime.fromisoformat(fire_time_str.replace('Z', '+00:00'))
+            if fire_time >= now_utc:
+                continue
+
+            age = now_utc - fire_time
+
+            if age > catch_up_max:
+                log.warning(f"REMINDER_SKIPPED | id={r['id']} | {age.total_seconds()/3600:.1f}h late")
+                if r["schedule"]["type"] == "once":
+                    self.reminders.remove(r)
+                else:
+                    # Advance cron to next fire time
+                    from assistant.reminders import next_cron_fire
+                    tz = self._get_reminder_timezone(r)
+                    r["next_fire"] = next_cron_fire(r["schedule"]["value"], tz)
+                modified = True
+                continue
+
+            log.info(f"REMINDER_CATCHUP | id={r['id']} | {age.total_seconds()/60:.0f}m late")
+            await self._fire_reminder(r, late=True)
+            modified = True
+
+        if modified:
+            self._save_reminders()
+
+        self._caught_up = True
+
+    async def process_due_reminders(self):
+        """Check for due reminders and fire them. Called every poll cycle."""
+        from datetime import timezone
+
+        # Always reload to pick up CLI changes
+        self._load_reminders()
+
+        now_utc = datetime.now(timezone.utc)
+
+        for r in list(self.reminders):
+            if self._should_fire(r, now_utc):
+                await self._fire_reminder(r)
+
+        # Save after processing (batch save)
+        self._save_reminders()
+
+    async def _fire_reminder(self, r: dict, late: bool = False):
+        """Fire a reminder by injecting into session."""
+        from datetime import timezone
+        from assistant.reminders import next_cron_fire, format_for_display
+
+        try:
+            await self._inject_to_session(r, late)
+
+            # Success
+            now_utc = datetime.now(timezone.utc)
+            r["last_fired"] = now_utc.isoformat().replace('+00:00', 'Z')
+            r["fired_count"] = r.get("fired_count", 0) + 1
+            r["last_error"] = None
+            r["retry_count"] = 0
+
+            if r["schedule"]["type"] == "once":
+                # Delete once reminders on success
+                self.reminders.remove(r)
+                log.info(f"REMINDER_DELETED | id={r['id']} | reason=completed")
+            else:
+                # Advance cron to next fire time
+                tz = self._get_reminder_timezone(r)
+                r["next_fire"] = next_cron_fire(r["schedule"]["value"], tz)
+                log.info(f"REMINDER_SCHEDULED | id={r['id']} | next={r['next_fire']}")
+
+            log.info(f"REMINDER_FIRED | id={r['id']} | late={late}")
+
+        except Exception as e:
+            r["retry_count"] = r.get("retry_count", 0) + 1
+            r["last_error"] = str(e)
+            r["last_fired"] = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+            log.error(f"REMINDER_FAILED | id={r['id']} | attempt={r['retry_count']} | {e}")
+
+            max_retries = self.config.get("max_retries", 3)
+            if r["retry_count"] >= max_retries:
+                log.error(f"REMINDER_DEAD | id={r['id']}")
+                await self._alert_admin(r)
+
+    async def _inject_to_session(self, r: dict, late: bool = False):
+        """Inject reminder into contact's session."""
+        from datetime import timezone
+        from assistant.reminders import format_for_display
+
+        contact = r.get("contact")
+        if not contact:
+            raise ValueError(f"Reminder has no contact: {r.get('id')}")
+
+        # Resolve contact to chat_id
         if re.match(r'^[0-9a-f]{32}$', contact) or contact.startswith('+'):
-            # Already a chat_id (group chat hex or phone number), use directly
             chat_id = contact
-            tier = "admin"  # Default to admin for direct chat_id reminders
+            tier = "admin"
         else:
-            # Look up contact's chat_id (phone number) by name
             contact_info = self.contacts.lookup_phone_by_name(contact)
             if not contact_info:
-                log.warning(f"Could not find chat_id for contact {contact}, skipping reminder")
-                return
+                raise ValueError(f"Contact not found: {contact}")
             chat_id = contact_info.get("phone")
             if not chat_id:
-                log.warning(f"No phone for contact {contact}, skipping reminder")
-                return
+                raise ValueError(f"No phone for contact: {contact}")
             tier = contact_info.get("tier", "admin")
 
-        # Build reminder injection message
-        title = r.get("title", "Reminder")
-        notes = r.get("notes", "")
-        target = r.get("target", "fg")  # fg, bg, or both
-        cron_pattern = r.get("cron", "")
+        # Build injection message
+        tz = self._get_reminder_timezone(r)
+        now_local = datetime.now(timezone.utc).astimezone()
+        ts_display = now_local.strftime("%Y-%m-%d %I:%M %p %Z")
 
-        # Different instructions based on target
-        fg_instruction = """ACTION REQUIRED:
-1. TEXT the user: "Reminder fired: [task name]. Working on it now..."
-2. EXECUTE the task
-3. TEXT the user the results when done"""
-        bg_instruction = "EXECUTE this task now silently. No need to text the user."
+        msg = f"---REMINDER [{ts_display}]---\n{r['title']}\n---END REMINDER---\n"
 
-        # Build base prompt
-        def build_prompt(instruction):
-            injection = f"""
----REMINDER FIRED [{timestamp}]---
-{title}
-"""
-            if notes:
-                injection += f"Notes: {notes}\n"
-            if is_cron:
-                injection += f"Schedule: {cron_pattern} (recurring)\n"
-            injection += f"""---END REMINDER---
+        if late:
+            fire_time = datetime.fromisoformat(r["next_fire"].replace('Z', '+00:00'))
+            mins_late = (datetime.now(timezone.utc) - fire_time).total_seconds() / 60
+            fire_display = format_for_display(r["next_fire"], tz)
+            msg += f"\n[LATE: {mins_late:.0f} minutes after scheduled time ({fire_display})]\n"
 
-{instruction}
-"""
-            return injection
+        if r["schedule"]["type"] == "cron":
+            msg += f"\n[Schedule: {r['schedule']['value']} in {tz}]\n"
 
-        # Inject into target session(s) directly (not via inject_message which adds SMS wrapping)
+        msg += "\nACTION REQUIRED:\n1. TEXT the user: \"Reminder: [task]. Working on it now...\"\n2. EXECUTE the task\n3. TEXT the user the results when done"
+
+        # Inject into session
         normalized = normalize_chat_id(chat_id)
-        if target in ("fg", "both"):
-            prompt = build_prompt(fg_instruction)
-            try:
-                session = self.backend.sessions.get(normalized)
-                if session and session.is_alive():
-                    await session.inject(prompt)
-                    log.info(f"Injected reminder to FG: {title}")
-                else:
-                    # Create session and inject
-                    await self.backend.create_session(contact, normalized, tier)
-                    session = self.backend.sessions.get(normalized)
-                    if session:
-                        await session.inject(prompt)
-                        log.info(f"Injected reminder to FG (created): {title}")
-                    else:
-                        log.error(f"Failed to create FG session for reminder {title}")
-            except Exception as e:
-                log.error(f"Failed to inject reminder {title} to FG: {e}")
-
-        if target in ("bg", "both"):
-            prompt = build_prompt(bg_instruction)
-            try:
-                # Inject into background session
-                bg_id = f"{normalize_chat_id(chat_id)}-bg"
-                session = self.backend.sessions.get(bg_id)
-                if session and session.is_alive():
-                    await session.inject(prompt)
-                    log.info(f"Injected reminder to BG: {title}")
-                else:
-                    # Create BG session and inject
-                    await self.backend.create_background_session(contact, chat_id, tier)
-                    session = self.backend.sessions.get(bg_id)
-                    if session:
-                        await session.inject(prompt)
-                        log.info(f"Injected reminder to BG (created): {title}")
-                    else:
-                        log.error(f"Failed to create BG session for reminder {title}")
-            except Exception as e:
-                log.error(f"Failed to inject reminder {title} to BG: {e}")
-
-        # Only mark complete if NOT a cron reminder
-        if not is_cron:
-            self._complete_reminder(r["title"], r.get("list", "Reminders"))
-
-    def _complete_reminder(self, title: str, list_name: str = "Reminders"):
-        """Mark a reminder as complete."""
-        result = subprocess.run(
-            [UV, "run", "python", str(self.POLL_SCRIPT), "--complete", title, "--list", list_name],
-            capture_output=True, text=True
-        )
-        if result.returncode == 0:
-            log.info(f"Marked reminder complete: {title} (list: {list_name})")
+        session = self.backend.sessions.get(normalized)
+        if session and session.is_alive():
+            await session.inject(msg)
         else:
-            log.error(f"Failed to complete reminder '{title}' in list '{list_name}': {result.stderr} {result.stdout}")
+            # Create session and inject
+            await self.backend.create_session(contact, normalized, tier)
+            session = self.backend.sessions.get(normalized)
+            if session:
+                await session.inject(msg)
+            else:
+                raise RuntimeError(f"Failed to create session for {contact}")
+
+    async def _alert_admin(self, r: dict):
+        """Notify admin of dead reminder."""
+        from assistant import config
+        admin_phone = config.get("owner.phone")
+        if not admin_phone:
+            return
+
+        msg = f"⚠️ Reminder failed (3 attempts):\n{r['title']}\nError: {r.get('last_error', 'Unknown')}\n\nRetry: claude-assistant remind retry {r['id']}"
+
+        try:
+            normalized = normalize_chat_id(admin_phone)
+            session = self.backend.sessions.get(normalized)
+            if session and session.is_alive():
+                await session.inject(msg)
+        except Exception as e:
+            log.error(f"Failed to alert admin about dead reminder: {e}")
 
 
 class IPCServer:

@@ -805,6 +805,119 @@ def cmd_watchdog_status(args):
   return 0
 
 
+def cmd_remind(args):
+    """Manage native reminders."""
+    from assistant.reminders import (
+        add_reminder_cli, list_reminders_cli, cancel_reminder_cli,
+        retry_reminder_cli, preview_cron_cli, format_for_display
+    )
+
+    if not args.remind_command or args.remind_command == "add":
+        # Handle add command
+        if not hasattr(args, 'title') or not args.title:
+            print("Usage: claude-assistant remind add 'title' --contact NAME --in 2h")
+            return 1
+
+        if not args.in_duration and not args.at_time and not args.cron:
+            print("Error: Must specify --in, --at, or --cron")
+            return 1
+
+        try:
+            reminder = add_reminder_cli(
+                title=args.title,
+                contact=args.contact,
+                in_duration=args.in_duration,
+                at_time=args.at_time,
+                cron_pattern=args.cron,
+                tz_override=args.tz
+            )
+            tz = args.tz or "America/New_York"
+            display_time = format_for_display(reminder["next_fire"], tz)
+            print(f"Created: {reminder['id']} → {reminder['title']}")
+            print(f"  Fires: {display_time}")
+            print(f"  Contact: {reminder['contact']}")
+            return 0
+        except Exception as e:
+            print(f"Error: {e}")
+            return 1
+
+    elif args.remind_command == "list":
+        try:
+            reminders = list_reminders_cli(
+                contact=args.contact,
+                show_failed=args.failed
+            )
+            if not reminders:
+                print("No reminders found.")
+                return 0
+
+            # Print table
+            print(f"{'ID':<10} {'Title':<30} {'Next Fire':<25} {'Contact':<15}")
+            print("-" * 80)
+            for r in reminders:
+                title = r['title'][:28] + '..' if len(r['title']) > 30 else r['title']
+                display = r.get('_display_time', r['next_fire'])[:23]
+                contact = r['contact'][:13] + '..' if len(r['contact']) > 15 else r['contact']
+                status = ""
+                if r.get('retry_count', 0) >= 3:
+                    status = " [DEAD]"
+                elif r.get('last_error'):
+                    status = f" [retry {r['retry_count']}]"
+                print(f"{r['id']:<10} {title:<30} {display:<25} {contact:<15}{status}")
+            return 0
+        except Exception as e:
+            print(f"Error: {e}")
+            return 1
+
+    elif args.remind_command == "cancel":
+        if not args.id and not args.title:
+            print("Error: Must specify reminder ID or --title")
+            return 1
+
+        try:
+            count = cancel_reminder_cli(
+                reminder_id=args.id,
+                title=args.title,
+                force=args.force
+            )
+            if count > 0:
+                print(f"Cancelled {count} reminder(s)")
+                return 0
+            else:
+                print("No matching reminders found")
+                return 1
+        except ValueError as e:
+            print(f"Error: {e}")
+            return 1
+
+    elif args.remind_command == "retry":
+        if not args.id:
+            print("Error: Must specify reminder ID")
+            return 1
+
+        if retry_reminder_cli(args.id):
+            print(f"Reset reminder {args.id} - will retry on next poll")
+            return 0
+        else:
+            print(f"Reminder {args.id} not found")
+            return 1
+
+    elif args.remind_command == "next":
+        try:
+            times = preview_cron_cli(args.pattern, args.tz, args.n)
+            print(f"Next {args.n} fire times for '{args.pattern}':")
+            for t in times:
+                print(f"  {t}")
+            return 0
+        except Exception as e:
+            print(f"Error: {e}")
+            return 1
+
+    else:
+        print(f"Unknown remind command: {args.remind_command}")
+        return 1
+
+
 def cmd_menubar(args):
     """Start the menu bar app (foreground)."""
     menubar_script = ASSISTANT_DIR / "bin" / "claude-menubar"
@@ -941,6 +1054,40 @@ def main():
     inject_parser.add_argument("--reply-to", help="GUID of message being replied to (for reply chain context)")
     inject_parser.add_argument("--attachment", help="Path to image attachment for Gemini vision analysis")
 
+    # remind - native reminder system
+    remind_parser = subparsers.add_parser("remind", help="Manage native reminders")
+    remind_subparsers = remind_parser.add_subparsers(dest="remind_command", help="Reminder commands")
+
+    # remind add (default when just using remind "title")
+    remind_add = remind_subparsers.add_parser("add", help="Add a reminder")
+    remind_add.add_argument("title", help="Reminder title/task")
+    remind_add.add_argument("--contact", "-c", required=True, help="Contact name, phone, or chat_id")
+    remind_add.add_argument("--in", dest="in_duration", help="Fire in duration (e.g., 30m, 2h, 1d)")
+    remind_add.add_argument("--at", dest="at_time", help="Fire at time (e.g., 3pm, 15:00)")
+    remind_add.add_argument("--cron", help="Cron pattern (e.g., '0 9 * * *' for 9am daily)")
+    remind_add.add_argument("--tz", help="Timezone override (e.g., America/Los_Angeles)")
+
+    # remind list
+    remind_list = remind_subparsers.add_parser("list", help="List reminders")
+    remind_list.add_argument("--contact", "-c", help="Filter by contact")
+    remind_list.add_argument("--failed", action="store_true", help="Show failed reminders only")
+
+    # remind cancel
+    remind_cancel = remind_subparsers.add_parser("cancel", help="Cancel a reminder")
+    remind_cancel.add_argument("id", nargs="?", help="Reminder ID")
+    remind_cancel.add_argument("--title", "-t", help="Cancel by title")
+    remind_cancel.add_argument("--force", "-f", action="store_true", help="Cancel all matching (if multiple)")
+
+    # remind retry
+    remind_retry = remind_subparsers.add_parser("retry", help="Retry a failed reminder")
+    remind_retry.add_argument("id", help="Reminder ID")
+
+    # remind next
+    remind_next = remind_subparsers.add_parser("next", help="Preview next fire times for cron pattern")
+    remind_next.add_argument("pattern", help="Cron pattern")
+    remind_next.add_argument("--tz", help="Timezone (default: system)")
+    remind_next.add_argument("-n", type=int, default=5, help="Number of times to show")
+
     args = parser.parse_args()
 
     if not args.command:
@@ -970,6 +1117,7 @@ def main():
         "watchdog-uninstall": cmd_watchdog_uninstall,
         "watchdog-status": cmd_watchdog_status,
         "inject-prompt": cmd_inject_prompt,
+        "remind": cmd_remind,
     }
 
     return commands[args.command](args)
