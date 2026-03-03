@@ -12,8 +12,8 @@
   </header>
 
   <div class="quick-actions">
-    <button class="action-btn primary" onclick={() => navigateTo('getting-started')}>
-      Get Started
+    <button class="action-btn primary" onclick={() => navigateTo('setup')}>
+      Setup Guide
     </button>
     <button class="action-btn" onclick={() => navigateTo('philosophy')}>
       Philosophy

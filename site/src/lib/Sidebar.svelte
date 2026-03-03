@@ -4,7 +4,8 @@
   const navItems = [
     { id: 'home', label: 'Overview' },
     { id: 'philosophy', label: 'Philosophy' },
-    { id: 'getting-started', label: 'Getting Started' },
+    { id: 'setup', label: 'Setup Guide' },
+    { id: 'getting-started', label: 'Quick Start' },
     { id: 'tiers', label: 'Contact Tiers' },
     { id: 'skills', label: 'Skills' },
     { id: 'cli', label: 'CLI Reference' },
