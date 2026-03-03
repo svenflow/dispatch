@@ -238,10 +238,6 @@
       </thead>
       <tbody>
         <tr>
-          <td><code>ANTHROPIC_API_KEY</code></td>
-          <td>Claude API key (required)</td>
-        </tr>
-        <tr>
           <td><code>DISPATCH_CONFIG</code></td>
           <td>Config file path (default: config.local.yaml)</td>
         </tr>

@@ -3,7 +3,6 @@
   import Sidebar from './lib/Sidebar.svelte'
   import Home from './routes/Home.svelte'
   import Setup from './routes/Setup.svelte'
-  import GettingStarted from './routes/GettingStarted.svelte'
   import Tiers from './routes/Tiers.svelte'
   import Skills from './routes/Skills.svelte'
   import CLI from './routes/CLI.svelte'
@@ -22,7 +21,6 @@
     'home': Home,
     'philosophy': Philosophy,
     'setup': Setup,
-    'getting-started': GettingStarted,
     'tiers': Tiers,
     'skills': Skills,
     'cli': CLI,
