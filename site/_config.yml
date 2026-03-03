@@ -1,0 +1,65 @@
+title: Dispatch
+description: A personal AI assistant daemon that turns Claude into a full computer-controlling agent
+theme: just-the-docs
+
+url: https://svenflow.github.io
+baseurl: /dispatch
+
+# Color scheme: dark or light
+color_scheme: dark
+
+# Logo
+logo: /assets/images/logo.svg
+
+# Aux links (top right)
+aux_links:
+  GitHub: https://github.com/svenflow/dispatch
+
+aux_links_new_tab: true
+
+# Navigation structure
+nav_sort: case_sensitive
+heading_anchors: true
+nav_enabled: true
+nav_external_links:
+  - title: GitHub
+    url: https://github.com/svenflow/dispatch
+
+# Back to top link
+back_to_top: true
+back_to_top_text: "Back to top"
+
+# Footer content
+footer_content: "Dispatch is an open source project."
+
+# Last edit timestamp
+last_edit_timestamp: true
+last_edit_time_format: "%b %e %Y at %I:%M %p"
+
+# Search
+search_enabled: true
+search:
+  heading_level: 3
+  previews: 3
+  preview_words_before: 5
+  preview_words_after: 10
+  tokenizer_separator: /[\s/]+/
+  rel_url: true
+  button: false
+
+# Enable copy button on code blocks
+enable_copy_code_button: true
+
+# Mermaid (for diagrams)
+mermaid:
+  version: "9.1.6"
+
+plugins:
+  - jekyll-seo-tag
+  - jekyll-sitemap
+
+# Exclude from processing
+exclude:
+  - .git
+  - node_modules
+  - vendor
