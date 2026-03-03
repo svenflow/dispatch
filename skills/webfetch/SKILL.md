@@ -1,5 +1,5 @@
 ---
-name: scraping
+name: webfetch
 description: Web scraping with anti-bot bypass using scrapling. Fallback to chrome-control for auth. Trigger words - scrape, fetch, web, crawl, extract, blocked site.
 ---
 
