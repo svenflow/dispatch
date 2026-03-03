@@ -255,7 +255,8 @@ def create_reminder(
     contact: str,
     schedule_type: str,
     schedule_value: str,
-    tz_name: Optional[str] = None
+    tz_name: Optional[str] = None,
+    target: str = "fg"
 ) -> Dict[str, Any]:
     """
     Create a new reminder dict.
@@ -266,6 +267,7 @@ def create_reminder(
         schedule_type: 'once' or 'cron'
         schedule_value: ISO datetime for 'once', cron pattern for 'cron'
         tz_name: Timezone override (uses default if None)
+        target: Target session - 'fg' (foreground), 'bg' (background), or 'spawn' (new agent)
 
     Returns:
         New reminder dict ready to append to reminders list
@@ -273,10 +275,15 @@ def create_reminder(
     reminder_id = str(uuid.uuid4())[:8]
     now_utc = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
 
+    # Validate target
+    if target not in ("fg", "bg", "spawn"):
+        raise ValueError(f"Invalid target: {target}. Must be 'fg', 'bg', or 'spawn'")
+
     reminder = {
         "id": reminder_id,
         "title": title,
         "contact": contact,
+        "target": target,
         "schedule": {
             "type": schedule_type,
             "value": schedule_value,
@@ -310,11 +317,12 @@ def get_reminder_timezone(reminder: Dict[str, Any], config: Dict[str, Any]) -> s
 
 def add_reminder_cli(title: str, contact: str, in_duration: Optional[str] = None,
                      at_time: Optional[str] = None, cron_pattern: Optional[str] = None,
-                     tz_override: Optional[str] = None) -> Dict[str, Any]:
+                     tz_override: Optional[str] = None, target: str = "fg") -> Dict[str, Any]:
     """
     Add a reminder via CLI.
 
     One of in_duration, at_time, or cron_pattern must be provided.
+    Target can be 'fg' (foreground session), 'bg' (background session), or 'spawn' (new agent).
     Returns the created reminder.
     """
     with reminders_lock():
@@ -344,7 +352,8 @@ def add_reminder_cli(title: str, contact: str, in_duration: Optional[str] = None
             contact=contact,
             schedule_type=schedule_type,
             schedule_value=schedule_value,
-            tz_name=tz_override  # Only store if explicitly overridden
+            tz_name=tz_override,  # Only store if explicitly overridden
+            target=target
         )
 
         # For cron, compute next_fire with timezone

@@ -1035,21 +1035,54 @@ class ReminderPoller:
         if r["schedule"]["type"] == "cron":
             msg += f"\n[Schedule: {r['schedule']['value']} in {tz}]\n"
 
-        msg += "\nACTION REQUIRED:\n1. TEXT the user: \"Reminder: [task]. Working on it now...\"\n2. EXECUTE the task\n3. TEXT the user the results when done"
-
-        # Inject into session
-        normalized = normalize_chat_id(chat_id)
-        session = self.backend.sessions.get(normalized)
-        if session and session.is_alive():
-            await session.inject(msg)
+        # Different instructions based on target
+        target = r.get("target", "fg")
+        if target == "bg":
+            msg += "\nEXECUTE this task silently. No need to text the user."
         else:
-            # Create session and inject
-            await self.backend.create_session(contact, normalized, tier)
-            session = self.backend.sessions.get(normalized)
+            msg += "\nACTION REQUIRED:\n1. TEXT the user: \"Reminder: [task]. Working on it now...\"\n2. EXECUTE the task\n3. TEXT the user the results when done"
+
+        # Inject into session based on target
+        normalized = normalize_chat_id(chat_id)
+
+        if target == "spawn":
+            # Create a fresh agent session for this task
+            # Use a unique session name for the spawn
+            spawn_id = f"{normalized}-spawn-{r['id']}"
+            await self.backend.create_session(contact, spawn_id, tier)
+            session = self.backend.sessions.get(spawn_id)
             if session:
                 await session.inject(msg)
+                log.info(f"REMINDER_SPAWN | id={r['id']} | session={spawn_id}")
             else:
-                raise RuntimeError(f"Failed to create session for {contact}")
+                raise RuntimeError(f"Failed to spawn session for {contact}")
+        elif target == "bg":
+            # Inject into background session
+            bg_id = f"{normalized}-bg"
+            session = self.backend.sessions.get(bg_id)
+            if session and session.is_alive():
+                await session.inject(msg)
+            else:
+                # Create BG session and inject
+                await self.backend.create_background_session(contact, chat_id, tier)
+                session = self.backend.sessions.get(bg_id)
+                if session:
+                    await session.inject(msg)
+                else:
+                    raise RuntimeError(f"Failed to create BG session for {contact}")
+        else:
+            # fg (default) - inject into foreground session
+            session = self.backend.sessions.get(normalized)
+            if session and session.is_alive():
+                await session.inject(msg)
+            else:
+                # Create session and inject
+                await self.backend.create_session(contact, normalized, tier)
+                session = self.backend.sessions.get(normalized)
+                if session:
+                    await session.inject(msg)
+                else:
+                    raise RuntimeError(f"Failed to create session for {contact}")
 
     async def _alert_admin(self, r: dict):
         """Notify admin of dead reminder."""

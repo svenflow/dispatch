@@ -829,13 +829,15 @@ def cmd_remind(args):
                 in_duration=args.in_duration,
                 at_time=args.at_time,
                 cron_pattern=args.cron,
-                tz_override=args.tz
+                tz_override=args.tz,
+                target=args.target
             )
             tz = args.tz or "America/New_York"
             display_time = format_for_display(reminder["next_fire"], tz)
             print(f"Created: {reminder['id']} → {reminder['title']}")
             print(f"  Fires: {display_time}")
             print(f"  Contact: {reminder['contact']}")
+            print(f"  Target: {reminder['target']}")
             return 0
         except Exception as e:
             print(f"Error: {e}")
@@ -1066,6 +1068,8 @@ def main():
     remind_add.add_argument("--at", dest="at_time", help="Fire at time (e.g., 3pm, 15:00)")
     remind_add.add_argument("--cron", help="Cron pattern (e.g., '0 9 * * *' for 9am daily)")
     remind_add.add_argument("--tz", help="Timezone override (e.g., America/Los_Angeles)")
+    remind_add.add_argument("--target", "-t", choices=["fg", "bg", "spawn"], default="fg",
+                           help="Target: fg (foreground session), bg (background), spawn (new agent)")
 
     # remind list
     remind_list = remind_subparsers.add_parser("list", help="List reminders")
