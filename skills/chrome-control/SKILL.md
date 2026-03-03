@@ -7,6 +7,28 @@ description: Control Chrome browser via CLI for browser automation tasks. Use wh
 
 Control Chrome browser from the command line via native messaging extension.
 
+## ⚠️ TRY SCRAPING FIRST
+
+**Before using chrome-control for web scraping, try the `/scraping` skill first!**
+
+```bash
+# Try this first (faster, no browser needed):
+~/.claude/skills/webfetch/scripts/webfetch "https://example.com"
+```
+
+The scraping skill uses scrapling which is:
+- **10x faster** (0.3-1s vs 5-10s)
+- **No browser process** needed
+- **Works on 80-95% of sites** including Reddit, Amazon, Zillow
+
+**Only use chrome-control when:**
+- Scraping fails (site requires login)
+- You need to **interact** with the page (click, type, submit forms)
+- You need **screenshots**
+- You need access to your **logged-in Chrome session**
+
+---
+
 **CRITICAL: ALWAYS use this CLI tool for Chrome automation. NEVER use osascript, cliclick, AppleScript, or any other method to interact with Chrome. This extension provides reliable, precise control.**
 
 ## ⚠️ CRITICAL: Clean Up Your Tabs
