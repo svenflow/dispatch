@@ -1,4 +1,5 @@
 <script>
+  import { onMount } from 'svelte'
   import './app.css'
   import Sidebar from './lib/Sidebar.svelte'
   import Home from './routes/Home.svelte'
@@ -11,13 +12,6 @@
   import Configuration from './routes/Configuration.svelte'
   import Philosophy from './routes/Philosophy.svelte'
 
-  let currentPage = 'home'
-
-  function navigateTo(page) {
-    currentPage = page
-    window.scrollTo({ top: 0, behavior: 'instant' })
-  }
-
   const pages = {
     'home': Home,
     'philosophy': Philosophy,
@@ -29,6 +23,30 @@
     'architecture': Architecture,
     'configuration': Configuration,
   }
+
+  let currentPage = 'home'
+
+  function getPageFromHash() {
+    const hash = window.location.hash.replace('#', '').replace('/', '')
+    return pages[hash] ? hash : 'home'
+  }
+
+  function navigateTo(page) {
+    currentPage = page
+    window.location.hash = page === 'home' ? '' : page
+    window.scrollTo({ top: 0, behavior: 'instant' })
+  }
+
+  function handleHashChange() {
+    currentPage = getPageFromHash()
+    window.scrollTo({ top: 0, behavior: 'instant' })
+  }
+
+  onMount(() => {
+    currentPage = getPageFromHash()
+    window.addEventListener('hashchange', handleHashChange)
+    return () => window.removeEventListener('hashchange', handleHashChange)
+  })
 
   $: pageComponent = pages[currentPage]
 </script>
