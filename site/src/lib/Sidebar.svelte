@@ -1,10 +1,12 @@
 <script>
-  let { currentPage, onNavigate } = $props();
+  export let currentPage;
+  export let onNavigate;
 
   const navItems = [
     { id: 'home', label: 'Overview' },
     { id: 'philosophy', label: 'Philosophy' },
     { id: 'setup', label: 'Setup Guide' },
+    { id: 'getting-started', label: 'Quick Start' },
     { id: 'tiers', label: 'Contact Tiers' },
     { id: 'skills', label: 'Skills' },
     { id: 'cli', label: 'CLI Reference' },
@@ -12,7 +14,7 @@
     { id: 'configuration', label: 'Configuration' },
   ];
 
-  let mobileMenuOpen = $state(false);
+  let mobileMenuOpen = false;
 
   function handleNav(id) {
     onNavigate(id);
@@ -22,7 +24,7 @@
 
 <!-- Mobile header -->
 <header class="mobile-header">
-  <button class="mobile-menu-btn" onclick={() => mobileMenuOpen = !mobileMenuOpen} aria-label="Toggle menu">
+  <button class="mobile-menu-btn" on:click={() => mobileMenuOpen = !mobileMenuOpen} aria-label="Toggle menu">
     <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
       {#if mobileMenuOpen}
         <path d="M5 5l10 10M15 5L5 15" />
@@ -48,7 +50,7 @@
         <button
           class="nav-item"
           class:active={currentPage === item.id}
-          onclick={() => handleNav(item.id)}
+          on:click={() => handleNav(item.id)}
         >
           {item.label}
           {#if currentPage === item.id}
@@ -73,7 +75,7 @@
 {#if mobileMenuOpen}
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <div class="mobile-overlay" onclick={() => mobileMenuOpen = false} role="presentation"></div>
+  <div class="mobile-overlay" on:click={() => mobileMenuOpen = false} role="presentation"></div>
 {/if}
 
 <style>
