@@ -10,6 +10,7 @@
     teal: '#76b7b2',
     purple: '#af7aa1',
     red: '#e15759',
+    gray: '#78716c',
   };
 
   function animate() {
@@ -17,7 +18,7 @@
     animating = true;
     step = 0;
 
-    const steps = [1, 2, 3, 4, 5, 6];
+    const steps = [1, 2, 3, 4, 5, 6, 7, 8, 9];
     let i = 0;
     const interval = setInterval(() => {
       step = steps[i];
@@ -27,9 +28,9 @@
         setTimeout(() => {
           animating = false;
           step = 0;
-        }, 2500);
+        }, 2000);
       }
-    }, 800);
+    }, 700);
   }
 </script>
 
@@ -47,7 +48,7 @@
     </div>
 
     <div class="diagram-container">
-      <svg viewBox="0 0 900 750" class="architecture-svg">
+      <svg viewBox="0 0 500 950" class="architecture-svg">
         <defs>
           <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
             <feGaussianBlur stdDeviation="4" result="blur"/>
@@ -59,261 +60,290 @@
           <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
             <feDropShadow dx="0" dy="2" stdDeviation="3" flood-opacity="0.15"/>
           </filter>
+          <marker id="arrowBlue" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L8,3 z" fill="{colors.blue}"/>
+          </marker>
+          <marker id="arrowGreen" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L8,3 z" fill="{colors.green}"/>
+          </marker>
+          <marker id="arrowGray" markerWidth="6" markerHeight="6" refX="5" refY="2.5" orient="auto">
+            <path d="M0,0 L0,5 L6,2.5 z" fill="{colors.gray}"/>
+          </marker>
         </defs>
 
-        <!-- ═══════════════ LEFT: PHONE WITH MESSAGES ═══════════════ -->
-        <g transform="translate(40, 40)">
-          <!-- Phone frame -->
-          <rect x="0" y="0" width="180" height="360" rx="24" class="phone-frame"/>
-          <rect x="6" y="6" width="168" height="348" rx="20" class="phone-screen"/>
+        <!-- ════════════════════════════════════════════════════════════ -->
+        <!-- ROW 1: CHATS (1:1 + Group) -->
+        <!-- ════════════════════════════════════════════════════════════ -->
+        <g transform="translate(100, 15)">
+          <!-- 1:1 DM -->
+          <rect x="0" y="0" width="130" height="70" rx="10" class="phone-frame"/>
+          <rect x="3" y="3" width="124" height="64" rx="8" class="phone-screen"/>
+          <text x="65" y="20" class="phone-label">💬 You → Me</text>
+          <text x="65" y="32" class="phone-sublabel">1:1 chat</text>
+          <g transform="translate(12, 40)">
+            <rect x="0" y="0" width="48" height="13" rx="5" fill="#e7e5e4"/>
+            <text x="6" y="10" class="bubble-text-tiny">weather?</text>
+            <rect x="58" y="0" width="45" height="13" rx="5" fill="{colors.blue}"/>
+            <text x="65" y="10" class="bubble-text-tiny-out">45°F</text>
+          </g>
+          <text x="65" y="63" class="phone-tier admin">admin</text>
+        </g>
 
-          <!-- Phone notch -->
-          <rect x="60" y="10" width="60" height="20" rx="10" fill="#1a1a1a"/>
+        <g transform="translate(270, 15)">
+          <!-- Group chat -->
+          <rect x="0" y="0" width="130" height="70" rx="10" class="phone-frame"/>
+          <rect x="3" y="3" width="124" height="64" rx="8" class="phone-screen"/>
+          <text x="65" y="20" class="phone-label">👥 Family Chat</text>
+          <text x="65" y="32" class="phone-sublabel">group (3)</text>
+          <g transform="translate(12, 40)">
+            <rect x="0" y="0" width="45" height="13" rx="5" fill="#e7e5e4"/>
+            <text x="5" y="10" class="bubble-text-tiny">Mom: hi!</text>
+            <rect x="52" y="0" width="50" height="13" rx="5" fill="#d4d4d4"/>
+            <text x="57" y="10" class="bubble-text-tiny">Dad: hey</text>
+          </g>
+          <text x="65" y="63" class="phone-tier">family</text>
+        </g>
 
-          <!-- Phone header -->
-          <text x="90" y="56" class="phone-header">Messages</text>
+        <!-- ════════════════════════════════════════════════════════════ -->
+        <!-- CHAT.DB (below chats, messages flow into it) -->
+        <!-- ════════════════════════════════════════════════════════════ -->
+        <g transform="translate(20, 100)">
+          <rect x="0" y="0" width="95" height="70" rx="8" class="db-box"/>
+          <text x="47" y="25" class="db-label">💾 chat.db</text>
+          <text x="47" y="42" class="db-sublabel">Messages.app</text>
+          <text x="47" y="55" class="db-sublabel">database</text>
+        </g>
 
-          <!-- Contact header -->
-          <rect x="16" y="70" width="148" height="36" rx="8" fill="#f5f5f4"/>
-          <circle cx="36" cy="88" r="12" fill="{colors.blue}"/>
-          <text x="36" y="92" class="contact-avatar">S</text>
-          <text x="56" y="84" class="contact-name">Sven</text>
-          <text x="56" y="98" class="contact-status">AI Assistant</text>
+        <!-- Arrows from chats DOWN to chat.db -->
+        <g class="flow-to-db">
+          <path d="M 165 85 L 165 120 L 115 135" class="flow-path-thin" marker-end="url(#arrowGray)"/>
+          <path d="M 335 85 L 335 100 L 115 100 L 115 120" class="flow-path-thin" marker-end="url(#arrowGray)"/>
+          {#if step === 1}
+            <circle r="5" fill="{colors.blue}" filter="url(#glow)">
+              <animateMotion dur="0.5s" fill="freeze" path="M 165 85 L 165 120 L 115 135"/>
+            </circle>
+          {/if}
+        </g>
 
-          <!-- Message bubbles -->
-          <g transform="translate(16, 120)">
-            <!-- Incoming message (user) -->
-            <g class="message-bubble incoming" class:highlight={step >= 1}>
-              <rect x="0" y="0" width="120" height="44" rx="16" class="bubble-in"/>
-              <text x="12" y="18" class="bubble-text">Hey what's the</text>
-              <text x="12" y="34" class="bubble-text">weather today?</text>
+        <!-- ════════════════════════════════════════════════════════════ -->
+        <!-- DAEMON polls chat.db (arrow FROM daemon TO chat.db) -->
+        <!-- ════════════════════════════════════════════════════════════ -->
+
+        <!-- Arrow from daemon pointing LEFT to chat.db (daemon polls it) -->
+        <g class="flow-poll">
+          <path d="M 155 215 L 115 215 L 115 170" class="flow-path-solid incoming" marker-end="url(#arrowBlue)"/>
+          <text x="130" y="228" class="flow-label-small" fill="{colors.gray}">polls 100ms</text>
+          {#if step === 2}
+            <circle r="5" fill="{colors.blue}" filter="url(#glow)">
+              <animateMotion dur="0.4s" fill="freeze" path="M 155 215 L 115 215 L 115 170"/>
+            </circle>
+          {/if}
+        </g>
+
+        <!-- Daemon -->
+        <g transform="translate(155, 175)">
+          <g class="daemon" class:active={step >= 3 && step <= 4}>
+            <rect x="0" y="0" width="280" height="100" rx="12" class="daemon-box"/>
+            <text x="140" y="24" class="daemon-title">Manager Daemon</text>
+
+            <!-- Contact lookup -->
+            <g transform="translate(15, 38)">
+              <rect x="0" y="0" width="115" height="50" rx="8" class="daemon-inner-box" class:active={step === 3}/>
+              <text x="57" y="18" class="daemon-inner-title">🔍 Lookup</text>
+              <text x="57" y="35" class="daemon-inner-result" class:visible={step >= 3}>+1617... → Nikhil</text>
             </g>
 
-            <!-- Outgoing message (response) - appears at step 6 -->
-            <g class="message-bubble outgoing" class:visible={step >= 6} transform="translate(28, 60)">
-              <rect x="0" y="0" width="120" height="44" rx="16" class="bubble-out"/>
-              <text x="12" y="18" class="bubble-text-out">It's 45°F and</text>
-              <text x="12" y="34" class="bubble-text-out">cloudy today! ☁️</text>
+            <!-- ACL check -->
+            <g transform="translate(145, 38)">
+              <rect x="0" y="0" width="115" height="50" rx="8" class="daemon-inner-box" class:active={step === 4}/>
+              <text x="57" y="18" class="daemon-inner-title">🛡️ ACL</text>
+              <text x="57" y="35" class="daemon-inner-result tier-admin" class:visible={step >= 4}>tier → admin ✓</text>
             </g>
           </g>
+        </g>
 
-          <!-- Typing indicator at step 5 -->
+        <!-- Watchdog -->
+        <g transform="translate(20, 260)">
+          <rect x="0" y="0" width="95" height="50" rx="6" fill="{colors.red}" opacity="0.15"/>
+          <text x="47" y="18" class="watchdog-label">🛡️ Watchdog</text>
+          <text x="47" y="32" class="watchdog-desc">monitors health</text>
+          <text x="47" y="44" class="watchdog-desc">auto-restarts</text>
+          <path d="M 95 25 L 115 25 L 115 40" class="watchdog-line" stroke-dasharray="2,2"/>
+        </g>
+
+        <!-- ════════════════════════════════════════════════════════════ -->
+        <!-- FAN OUT: Daemon to Sessions -->
+        <!-- ════════════════════════════════════════════════════════════ -->
+        <g class="fan-out">
+          <path d="M 295 275 L 295 310" class="flow-path-solid incoming"/>
+
+          <!-- Fan lines to each session -->
+          <path d="M 295 310 L 100 360" class="flow-path-thin faded"/>
+          <path d="M 295 310 L 210 360" class="flow-path-thin faded"/>
+          <path d="M 295 310 L 350 360" class="flow-path-solid incoming" marker-end="url(#arrowBlue)"/>
+
+          <text x="370" y="340" class="flow-label-small" fill="{colors.blue}">selected</text>
+
           {#if step === 5}
-            <g transform="translate(28, 224)">
-              <rect x="0" y="0" width="60" height="28" rx="14" class="bubble-out" opacity="0.7"/>
-              <circle cx="16" cy="14" r="4" fill="white" opacity="0.6">
-                <animate attributeName="opacity" values="0.3;1;0.3" dur="1s" repeatCount="indefinite"/>
-              </circle>
-              <circle cx="30" cy="14" r="4" fill="white" opacity="0.6">
-                <animate attributeName="opacity" values="0.3;1;0.3" dur="1s" repeatCount="indefinite" begin="0.2s"/>
-              </circle>
-              <circle cx="44" cy="14" r="4" fill="white" opacity="0.6">
-                <animate attributeName="opacity" values="0.3;1;0.3" dur="1s" repeatCount="indefinite" begin="0.4s"/>
-              </circle>
-            </g>
-          {/if}
-        </g>
-
-        <!-- ═══════════════ INCOMING PATH: PHONE → DAEMON → AGENT ═══════════════ -->
-        <g class="flow-incoming">
-          <!-- Path line: Phone → Daemon -->
-          <path d="M 220 160 L 320 160" class="flow-path-static incoming"/>
-          <!-- Arrowhead -->
-          <polygon points="320,160 310,154 310,166" fill="{colors.blue}"/>
-
-          <!-- Path line: Daemon → Agent (via inject-prompt) -->
-          <path d="M 560 160 C 590 160, 600 100, 620 100" class="flow-path-static incoming"/>
-          <!-- Arrowhead -->
-          <polygon points="620,100 610,94 610,106" fill="{colors.blue}"/>
-
-          <!-- Label: inject-prompt -->
-          <g transform="translate(570, 130)">
-            <rect x="-40" y="-10" width="80" height="20" rx="4" fill="{colors.blue}" opacity="0.15"/>
-            <text x="0" y="4" class="flow-label" fill="{colors.blue}">inject-prompt</text>
-          </g>
-
-          <!-- Animated packet during animation -->
-          {#if step >= 1 && step < 5}
-            <circle r="8" fill="{colors.blue}" filter="url(#glow)">
-              {#if step < 3}
-                <animateMotion dur="0.6s" fill="freeze" path="M 220 160 L 320 160"/>
-              {:else}
-                <animateMotion dur="0.6s" fill="freeze" path="M 560 160 C 590 160, 600 100, 620 100"/>
-              {/if}
+            <circle r="5" fill="{colors.blue}" filter="url(#glow)">
+              <animateMotion dur="0.5s" fill="freeze" path="M 295 310 L 350 360"/>
             </circle>
           {/if}
         </g>
 
-        <!-- ═══════════════ OUTGOING PATH: AGENT → PHONE ═══════════════ -->
-        <g class="flow-outgoing">
-          <!-- Path line: Agent → Phone (via send-sms) - curves below -->
-          <path d="M 620 140 C 500 180, 400 280, 220 200" class="flow-path-static outgoing"/>
-          <!-- Arrowhead at phone end -->
-          <polygon points="220,200 232,196 228,206" fill="{colors.green}"/>
+        <!-- ════════════════════════════════════════════════════════════ -->
+        <!-- SESSION BUBBLES -->
+        <!-- ════════════════════════════════════════════════════════════ -->
+        <!-- Family Group session (faded) -->
+        <g transform="translate(55, 365)">
+          <rect x="0" y="0" width="90" height="50" rx="8" class="session-bubble faded"/>
+          <rect x="0" y="0" width="90" height="18" rx="8" fill="{colors.teal}" opacity="0.3"/>
+          <rect x="0" y="10" width="90" height="8" fill="{colors.teal}" opacity="0.3"/>
+          <text x="45" y="13" class="session-bubble-name faded">Family</text>
+          <text x="45" y="33" class="session-bubble-tier faded">group</text>
+          <text x="45" y="45" class="session-bubble-status">idle</text>
+        </g>
 
-          <!-- Label: send-sms -->
-          <g transform="translate(420, 240)">
-            <rect x="-35" y="-10" width="70" height="20" rx="4" fill="{colors.green}" opacity="0.15"/>
-            <text x="0" y="4" class="flow-label" fill="{colors.green}">send-sms</text>
-          </g>
+        <!-- Friend session (faded) -->
+        <g transform="translate(165, 365)">
+          <rect x="0" y="0" width="90" height="50" rx="8" class="session-bubble faded"/>
+          <rect x="0" y="0" width="90" height="18" rx="8" fill="{colors.purple}" opacity="0.3"/>
+          <rect x="0" y="10" width="90" height="8" fill="{colors.purple}" opacity="0.3"/>
+          <text x="45" y="13" class="session-bubble-name faded">Friend</text>
+          <text x="45" y="33" class="session-bubble-tier faded">favorite</text>
+          <text x="45" y="45" class="session-bubble-status">idle</text>
+        </g>
 
-          <!-- Animated packet during animation -->
-          {#if step >= 6}
-            <circle r="8" fill="{colors.green}" filter="url(#glow)">
-              <animateMotion dur="0.8s" fill="freeze" path="M 620 140 C 500 180, 400 280, 220 200"/>
+        <!-- Active 1:1 session (Nikhil) -->
+        <g transform="translate(300, 365)">
+          <rect x="0" y="0" width="100" height="50" rx="8" class="session-bubble" class:selected={step >= 5}/>
+          <rect x="0" y="0" width="100" height="18" rx="8" fill="{colors.orange}"/>
+          <rect x="0" y="10" width="100" height="8" fill="{colors.orange}"/>
+          <text x="50" y="13" class="session-bubble-name">Nikhil</text>
+          <text x="50" y="33" class="session-bubble-tier admin">admin</text>
+          <text x="50" y="45" class="session-bubble-status" class:active={step >= 5}>active</text>
+        </g>
+
+        <!-- ════════════════════════════════════════════════════════════ -->
+        <!-- INJECT-PROMPT -->
+        <!-- ════════════════════════════════════════════════════════════ -->
+        <path d="M 350 415 L 350 445" class="flow-path-solid incoming"/>
+
+        <g transform="translate(220, 450)">
+          <rect x="0" y="0" width="200" height="30" rx="6" fill="{colors.blue}" class:glow={step === 6}/>
+          <text x="100" y="19" class="inject-label">inject-prompt(tier=admin)</text>
+        </g>
+
+        <g class="flow-down">
+          <path d="M 320 480 L 320 515" class="flow-path-solid incoming" marker-end="url(#arrowBlue)"/>
+          <text x="335" y="502" class="flow-label-small" fill="{colors.blue}">to Claude</text>
+          {#if step === 6}
+            <circle r="5" fill="{colors.blue}" filter="url(#glow)">
+              <animateMotion dur="0.4s" fill="freeze" path="M 320 480 L 320 515"/>
             </circle>
           {/if}
         </g>
 
-        <!-- ═══════════════ CENTER: DAEMON ═══════════════ -->
-        <g transform="translate(320, 100)">
-          <g class="daemon" class:active={step >= 2 && step <= 4}>
-            <rect x="0" y="0" width="240" height="160" rx="12" class="daemon-box"/>
-            <text x="120" y="32" class="daemon-title">Manager Daemon</text>
+        <!-- ════════════════════════════════════════════════════════════ -->
+        <!-- AGENT SESSION (active work) -->
+        <!-- ════════════════════════════════════════════════════════════ -->
+        <g transform="translate(120, 525)">
+          <g class="session" class:active={step >= 7}>
+            <rect x="0" y="0" width="300" height="100" rx="10" class="session-box"/>
+            <rect x="0" y="0" width="300" height="30" rx="10" fill="{colors.orange}"/>
+            <rect x="0" y="15" width="300" height="15" fill="{colors.orange}"/>
+            <text x="15" y="21" class="session-title">Nikhil</text>
+            <text x="285" y="21" class="session-tier-label">admin</text>
 
-            <!-- Daemon internals -->
-            <g transform="translate(16, 50)">
-              <rect x="0" y="0" width="208" height="32" rx="6" class="daemon-step" class:active={step === 2}/>
-              <text x="104" y="20" class="daemon-step-text">① Contact Lookup</text>
-
-              <rect x="0" y="40" width="208" height="32" rx="6" class="daemon-step" class:active={step === 3}/>
-              <text x="104" y="60" class="daemon-step-text">② Tier Check → admin</text>
-
-              <rect x="0" y="80" width="208" height="32" rx="6" class="daemon-step" class:active={step === 4}/>
-              <text x="104" y="100" class="daemon-step-text">③ Route to Session</text>
+            <g transform="translate(15, 40)">
+              <text x="0" y="12" class="session-path">~/transcripts/imessage/_16175969496/</text>
+              <rect x="0" y="18" width="270" height="32" rx="4" class="session-work" class:active={step >= 7}/>
+              <text x="8" y="34" class="session-work-text">🔧 "what's the weather?"</text>
+              <text x="8" y="46" class="session-work-text">✓ "45°F and cloudy!"</text>
             </g>
           </g>
         </g>
 
-        <!-- ═══════════════ RIGHT: AGENT SESSIONS ═══════════════ -->
-        <g transform="translate(620, 40)">
-          <text x="120" y="16" class="section-label">Agent Sessions</text>
-
-          <!-- Admin session (active) -->
-          <g transform="translate(0, 30)" class="session" class:active={step >= 4}>
-            <rect x="0" y="0" width="240" height="120" rx="10" class="session-box"/>
-            <rect x="0" y="0" width="240" height="32" rx="10" fill="{colors.orange}"/>
-            <rect x="0" y="16" width="240" height="16" fill="{colors.orange}"/>
-            <text x="16" y="22" class="session-title">Nikhil</text>
-            <text x="224" y="22" class="session-tier">admin</text>
-
-            <!-- Session internals -->
-            <g transform="translate(12, 42)">
-              <text x="0" y="14" class="session-path">~/transcripts/imessage/_1617...</text>
-              <rect x="0" y="24" width="216" height="44" rx="4" class="session-work" class:active={step >= 5}/>
-              <text x="8" y="42" class="session-work-text">🔧 Checking weather API...</text>
-              <text x="8" y="60" class="session-work-text">✓ Got response: 45°F cloudy</text>
-            </g>
-          </g>
-
-          <!-- Partner session (inactive) -->
-          <g transform="translate(0, 170)" class="session inactive">
-            <rect x="0" y="0" width="240" height="80" rx="10" class="session-box-inactive"/>
-            <rect x="0" y="0" width="240" height="28" rx="10" fill="{colors.purple}" opacity="0.5"/>
-            <rect x="0" y="14" width="240" height="14" fill="{colors.purple}" opacity="0.5"/>
-            <text x="16" y="20" class="session-title-inactive">Partner</text>
-            <text x="224" y="20" class="session-tier-inactive">partner</text>
-            <text x="120" y="56" class="session-idle">idle</text>
-          </g>
-
-          <!-- Family session (inactive) -->
-          <g transform="translate(0, 270)" class="session inactive">
-            <rect x="0" y="0" width="240" height="80" rx="10" class="session-box-inactive"/>
-            <rect x="0" y="0" width="240" height="28" rx="10" fill="{colors.teal}" opacity="0.5"/>
-            <rect x="0" y="14" width="240" height="14" fill="{colors.teal}" opacity="0.5"/>
-            <text x="16" y="20" class="session-title-inactive">Family</text>
-            <text x="224" y="20" class="session-tier-inactive">family</text>
-            <text x="120" y="56" class="session-idle">idle</text>
-          </g>
+        <!-- Arrow to send-sms -->
+        <g class="flow-down">
+          <path d="M 270 625 L 270 665" class="flow-path-solid outgoing" marker-end="url(#arrowGreen)"/>
+          <text x="285" y="650" class="flow-label-small" fill="{colors.green}">reply</text>
+          {#if step === 8}
+            <circle r="5" fill="{colors.green}" filter="url(#glow)">
+              <animateMotion dur="0.4s" fill="freeze" path="M 270 625 L 270 665"/>
+            </circle>
+          {/if}
         </g>
 
-
-        <!-- ═══════════════ WATCHDOG (below daemon) ═══════════════ -->
-        <g transform="translate(320, 280)">
-          <g class="watchdog">
-            <!-- Watchdog box -->
-            <rect x="0" y="0" width="240" height="100" rx="12" class="watchdog-box"/>
-
-            <!-- Header -->
-            <rect x="0" y="0" width="240" height="32" rx="12" fill="{colors.red}" opacity="0.9"/>
-            <rect x="0" y="16" width="240" height="16" fill="{colors.red}" opacity="0.9"/>
-            <text x="16" y="22" class="watchdog-title">🛡️ Watchdog</text>
-            <text x="224" y="22" class="watchdog-interval">every 60s</text>
-
-            <!-- Watchdog internals -->
-            <g transform="translate(12, 44)">
-              <text x="0" y="14" class="watchdog-text">Monitors daemon health</text>
-              <text x="0" y="32" class="watchdog-text">On crash → spawns healer Claude</text>
-              <text x="0" y="50" class="watchdog-text">Exponential backoff on failures</text>
-            </g>
-
-            <!-- Health check arrow (watchdog → daemon) -->
-            <path d="M 120 0 L 120 -20" stroke="{colors.red}" stroke-width="2" stroke-dasharray="4 2" fill="none" opacity="0.6"/>
-            <circle cx="120" cy="-24" r="4" fill="{colors.red}" opacity="0.6"/>
-          </g>
+        <!-- ════════════════════════════════════════════════════════════ -->
+        <!-- SEND-SMS -->
+        <!-- ════════════════════════════════════════════════════════════ -->
+        <g transform="translate(170, 675)">
+          <rect x="0" y="0" width="200" height="40" rx="8" fill="{colors.green}"/>
+          <text x="100" y="16" class="node-label">send-sms</text>
+          <text x="100" y="30" class="node-sublabel">delivers response</text>
         </g>
 
-        <!-- ═══════════════ BOTTOM: EXPLANATION ═══════════════ -->
-        <g transform="translate(40, 480)">
-          <rect x="0" y="0" width="820" height="220" rx="12" class="explain-box"/>
-
-          <text x="20" y="32" class="explain-title">How inject-prompt works</text>
-
-          <g transform="translate(20, 50)">
-            <!-- Before -->
-            <rect x="0" y="0" width="240" height="80" rx="8" class="code-box"/>
-            <text x="12" y="24" class="code-label">Raw message</text>
-            <text x="12" y="50" class="code-string">"Hey what's the weather</text>
-            <text x="12" y="68" class="code-string">today?"</text>
-
-            <!-- Arrow -->
-            <g transform="translate(260, 30)">
-              <path d="M 0 10 L 40 10" stroke="{colors.orange}" stroke-width="3" fill="none"/>
-              <polygon points="40,10 32,4 32,16" fill="{colors.orange}"/>
-            </g>
-
-            <!-- After -->
-            <rect x="320" y="0" width="280" height="80" rx="8" class="code-box"/>
-            <text x="332" y="24" class="code-label">Wrapped for Claude</text>
-            <text x="332" y="44" class="code-tag">---SMS FROM Nikhil (admin)---</text>
-            <text x="332" y="60" class="code-string">"Hey what's the weather today?"</text>
-            <text x="332" y="76" class="code-tag">---END SMS---</text>
-          </g>
-
-          <g transform="translate(20, 150)">
-            <text x="0" y="16" class="explain-note">Each contact gets their own isolated session in</text>
-            <text x="0" y="36" class="explain-path">~/transcripts/&#123;backend&#125;/&#123;chat_id&#125;/</text>
-            <text x="0" y="56" class="explain-note">Sessions persist across restarts. No shared state between contacts.</text>
-          </g>
+        <!-- Return path to 1:1 chat (stays on left side, curves up to first chat only) -->
+        <g class="flow-return">
+          <!-- Path goes: left from send-sms, then curves up directly to the 1:1 chat -->
+          <path d="M 170 695 L 55 695 L 55 85 L 100 85"
+                class="flow-path-solid outgoing" marker-end="url(#arrowGreen)"/>
+          <text x="40" y="400" class="flow-label-vertical" fill="{colors.green}">response</text>
+          {#if step === 9}
+            <circle r="5" fill="{colors.green}" filter="url(#glow)">
+              <animateMotion dur="1.0s" fill="freeze"
+                path="M 170 695 L 55 695 L 55 85 L 100 85"/>
+            </circle>
+          {/if}
         </g>
 
         <!-- Legend -->
-        <g transform="translate(720, 500)">
-          <g transform="translate(0, 0)">
-            <circle r="6" cx="6" cy="6" fill="{colors.blue}"/>
-            <text x="20" y="10" class="legend-text">Message in</text>
+        <g transform="translate(40, 820)">
+          <g>
+            <circle r="5" cx="5" cy="5" fill="{colors.blue}"/>
+            <text x="16" y="9" class="legend-text">Incoming</text>
           </g>
-          <g transform="translate(0, 24)">
-            <circle r="6" cx="6" cy="6" fill="{colors.green}"/>
-            <text x="20" y="10" class="legend-text">Response out</text>
+          <g transform="translate(80, 0)">
+            <circle r="5" cx="5" cy="5" fill="{colors.green}"/>
+            <text x="16" y="9" class="legend-text">Outgoing</text>
           </g>
-          <g transform="translate(0, 48)">
-            <rect x="0" y="0" width="12" height="12" rx="3" fill="{colors.orange}"/>
-            <text x="20" y="10" class="legend-text">Active session</text>
+          <g transform="translate(165, 0)">
+            <rect x="0" y="0" width="10" height="10" rx="2" fill="{colors.orange}"/>
+            <text x="16" y="9" class="legend-text">Active</text>
           </g>
-          <g transform="translate(0, 72)">
-            <rect x="0" y="0" width="12" height="12" rx="3" fill="{colors.red}"/>
-            <text x="20" y="10" class="legend-text">Watchdog</text>
+          <g transform="translate(230, 0)">
+            <line x1="0" y1="5" x2="15" y2="5" class="flow-path-thin faded"/>
+            <text x="22" y="9" class="legend-text">Idle</text>
           </g>
         </g>
       </svg>
     </div>
   </section>
+
+  <!-- How inject-prompt works -->
+  <section class="explain-section">
+    <h2>How inject-prompt works</h2>
+    <div class="code-comparison">
+      <div class="code-block">
+        <div class="code-label">Raw message</div>
+        <pre><code>"Hey what's the weather today?"</code></pre>
+      </div>
+      <div class="arrow">→</div>
+      <div class="code-block">
+        <div class="code-label">Wrapped for Claude</div>
+        <pre><code>---SMS FROM Nikhil (admin)---
+"Hey what's the weather today?"
+---END SMS---</code></pre>
+      </div>
+    </div>
+    <p class="explain-note">Each contact gets their own isolated session in <code>~/transcripts/{'{backend}'}/{'{chat_id}'}/</code></p>
+  </section>
 </article>
 
 <style>
   .page {
-    max-width: 960px;
+    max-width: 700px;
   }
 
   .page-header {
@@ -331,7 +361,7 @@
   }
 
   .diagram-section {
-    margin-bottom: var(--space-8);
+    margin-bottom: var(--space-6);
   }
 
   .diagram-header {
@@ -368,12 +398,10 @@
     border: 1px solid #e7e5e4;
     border-radius: 16px;
     padding: var(--space-4);
-    overflow-x: auto;
   }
 
   .architecture-svg {
     width: 100%;
-    min-width: 860px;
     height: auto;
     display: block;
   }
@@ -385,121 +413,108 @@
   }
 
   .phone-screen {
-    fill: white;
-  }
-
-  .phone-header {
-    font-family: var(--font-sans);
-    font-size: 14px;
-    font-weight: 600;
-    fill: #292524;
-    text-anchor: middle;
-  }
-
-  .contact-avatar {
-    font-family: var(--font-sans);
-    font-size: 12px;
-    font-weight: 600;
-    fill: white;
-    text-anchor: middle;
-    dominant-baseline: middle;
-  }
-
-  .contact-name {
-    font-family: var(--font-sans);
-    font-size: 12px;
-    font-weight: 600;
     fill: #292524;
   }
 
-  .contact-status {
+  .phone-label {
     font-family: var(--font-sans);
-    font-size: 10px;
+    font-size: 11px;
+    font-weight: 600;
+    fill: white;
+    text-anchor: middle;
+  }
+
+  .phone-sublabel {
+    font-family: var(--font-mono);
+    font-size: 8px;
+    fill: #a8a29e;
+    text-anchor: middle;
+  }
+
+  .phone-tier {
+    font-family: var(--font-mono);
+    font-size: 8px;
     fill: #78716c;
+    text-anchor: middle;
   }
 
-  .bubble-in {
-    fill: #e7e5e4;
+  .phone-tier.admin {
+    fill: #f28e2c;
   }
 
-  .bubble-out {
-    fill: #4e79a7;
-  }
-
-  .bubble-text {
+  .bubble-text-tiny {
     font-family: var(--font-sans);
-    font-size: 11px;
+    font-size: 7px;
     fill: #292524;
   }
 
-  .bubble-text-out {
+  .bubble-text-tiny-out {
+    font-family: var(--font-sans);
+    font-size: 7px;
+    fill: white;
+  }
+
+  /* DB box */
+  .db-box {
+    fill: #fef3c7;
+    stroke: #fbbf24;
+    stroke-width: 2;
+    filter: url(#shadow);
+  }
+
+  .db-label {
     font-family: var(--font-sans);
     font-size: 11px;
-    fill: white;
+    font-weight: 600;
+    fill: #78350f;
+    text-anchor: middle;
   }
 
-  .message-bubble.incoming.highlight .bubble-in {
-    fill: #4e79a7;
-    transition: fill 0.3s ease;
-  }
-
-  .message-bubble.incoming.highlight .bubble-text {
-    fill: white;
-  }
-
-  .message-bubble.outgoing {
-    opacity: 0;
-    transition: opacity 0.5s ease;
-  }
-
-  .message-bubble.outgoing.visible {
-    opacity: 1;
+  .db-sublabel {
+    font-family: var(--font-mono);
+    font-size: 8px;
+    fill: #92400e;
+    text-anchor: middle;
   }
 
   /* Flow paths */
-  .flow-path {
+  .flow-path-solid {
     fill: none;
-    stroke: #d6d3d1;
-    stroke-width: 3;
+    stroke-width: 2.5;
     stroke-linecap: round;
+    stroke-linejoin: round;
   }
 
-  .flow-path.active {
+  .flow-path-solid.incoming {
     stroke: #4e79a7;
   }
 
-  .flow-path.response {
+  .flow-path-solid.outgoing {
     stroke: #59a14f;
-    stroke-dasharray: 8 4;
   }
 
-  .flow-path-static {
+  .flow-path-thin {
     fill: none;
-    stroke-width: 2;
+    stroke: #a8a29e;
+    stroke-width: 1.5;
     stroke-linecap: round;
   }
 
-  .flow-path-static.incoming {
-    stroke: #4e79a7;
+  .flow-path-thin.faded {
+    opacity: 0.4;
   }
 
-  .flow-path-static.outgoing {
-    stroke: #59a14f;
-    stroke-dasharray: 6 3;
-  }
-
-  .flow-label {
+  .flow-label-small {
     font-family: var(--font-mono);
-    font-size: 10px;
+    font-size: 8px;
     font-weight: 500;
-    text-anchor: middle;
   }
 
-  .packet-text {
-    font-family: var(--font-sans);
-    font-size: 10px;
+  .flow-label-vertical {
+    font-family: var(--font-mono);
+    font-size: 9px;
     font-weight: 500;
-    fill: white;
+    writing-mode: vertical-rl;
   }
 
   /* Daemon styles */
@@ -516,47 +531,157 @@
 
   .daemon-title {
     font-family: var(--font-sans);
-    font-size: 16px;
+    font-size: 13px;
     font-weight: 600;
     fill: #292524;
     text-anchor: middle;
   }
 
-  .daemon-step {
-    fill: #f5f5f4;
+  .daemon-inner-box {
+    fill: #fafaf9;
     stroke: #e7e5e4;
-    stroke-width: 1;
+    stroke-width: 1.5;
     transition: all 0.2s ease;
   }
 
-  .daemon-step.active {
-    fill: #4e79a7;
+  .daemon-inner-box.active {
+    fill: #eff6ff;
     stroke: #4e79a7;
   }
 
-  .daemon-step-text {
-    font-family: var(--font-mono);
-    font-size: 11px;
-    fill: #57534e;
+  .daemon-inner-title {
+    font-family: var(--font-sans);
+    font-size: 10px;
+    font-weight: 600;
+    fill: #44403c;
     text-anchor: middle;
   }
 
-  .daemon-step.active + text,
-  .daemon-step.active ~ text {
-    fill: white;
+  .daemon-inner-result {
+    font-family: var(--font-mono);
+    font-size: 8px;
+    fill: #059669;
+    text-anchor: middle;
+    opacity: 0;
+    transition: opacity 0.3s ease;
   }
 
-  /* Session styles */
-  .section-label {
+  .daemon-inner-result.visible {
+    opacity: 1;
+  }
+
+  .daemon-inner-result.tier-admin {
+    fill: #f28e2c;
+  }
+
+  /* Watchdog */
+  .watchdog-label {
     font-family: var(--font-sans);
-    font-size: 12px;
+    font-size: 9px;
+    fill: #e15759;
+    text-anchor: middle;
     font-weight: 600;
+  }
+
+  .watchdog-desc {
+    font-family: var(--font-mono);
+    font-size: 7px;
+    fill: #a8a29e;
+    text-anchor: middle;
+  }
+
+  .watchdog-line {
+    fill: none;
+    stroke: #e15759;
+    stroke-width: 1;
+    opacity: 0.5;
+  }
+
+  /* Session bubbles */
+  .session-bubble {
+    fill: #fafaf9;
+    stroke: #e7e5e4;
+    stroke-width: 1.5;
+  }
+
+  .session-bubble.faded {
+    opacity: 0.5;
+  }
+
+  .session-bubble.selected {
+    fill: #fff7ed;
+    stroke: #f28e2c;
+    stroke-width: 2;
+  }
+
+  .session-bubble-name {
+    font-family: var(--font-sans);
+    font-size: 9px;
+    font-weight: 600;
+    fill: white;
+    text-anchor: middle;
+  }
+
+  .session-bubble-name.faded {
+    opacity: 0.7;
+  }
+
+  .session-bubble-tier {
+    font-family: var(--font-mono);
+    font-size: 8px;
     fill: #78716c;
     text-anchor: middle;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
   }
 
+  .session-bubble-tier.faded {
+    opacity: 0.6;
+  }
+
+  .session-bubble-tier.admin {
+    fill: #f28e2c;
+  }
+
+  .session-bubble-status {
+    font-family: var(--font-mono);
+    font-size: 7px;
+    fill: #a8a29e;
+    text-anchor: middle;
+  }
+
+  .session-bubble-status.active {
+    fill: #f28e2c;
+    font-weight: 600;
+  }
+
+  /* Inject label */
+  .inject-label {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    fill: white;
+    text-anchor: middle;
+  }
+
+  rect.glow {
+    filter: url(#glow);
+  }
+
+  /* Node styles */
+  .node-label {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 600;
+    fill: white;
+    text-anchor: middle;
+  }
+
+  .node-sublabel {
+    font-family: var(--font-sans);
+    font-size: 9px;
+    fill: rgba(255,255,255,0.8);
+    text-anchor: middle;
+  }
+
+  /* Session box styles */
   .session-box {
     fill: white;
     stroke: #e7e5e4;
@@ -570,44 +695,23 @@
     stroke-width: 3;
   }
 
-  .session-box-inactive {
-    fill: #fafaf9;
-    stroke: #e7e5e4;
-    stroke-width: 1;
-  }
-
   .session-title {
-    font-family: var(--font-sans);
-    font-size: 13px;
-    font-weight: 600;
-    fill: white;
-  }
-
-  .session-title-inactive {
     font-family: var(--font-sans);
     font-size: 12px;
     font-weight: 600;
     fill: white;
-    opacity: 0.8;
   }
 
-  .session-tier {
-    font-family: var(--font-mono);
-    font-size: 10px;
-    fill: rgba(255,255,255,0.8);
-    text-anchor: end;
-  }
-
-  .session-tier-inactive {
+  .session-tier-label {
     font-family: var(--font-mono);
     font-size: 9px;
-    fill: rgba(255,255,255,0.6);
+    fill: rgba(255,255,255,0.8);
     text-anchor: end;
   }
 
   .session-path {
     font-family: var(--font-mono);
-    font-size: 10px;
+    font-size: 8px;
     fill: #78716c;
   }
 
@@ -625,103 +729,91 @@
 
   .session-work-text {
     font-family: var(--font-mono);
-    font-size: 10px;
+    font-size: 8px;
     fill: #78350f;
   }
 
-  .session-idle {
-    font-family: var(--font-mono);
-    font-size: 11px;
-    fill: #a8a29e;
-    text-anchor: middle;
-  }
-
-  /* Explanation box */
-  .explain-box {
-    fill: white;
-    stroke: #e7e5e4;
-    stroke-width: 1;
-  }
-
-  .explain-title {
+  /* Legend */
+  .legend-text {
     font-family: var(--font-sans);
-    font-size: 14px;
-    font-weight: 600;
-    fill: #292524;
+    font-size: 9px;
+    fill: #57534e;
   }
 
-  .code-box {
-    fill: #1c1917;
+  /* Explain section */
+  .explain-section {
+    margin-top: var(--space-6);
+    padding: var(--space-5);
+    background: #fafaf9;
+    border: 1px solid #e7e5e4;
+    border-radius: 12px;
+  }
+
+  .explain-section h2 {
+    font-size: 16px;
+    margin: 0 0 var(--space-4) 0;
+  }
+
+  .code-comparison {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+  }
+
+  .code-block {
+    flex: 1;
+    min-width: 200px;
   }
 
   .code-label {
-    font-family: var(--font-mono);
-    font-size: 10px;
-    fill: #78716c;
-  }
-
-  .code-string {
-    font-family: var(--font-mono);
     font-size: 11px;
-    fill: #a3e635;
+    color: var(--text-secondary);
+    margin-bottom: var(--space-1);
   }
 
-  .code-tag {
-    font-family: var(--font-mono);
-    font-size: 10px;
-    fill: #f28e2c;
+  .code-block pre {
+    background: #1c1917;
+    padding: var(--space-3);
+    border-radius: 8px;
+    margin: 0;
+    overflow-x: auto;
+  }
+
+  .code-block code {
+    font-size: 11px;
+    color: #a3e635;
+  }
+
+  .arrow {
+    font-size: 20px;
+    color: var(--text-tertiary);
   }
 
   .explain-note {
-    font-family: var(--font-sans);
-    font-size: 12px;
-    fill: #57534e;
-  }
-
-  .explain-path {
-    font-family: var(--font-mono);
-    font-size: 12px;
-    fill: #292524;
-    font-weight: 500;
-  }
-
-  .legend-text {
-    font-family: var(--font-sans);
-    font-size: 11px;
-    fill: #57534e;
-  }
-
-  /* Watchdog styles */
-  .watchdog-box {
-    fill: white;
-    stroke: #e7e5e4;
-    stroke-width: 2;
-    filter: url(#shadow);
-  }
-
-  .watchdog-title {
-    font-family: var(--font-sans);
+    margin-top: var(--space-4);
     font-size: 13px;
-    font-weight: 600;
-    fill: white;
+    color: var(--text-secondary);
   }
 
-  .watchdog-interval {
-    font-family: var(--font-mono);
-    font-size: 10px;
-    fill: rgba(255,255,255,0.8);
-    text-anchor: end;
+  .explain-note code {
+    background: #e7e5e4;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 12px;
   }
 
-  .watchdog-text {
-    font-family: var(--font-sans);
-    font-size: 10px;
-    fill: #57534e;
-  }
-
-  @media (max-width: 900px) {
+  @media (max-width: 600px) {
     .diagram-container {
       padding: var(--space-2);
+    }
+
+    .code-comparison {
+      flex-direction: column;
+    }
+
+    .arrow {
+      transform: rotate(90deg);
     }
   }
 </style>
