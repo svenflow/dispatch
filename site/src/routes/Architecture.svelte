@@ -170,8 +170,8 @@
           <text x="47" y="18" class="watchdog-label">🛡️ Watchdog</text>
           <text x="47" y="32" class="watchdog-desc">monitors health</text>
           <text x="47" y="44" class="watchdog-desc">auto-restarts</text>
-          <!-- Dashed line to left side of daemon -->
-          <path d="M 115 25 L 155 25" class="watchdog-line" stroke-dasharray="3,3"/>
+          <!-- Dashed line to left side of daemon (from watchdog right edge to daemon left edge) -->
+          <path d="M 95 25 L 135 25" class="watchdog-line" stroke-dasharray="3,3"/>
         </g>
 
         <!-- ════════════════════════════════════════════════════════════ -->
@@ -291,16 +291,16 @@
           <text x="100" y="30" class="node-sublabel">delivers response</text>
         </g>
 
-        <!-- Return path to 1:1 chat - goes LEFT side to avoid crossing diagram -->
+        <!-- Return path to 1:1 chat - goes LEFT side, enters chat from left edge -->
         <g class="flow-return">
-          <!-- Path: left from send-sms, up the left edge, right to 1:1 chat bottom -->
-          <path d="M 170 695 L 40 695 L 40 95 L 100 95 L 100 85"
+          <!-- Path: left from send-sms, up the far left, then right into left edge of 1:1 chat -->
+          <path d="M 170 695 L 50 695 L 50 50 L 100 50"
                 class="flow-path-solid outgoing" marker-end="url(#arrowGreen)"/>
-          <text x="25" y="400" class="flow-label-vertical" fill="{colors.green}">response</text>
+          <text x="35" y="400" class="flow-label-vertical" fill="{colors.green}">response</text>
           {#if step === 9}
             <circle r="5" fill="{colors.green}" filter="url(#glow)">
               <animateMotion dur="1.0s" fill="freeze"
-                path="M 170 695 L 40 695 L 40 95 L 100 95 L 100 85"/>
+                path="M 170 695 L 50 695 L 50 50 L 100 50"/>
             </circle>
           {/if}
         </g>
