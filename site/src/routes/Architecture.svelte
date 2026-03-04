@@ -284,16 +284,16 @@
           <text x="100" y="30" class="node-sublabel">delivers response</text>
         </g>
 
-        <!-- Return path to 1:1 chat (stays on left side, curves up to first chat only) -->
+        <!-- Return path to 1:1 chat (goes right, up the right side, curves left to 1:1 chat) -->
         <g class="flow-return">
-          <!-- Path goes: left from send-sms, then curves up directly to the 1:1 chat -->
-          <path d="M 170 695 L 55 695 L 55 85 L 100 85"
+          <!-- Path goes: right from send-sms, up the right edge, curves left to 1:1 chat -->
+          <path d="M 370 695 L 470 695 L 470 50 L 230 50 L 230 85"
                 class="flow-path-solid outgoing" marker-end="url(#arrowGreen)"/>
-          <text x="40" y="400" class="flow-label-vertical" fill="{colors.green}">response</text>
+          <text x="480" y="400" class="flow-label-vertical" fill="{colors.green}">response</text>
           {#if step === 9}
             <circle r="5" fill="{colors.green}" filter="url(#glow)">
               <animateMotion dur="1.0s" fill="freeze"
-                path="M 170 695 L 55 695 L 55 85 L 100 85"/>
+                path="M 370 695 L 470 695 L 470 50 L 230 50 L 230 85"/>
             </circle>
           {/if}
         </g>
