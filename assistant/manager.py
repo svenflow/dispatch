@@ -168,27 +168,37 @@ class ContactsManager:
 
 
 class MessagesReader:
-    """Reads messages from macOS Messages.app chat.db."""
+    """Reads messages from macOS Messages.app chat.db.
+
+    Uses read_uncommitted mode to read directly from SQLite WAL, avoiding
+    delays when Messages.app holds a read lock during checkpointing.
+    """
 
     def __init__(self, contacts_manager=None):
         self.db_path = MESSAGES_DB
         self._contacts = contacts_manager
 
+    def _get_connection(self) -> sqlite3.Connection:
+        """Open a read-only connection with read_uncommitted for WAL visibility.
+
+        Why read_uncommitted:
+        - Messages.app uses WAL mode and often holds read locks
+        - PRAGMA wal_checkpoint(PASSIVE) won't flush if app has a lock
+        - read_uncommitted reads directly from WAL without waiting for checkpoint
+        - This eliminates 5-14 minute delays when Messages.app is busy
+        """
+        conn = sqlite3.connect(
+            f"file:{self.db_path}?mode=ro",
+            uri=True,
+            isolation_level=None  # autocommit mode
+        )
+        conn.execute("PRAGMA read_uncommitted = 1")
+        return conn
+
     def get_new_messages(self, since_rowid: int) -> list:
         """Get messages newer than the given ROWID."""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._get_connection()
         cursor = conn.cursor()
-
-        # Try PASSIVE checkpoint to improve WAL visibility (won't fail if locked)
-        # Returns (status, pages_log, pages_checkpointed) - status 0=ok, 1=busy
-        checkpoint_result = None
-        try:
-            checkpoint_result = cursor.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
-            perf.gauge("wal_checkpoint_status", checkpoint_result[0] if checkpoint_result else -1,
-                       component="daemon", source="imessage")
-        except Exception as e:
-            perf.gauge("wal_checkpoint_status", -2, component="daemon", source="imessage")
-            # Checkpoint failed, continue anyway - non-critical
 
         cursor.execute("""
             SELECT
@@ -307,14 +317,8 @@ class MessagesReader:
         iOS 17+ uses 2006+ for custom emoji reactions (emoji stored in associated_message_emoji).
         Removals mirror: 3000=remove ❤️, etc.
         """
-        conn = sqlite3.connect(self.db_path)
+        conn = self._get_connection()
         cursor = conn.cursor()
-
-        # Try PASSIVE checkpoint to improve WAL visibility (won't fail if locked)
-        try:
-            cursor.execute("PRAGMA wal_checkpoint(PASSIVE)")
-        except Exception:
-            pass  # Checkpoint failed, continue anyway - non-critical
 
         # Query reactions and join to get the target message text
         cursor.execute("""
@@ -485,13 +489,8 @@ class MessagesReader:
 
     def get_latest_rowid(self) -> int:
         """Get the most recent message ROWID."""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._get_connection()
         cursor = conn.cursor()
-        # Try PASSIVE checkpoint to improve WAL visibility (won't fail if locked)
-        try:
-            cursor.execute("PRAGMA wal_checkpoint(PASSIVE)")
-        except Exception:
-            pass  # Checkpoint failed, continue anyway - non-critical
         cursor.execute("SELECT MAX(ROWID) FROM message")
         result = cursor.fetchone()[0]
         conn.close()

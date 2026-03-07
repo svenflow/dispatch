@@ -86,10 +86,21 @@ class IMessageReader:
 
     Uses macOS absolute time (seconds since 2001-01-01) for timestamps.
     The date column in chat.db stores nanoseconds since macOS epoch.
+    Uses read_uncommitted mode to read directly from WAL.
     """
 
     def __init__(self, db_path: Path = MESSAGES_DB):
         self.db_path = db_path
+
+    def _get_connection(self) -> sqlite3.Connection:
+        """Open a read-only connection with read_uncommitted for WAL visibility."""
+        conn = sqlite3.connect(
+            f"file:{self.db_path}?mode=ro",
+            uri=True,
+            isolation_level=None
+        )
+        conn.execute("PRAGMA read_uncommitted = 1")
+        return conn
 
     def _macos_timestamp_to_datetime(self, macos_ns: int) -> datetime:
         """Convert macOS nanosecond timestamp to datetime."""
@@ -117,7 +128,7 @@ class IMessageReader:
         anchor_macos = self._datetime_to_macos_timestamp(anchor_timestamp)
 
         try:
-            conn = sqlite3.connect(str(self.db_path))
+            conn = self._get_connection()
             cursor = conn.cursor()
 
             # Get messages before the anchor
