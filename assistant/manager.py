@@ -2029,6 +2029,7 @@ You have 15 minutes. Work efficiently.
         1. Person-facts → Contacts.app notes (consolidate_3pass.py)
         2. Chat context → CONTEXT.md per chat (consolidate_chat.py)
         3. Inject summary into admin session for review and texting
+        4. Skillify → propose new skills and improvements from today's chats
 
         Uses asyncio subprocess to avoid blocking the event loop.
         """
@@ -2049,19 +2050,12 @@ You have 15 minutes. Work efficiently.
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            try:
-                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=3600)
-            except asyncio.TimeoutError:
-                proc.kill()
-                await proc.wait()
-                log.error("Person-facts consolidation timed out after 1 hour")
-                person_facts_error = "TIMEOUT after 1 hour"
-            else:
-                person_facts_output = stdout.decode() if stdout else ""
-                person_facts_error = stderr.decode() if stderr else ""
-                log.info(f"Person-facts consolidation complete: {person_facts_output[-500:] if person_facts_output else 'no output'}")
-                if proc.returncode != 0:
-                    log.error(f"Person-facts errors: {person_facts_error[-500:] if person_facts_error else 'none'}")
+            stdout, stderr = await proc.communicate()
+            person_facts_output = stdout.decode() if stdout else ""
+            person_facts_error = stderr.decode() if stderr else ""
+            log.info(f"Person-facts consolidation complete: {person_facts_output[-500:] if person_facts_output else 'no output'}")
+            if proc.returncode != 0:
+                log.error(f"Person-facts errors: {person_facts_error[-500:] if person_facts_error else 'none'}")
         except Exception as e:
             log.error(f"Person-facts consolidation failed: {e}")
             person_facts_error = str(e)
@@ -2074,19 +2068,12 @@ You have 15 minutes. Work efficiently.
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            try:
-                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=3600)
-            except asyncio.TimeoutError:
-                proc.kill()
-                await proc.wait()
-                log.error("Chat context consolidation timed out after 1 hour")
-                chat_context_error = "TIMEOUT after 1 hour"
-            else:
-                chat_context_output = stdout.decode() if stdout else ""
-                chat_context_error = stderr.decode() if stderr else ""
-                log.info(f"Chat context consolidation complete: {chat_context_output[-500:] if chat_context_output else 'no output'}")
-                if proc.returncode != 0:
-                    log.error(f"Chat context errors: {chat_context_error[-500:] if chat_context_error else 'none'}")
+            stdout, stderr = await proc.communicate()
+            chat_context_output = stdout.decode() if stdout else ""
+            chat_context_error = stderr.decode() if stderr else ""
+            log.info(f"Chat context consolidation complete: {chat_context_output[-500:] if chat_context_output else 'no output'}")
+            if proc.returncode != 0:
+                log.error(f"Chat context errors: {chat_context_error[-500:] if chat_context_error else 'none'}")
         except Exception as e:
             log.error(f"Chat context consolidation failed: {e}")
             chat_context_error = str(e)
@@ -2096,6 +2083,35 @@ You have 15 minutes. Work efficiently.
             person_facts_output, person_facts_error,
             chat_context_output, chat_context_error
         )
+
+        # 4. Skillify - propose new skills and improvements
+        log.info("Running nightly skillify analysis...")
+        await self._run_nightly_skillify()
+
+    async def _run_nightly_skillify(self):
+        """Run skillify analysis and inject into admin session.
+
+        Injects a prompt into the admin session telling it to run /skillify --nightly.
+        The admin session handles the actual skill analysis and sends SMS results.
+        """
+        from assistant import config
+
+        admin_phone = config.require("owner.phone")
+        admin_name = config.require("owner.name")
+
+        skillify_prompt = """<admin>
+🔧 Nightly skillify analysis time. Run /skillify --nightly to analyze today's conversations for new skill opportunities and improvements to existing skills. This runs the full discovery→refinement pipeline and sends results via SMS.
+</admin>"""
+
+        try:
+            await self.sessions.inject_message(
+                admin_name, admin_phone, skillify_prompt, "admin",
+                source="imessage"
+            )
+            log.info("Injected skillify prompt into admin session")
+            lifecycle_log.info("CONSOLIDATION | SKILLIFY_INJECTED | admin")
+        except Exception as e:
+            log.error(f"Failed to inject skillify prompt: {e}")
 
     async def _inject_consolidation_summary(
         self,
