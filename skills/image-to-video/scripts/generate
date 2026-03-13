@@ -24,6 +24,24 @@ import requests
 
 
 MODELS = {
+    # LTX-2 models (text-to-video with audio, or image-to-video)
+    "ltx2": {
+        "id": "fal-ai/ltx-2-19b/text-to-video",
+        "name": "LTX-2 19B",
+        "description": "Joint video+audio generation, 22B params (~$0.04/sec)",
+        "default_duration": None,
+        "supports_audio": True,
+        "text_to_video": True,
+    },
+    "ltx2-i2v": {
+        "id": "fal-ai/ltx-2-19b/image-to-video",
+        "name": "LTX-2 19B Image-to-Video",
+        "description": "Image-to-video with audio (~$0.04/sec)",
+        "default_duration": None,
+        "supports_audio": True,
+        "text_to_video": False,
+    },
+    # Kling models
     "kling": {
         "id": "fal-ai/kling-video/v2.6/pro/image-to-video",
         "name": "Kling 2.6 Pro",
@@ -42,11 +60,12 @@ MODELS = {
         "description": "Latest Kling, improved motion ($0.08/sec)",
         "default_duration": "5",
     },
+    # Veo models
     "veo": {
         "id": "fal-ai/veo2/image-to-video",
         "name": "Veo 2",
         "description": "Google's model, smooth motion ($2.50 for 5s)",
-        "default_duration": None,  # Veo doesn't take duration param
+        "default_duration": None,
     },
     "veo3": {
         "id": "fal-ai/veo3/image-to-video",
@@ -66,6 +85,7 @@ MODELS = {
         "description": "Faster Veo 3.1, good for iteration (~$2.00 for 5s)",
         "default_duration": None,
     },
+    # Other models
     "minimax": {
         "id": "fal-ai/minimax/video-01/image-to-video",
         "name": "MiniMax Video-01",
@@ -126,8 +146,11 @@ def generate_video(
     output_path: str = None,
     duration: str = None,
     aspect_ratio: str = None,
+    audio: bool = True,
+    num_frames: int = 121,
+    video_size: str = "landscape_16_9",
 ) -> dict:
-    """Generate video from image."""
+    """Generate video from image or text prompt."""
     if model not in MODELS:
         raise ValueError(f"Unknown model: {model}. Available: {list(MODELS.keys())}")
 
@@ -135,24 +158,49 @@ def generate_video(
 
     os.environ["FAL_KEY"] = load_api_key()
 
-    data_url = image_to_data_url(image_path)
+    # Check if this is a text-to-video model
+    is_text_to_video = model_info.get("text_to_video", False)
 
-    print(f"Generating video with {model_info['name']}...")
-    print(f"Image: {image_path}")
-    print(f"Prompt: {prompt}")
+    if is_text_to_video:
+        print(f"Generating video with {model_info['name']} (text-to-video)...")
+        print(f"Prompt: {prompt}")
+        if image_path:
+            print(f"Note: Image ignored for text-to-video model {model}")
+    else:
+        if not image_path:
+            raise ValueError(f"Model {model} requires an image. Use --model ltx2 for text-to-video.")
+        print(f"Generating video with {model_info['name']}...")
+        print(f"Image: {image_path}")
+        print(f"Prompt: {prompt}")
 
     # Build arguments based on model
     args = {
         "prompt": prompt,
-        "image_url": data_url,
     }
 
+    # Add image for image-to-video models
+    if not is_text_to_video and image_path:
+        data_url = image_to_data_url(image_path)
+        args["image_url"] = data_url
+
+    # LTX-2 specific params
+    if model.startswith("ltx2"):
+        if model_info.get("supports_audio"):
+            args["generate_audio"] = audio
+        args["num_frames"] = num_frames
+        args["video_size"] = video_size
+        args["fps"] = 25
+        args["guidance_scale"] = 3
+        args["num_inference_steps"] = 40
+        if audio:
+            print(f"Audio generation: enabled")
+
     # Add duration for models that support it
-    if model_info.get("default_duration"):
+    elif model_info.get("default_duration"):
         args["duration"] = duration or model_info["default_duration"]
 
     # Add aspect ratio if specified (most models support 16:9, 9:16, 1:1)
-    if aspect_ratio:
+    if aspect_ratio and not model.startswith("ltx2"):
         args["aspect_ratio"] = aspect_ratio
 
     # Kling-specific params
@@ -186,7 +234,12 @@ def generate_video(
     if video_url:
         # Determine output path
         if output_path is None:
-            input_stem = Path(image_path).stem
+            if image_path:
+                input_stem = Path(image_path).stem
+            else:
+                # Text-to-video: use first few words of prompt
+                input_stem = "_".join(prompt.split()[:3]).lower()
+                input_stem = "".join(c for c in input_stem if c.isalnum() or c == "_")
             output_path = f"/tmp/{input_stem}_{model}.mp4"
 
         print(f"Downloading video from: {video_url}")
@@ -215,8 +268,24 @@ def list_models():
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate videos from images")
-    parser.add_argument("image", nargs="?", help="Path to input image")
+    parser = argparse.ArgumentParser(
+        description="Generate videos from images or text prompts",
+        epilog="""
+Examples:
+  # Image-to-video with Kling (default)
+  generate image.jpg "A cat walking"
+
+  # Text-to-video with LTX-2 (includes audio!)
+  generate -m ltx2 "Waves crashing on a beach, seagulls calling"
+
+  # Image-to-video with LTX-2 audio
+  generate -m ltx2-i2v image.jpg "Person speaking to camera"
+
+  # Disable audio for LTX-2
+  generate -m ltx2 --no-audio "Silent timelapse of clouds"
+        """
+    )
+    parser.add_argument("image", nargs="?", help="Path to input image (optional for text-to-video models)")
     parser.add_argument("prompt", nargs="?", help="Motion/animation prompt")
     parser.add_argument("-m", "--model", default="kling",
                        choices=list(MODELS.keys()),
@@ -224,6 +293,13 @@ def main():
     parser.add_argument("-o", "--output", help="Output MP4 path")
     parser.add_argument("-d", "--duration", help="Duration in seconds (model-dependent)")
     parser.add_argument("--aspect-ratio", help="Aspect ratio (16:9, 9:16, 1:1)")
+    parser.add_argument("--no-audio", action="store_true",
+                       help="Disable audio generation for LTX-2 models")
+    parser.add_argument("--frames", type=int, default=121,
+                       help="Number of frames for LTX-2 (default: 121 = ~5s)")
+    parser.add_argument("--video-size", default="landscape_16_9",
+                       choices=["landscape_16_9", "landscape_4_3", "portrait_4_3", "portrait_9_16", "square"],
+                       help="Video size for LTX-2 (default: landscape_16_9)")
     parser.add_argument("--list-models", action="store_true",
                        help="List available models")
     parser.add_argument("--json", action="store_true",
@@ -235,11 +311,20 @@ def main():
         list_models()
         return 0
 
-    if not args.image:
-        parser.error("Image path required (or use --list-models)")
+    model_info = MODELS.get(args.model, {})
+    is_text_to_video = model_info.get("text_to_video", False)
+
+    # For text-to-video models, prompt can be first positional arg
+    if is_text_to_video and args.image and not args.prompt:
+        # Treat image as prompt if no prompt given
+        args.prompt = args.image
+        args.image = None
 
     if not args.prompt:
         parser.error("Prompt required")
+
+    if not is_text_to_video and not args.image:
+        parser.error(f"Image path required for model {args.model} (or use --model ltx2 for text-to-video)")
 
     try:
         result = generate_video(
@@ -249,6 +334,9 @@ def main():
             args.output,
             args.duration,
             args.aspect_ratio,
+            audio=not args.no_audio,
+            num_frames=args.frames,
+            video_size=args.video_size,
         )
 
         if args.json:

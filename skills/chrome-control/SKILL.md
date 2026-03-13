@@ -344,6 +344,47 @@ This is useful when buttons don't have stable IDs or CSS classes.
 
 **How it works:** The `iframe-click` command uses `Page.createIsolatedWorld` with `grantUniversalAccess:true` to execute JS inside cross-origin iframes, bypassing CSP restrictions. It dispatches a full mouse event sequence (mouseenter → mouseover → mousemove → mousedown → mouseup → click) which is required for modern web frameworks that listen for the complete event chain.
 
+### Google OAuth Login Flow
+
+Google's OAuth sign-in pages have aggressive bot detection that blocks normal `chrome click` commands. The `iframe-click` command bypasses this protection.
+
+**This works for any site using Google OAuth:** ElevenLabs, Figma, Notion, etc.
+
+```bash
+# 1. Navigate to site that uses Google OAuth
+chrome open "https://elevenlabs.io/app/sign-up"
+# Get tab_id from output
+
+# 2. Click "Sign in with Google" (or similar button)
+chrome iframe-click <tab_id> 'text:Google'
+
+# 3. On Google sign-in page, email may already be filled
+#    If not, click email field and insert
+chrome iframe-click <tab_id> 'input[type="email"]'
+chrome insert-text <tab_id> 'user@gmail.com'
+
+# 4. Click Next button - THIS IS THE KEY STEP
+#    Regular chrome click FAILS here, iframe-click WORKS
+chrome iframe-click <tab_id> 'text:Next'
+
+# 5. Wait for password page to load, then enter password
+chrome iframe-click <tab_id> 'input[type="password"]'
+chrome insert-text <tab_id> 'yourpassword'
+
+# 6. Click Next to submit password
+chrome iframe-click <tab_id> 'text:Next'
+
+# 7. Handle 2FA if required (varies by account settings)
+```
+
+**Why this works:** Google's bot detection looks for synthetic click events that lack the full mouse event sequence. The `iframe-click` command dispatches the complete sequence (mouseenter → mouseover → mousemove → mousedown → mouseup → click) that real user clicks generate, bypassing the detection.
+
+**Note:** You still need valid credentials. Get passwords from keychain:
+```bash
+security find-generic-password -s "service-name" -w
+security find-generic-password -a "account@gmail.com" -w
+```
+
 ## Extension Reload
 
 To reload the Chrome Control extension after making changes:

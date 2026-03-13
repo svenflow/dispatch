@@ -1,300 +1,198 @@
 ---
 name: google-suite
-description: Access Google services (Gmail, Calendar, Drive, Docs, Sheets, Tasks, Contacts, Chat) via gogcli. Trigger words - google, gmail, email, calendar, drive, docs, sheets, tasks, meeting, event.
+description: Access Google services (Gmail, Calendar, Drive, Docs, Sheets, Tasks, Contacts, Chat) via gws CLI. Trigger words - google, gmail, email, calendar, drive, docs, sheets, tasks, meeting, event.
 ---
 
 # Google Suite Skill
 
-Access Gmail, Calendar, Drive, Docs, Sheets, Tasks, Contacts, and Chat via the `gog` CLI.
+Access all Google Workspace APIs via the `gws` CLI (googleworkspace/cli). This is the official Google Workspace CLI.
 
-## Setup
+## CLI Location
+
+Binary: `~/.local/bin/gws`
+
+## Authentication
+
+Already authenticated via browser OAuth. To re-auth or add accounts:
 
 ```bash
-# Install
-brew install steipete/tap/gogcli
-
-# Add OAuth credentials (download from Google Cloud Console)
-gog auth credentials ~/Downloads/client_secret_....json
-
-# Authorize an account
-gog auth add you@gmail.com
-
-# Check status
-gog auth status
-gog auth list --check
+gws auth login              # Browser-based OAuth
+gws auth status             # Check current auth
 ```
 
-## Quick Reference
+## CLI Syntax
 
-The CLI is at `/opt/homebrew/bin/gog`. Use `-a account@email.com` to specify account.
+```bash
+gws <service> <resource> <method> [flags]
+```
+
+### Global Flags
+
+| Flag | Description |
+|------|-------------|
+| `--format <FORMAT>` | Output format: `json` (default), `table`, `yaml`, `csv` |
+| `--dry-run` | Validate locally without calling the API |
+| `--params '{"key": "val"}'` | URL/query parameters |
+| `--json '{"key": "val"}'` | Request body |
+| `-o, --output <PATH>` | Save binary responses to file |
+| `--upload <PATH>` | Upload file content (multipart) |
+| `--page-all` | Auto-paginate (NDJSON output) |
+
+## Sub-Skills
+
+This skill includes 107 sub-skills in the `skills/` folder. **Use the appropriate sub-skill when working with a specific feature.**
+
+### Core Services
+
+| Sub-skill | Description | Use when |
+|-----------|-------------|----------|
+| `skills/gws-gmail/` | Gmail API reference | Reading/managing emails |
+| `skills/gws-gmail-send/` | Send email helper | Sending emails |
+| `skills/gws-gmail-triage/` | Inbox summary | Checking unread emails |
+| `skills/gws-calendar/` | Calendar API reference | Managing calendars/events |
+| `skills/gws-calendar-agenda/` | Show upcoming events | Checking schedule |
+| `skills/gws-calendar-insert/` | Create events | Scheduling meetings |
+| `skills/gws-drive/` | Drive API reference | File management |
+| `skills/gws-drive-upload/` | Upload files | Uploading to Drive |
+| `skills/gws-docs/` | Docs API reference | Document operations |
+| `skills/gws-docs-write/` | Write to docs | Creating/editing docs |
+| `skills/gws-sheets/` | Sheets API reference | Spreadsheet operations |
+| `skills/gws-sheets-read/` | Read sheet data | Reading spreadsheets |
+| `skills/gws-sheets-append/` | Append rows | Adding data to sheets |
+| `skills/gws-tasks/` | Tasks API reference | Task management |
+| `skills/gws-people/` | People/Contacts API | Contact management |
+| `skills/gws-chat/` | Chat API reference | Workspace Chat |
+| `skills/gws-chat-send/` | Send chat messages | Messaging in Chat |
+| `skills/gws-meet/` | Meet API reference | Meeting management |
+| `skills/gws-keep/` | Keep API reference | Notes management |
+| `skills/gws-forms/` | Forms API reference | Form operations |
+| `skills/gws-slides/` | Slides API reference | Presentation operations |
+
+### Admin & Enterprise
+
+| Sub-skill | Description |
+|-----------|-------------|
+| `skills/gws-admin/` | Admin SDK operations |
+| `skills/gws-admin-reports/` | Admin reports |
+| `skills/gws-alertcenter/` | Security alerts |
+| `skills/gws-cloudidentity/` | Cloud Identity |
+| `skills/gws-groupssettings/` | Groups settings |
+| `skills/gws-licensing/` | License management |
+| `skills/gws-reseller/` | Reseller operations |
+| `skills/gws-vault/` | Vault/eDiscovery |
+| `skills/gws-modelarmor/` | Content safety screening |
+
+### Automation & Scripts
+
+| Sub-skill | Description |
+|-----------|-------------|
+| `skills/gws-apps-script/` | Apps Script API |
+| `skills/gws-apps-script-push/` | Deploy scripts |
+| `skills/gws-events/` | Event subscriptions |
+| `skills/gws-classroom/` | Google Classroom |
+
+### Workflow Recipes (Automation Patterns)
+
+| Sub-skill | Description |
+|-----------|-------------|
+| `skills/gws-workflow-email-to-task/` | Convert emails to tasks |
+| `skills/gws-workflow-file-announce/` | Announce file uploads |
+| `skills/gws-workflow-meeting-prep/` | Prepare for meetings |
+| `skills/gws-workflow-standup-report/` | Generate standup reports |
+| `skills/gws-workflow-weekly-digest/` | Weekly email digest |
+
+### Recipes (Common Tasks)
+
+The `recipe-*` sub-skills provide step-by-step guides for common operations:
+
+| Recipe | Description |
+|--------|-------------|
+| `recipe-send-personalized-emails` | Bulk personalized emails |
+| `recipe-create-events-from-sheet` | Events from spreadsheet data |
+| `recipe-save-email-attachments` | Download attachments |
+| `recipe-batch-rename-files` | Bulk file renaming |
+| `recipe-find-free-time` | Find available slots |
+| `recipe-create-doc-from-template` | Doc from template |
+| `recipe-sync-contacts-to-sheet` | Export contacts |
+| `recipe-share-folder-with-team` | Bulk sharing |
+| ... and 40+ more recipes |
+
+### Persona Guides (Role-based)
+
+| Persona | Description |
+|---------|-------------|
+| `persona-exec-assistant` | Executive assistant workflows |
+| `persona-project-manager` | PM workflows |
+| `persona-it-admin` | IT administration |
+| `persona-researcher` | Research workflows |
+| `persona-sales-ops` | Sales operations |
+| ... and more |
+
+## Quick Examples
 
 ### Gmail
 
 ```bash
 # Search emails
-gog gmail search "from:boss subject:urgent"
-gog gmail search "is:unread newer_than:1d"
+gws gmail users messages list --params '{"q": "from:boss is:unread", "maxResults": 10}'
 
-# Read a message
-gog gmail get <messageId>
-gog gmail get <messageId> --format=raw  # full headers
+# Get message (need to specify fields)
+gws gmail users messages get --params '{"userId": "me", "id": "MESSAGE_ID"}'
 
-# Send email
-gog send --to "recipient@example.com" --subject "Hello" --body "Message body"
-gog send --to "a@x.com,b@x.com" --cc "c@x.com" --subject "Meeting" --body "See you there"
-
-# With attachments
-gog send --to "x@y.com" --subject "Files" --body "Attached" --attach file1.pdf --attach file2.png
-
-# HTML email
-gog send --to "x@y.com" --subject "News" --html "<h1>Hello</h1><p>World</p>"
-
-# Labels
-gog gmail labels list
-gog gmail thread modify <threadId> --add-labels "STARRED" --remove-labels "UNREAD"
+# Send email (use the helper skill for easier syntax)
+# See: skills/gws-gmail-send/SKILL.md
 ```
 
 ### Calendar
 
 ```bash
-# List calendars
-gog calendar calendars
+# List upcoming events
+gws calendar events list --params '{"calendarId": "primary", "timeMin": "2026-03-05T00:00:00Z", "maxResults": 10}'
 
-# List events (default: today forward)
-gog cal events                           # all calendars
-gog cal events primary                   # primary calendar only
-gog cal events --from "2026-02-14" --to "2026-02-21"
-
-# Search events
-gog cal search "standup"
-
-# Create event
-gog cal create primary --title "Meeting" --start "2026-02-15T14:00:00" --end "2026-02-15T15:00:00"
-gog cal create primary --title "Lunch" --start "2026-02-15" --all-day
-
-# With attendees
-gog cal create primary --title "Sync" --start "2026-02-15T10:00" --end "2026-02-15T11:00" \
-  --attendees "alice@x.com,bob@x.com" --location "Conference Room A"
-
-# Update/delete
-gog cal update primary <eventId> --title "New Title"
-gog cal delete primary <eventId>
-
-# RSVP
-gog cal respond primary <eventId> --response accepted
-gog cal respond primary <eventId> --response declined --comment "Conflict"
-
-# Find conflicts
-gog cal conflicts --from "2026-02-14" --to "2026-02-21"
-
-# Free/busy
-gog cal freebusy "alice@x.com,bob@x.com" --from "2026-02-14" --to "2026-02-15"
+# Create event (use the helper skill for easier syntax)
+# See: skills/gws-calendar-insert/SKILL.md
 ```
 
 ### Drive
 
 ```bash
 # List files
-gog ls                         # root folder
-gog ls --folder <folderId>     # specific folder
-gog ls --trashed               # trash
+gws drive files list --params '{"pageSize": 10}'
 
-# Search
-gog search "quarterly report"
-gog drive search "name contains 'invoice' and mimeType='application/pdf'"
+# Search files
+gws drive files list --params '{"q": "name contains '\''report'\'' and mimeType='\''application/pdf'\''", "pageSize": 10}'
 
-# Download
-gog download <fileId>
-gog download <fileId> --output ~/Downloads/myfile.pdf
-
-# Upload
-gog upload ~/Documents/report.pdf
-gog upload ~/Documents/report.pdf --folder <folderId> --name "Q1 Report"
-
-# Create folder
-gog drive mkdir "Project Files"
-gog drive mkdir "Subfolder" --parent <parentFolderId>
-
-# Share
-gog drive share <fileId> --email "user@example.com" --role writer
-gog drive share <fileId> --email "user@example.com" --role reader
-
-# Permissions
-gog drive permissions <fileId>
-gog drive unshare <fileId> <permissionId>
-
-# Move/rename/delete
-gog drive move <fileId> --to <folderId>
-gog drive rename <fileId> "New Name"
-gog drive delete <fileId>
-```
-
-### Docs
-
-```bash
-# Read doc as plain text
-gog docs cat <docId>
-
-# Export
-gog docs export <docId> --format pdf --output report.pdf
-gog docs export <docId> --format docx
-gog docs export <docId> --format txt
-
-# Create doc
-gog docs create "Meeting Notes"
-gog docs create "Project Doc" --folder <folderId>
-
-# Write/append content
-gog docs write <docId> "New content at the end"
-gog docs write <docId> --stdin < notes.txt
-
-# Insert at position
-gog docs insert <docId> "Inserted text" --index 1  # beginning
-
-# Find and replace
-gog docs find-replace <docId> "old text" "new text"
-gog docs find-replace <docId> "old" "new" --all  # all occurrences
-
-# Copy doc
-gog docs copy <docId> "Copy of Doc"
+# Download file
+gws drive files get --params '{"fileId": "FILE_ID", "alt": "media"}' -o output.pdf
 ```
 
 ### Sheets
 
 ```bash
 # Read values
-gog sheets get <spreadsheetId> "Sheet1!A1:D10"
-gog sheets get <spreadsheetId> "A:A"  # whole column
-
-# Update values
-gog sheets update <spreadsheetId> "A1" "Hello"
-gog sheets update <spreadsheetId> "A1:C1" "Val1" "Val2" "Val3"
+gws sheets spreadsheets values get --params '{"spreadsheetId": "SHEET_ID", "range": "Sheet1!A1:D10"}'
 
 # Append row
-gog sheets append <spreadsheetId> "Sheet1" "Col1" "Col2" "Col3"
-
-# Clear range
-gog sheets clear <spreadsheetId> "A1:D10"
-
-# Get metadata (sheet names, etc)
-gog sheets metadata <spreadsheetId>
-
-# Create new spreadsheet
-gog sheets create "Budget 2026"
-
-# Export
-gog sheets export <spreadsheetId> --format xlsx
-gog sheets export <spreadsheetId> --format csv --sheet "Sheet1"
+gws sheets spreadsheets values append --params '{"spreadsheetId": "SHEET_ID", "range": "Sheet1", "valueInputOption": "USER_ENTERED"}' --json '{"values": [["Col1", "Col2", "Col3"]]}'
 ```
 
-### Tasks
+## Discovering Commands
 
 ```bash
-# List task lists
-gog tasks lists list
+# List available services
+gws --help
 
-# List tasks in a list
-gog tasks list <tasklistId>
-gog tasks list <tasklistId> --show-completed
+# List resources for a service
+gws gmail --help
 
-# Add task
-gog tasks add <tasklistId> --title "Buy groceries"
-gog tasks add <tasklistId> --title "Report" --due "2026-02-20" --notes "Q1 numbers"
-
-# Complete/uncomplete
-gog tasks done <tasklistId> <taskId>
-gog tasks undo <tasklistId> <taskId>
-
-# Update
-gog tasks update <tasklistId> <taskId> --title "New title" --due "2026-02-25"
-
-# Delete
-gog tasks delete <tasklistId> <taskId>
-
-# Clear completed
-gog tasks clear <tasklistId>
+# Get method schema (params, types, defaults)
+gws schema gmail.users.messages.list
 ```
 
-### Contacts
+## Shared Reference
 
-```bash
-# Search contacts
-gog contacts search "John"
-gog contacts search "john@example.com"
+For auth details, global flags, and security rules, see: `skills/gws-shared/SKILL.md`
 
-# List all contacts
-gog contacts list
-gog contacts list --limit 50
+## Legacy: gog CLI
 
-# Get contact details
-gog contacts get <resourceName>
-
-# Create contact
-gog contacts create --name "John Doe" --email "john@example.com" --phone "+1234567890"
-
-# Update contact
-gog contacts update <resourceName> --name "John Smith"
-
-# Delete contact
-gog contacts delete <resourceName>
-```
-
-### Chat (Workspace only)
-
-```bash
-# List spaces
-gog chat spaces list
-
-# List messages in space
-gog chat messages list <spaceName>
-
-# Send message
-gog chat messages create <spaceName> --text "Hello team!"
-
-# DM a user
-gog chat dm create <userId> --text "Hey!"
-```
-
-## Common Flags
-
-| Flag | Description |
-|------|-------------|
-| `-a, --account` | Account email to use |
-| `-j, --json` | Output JSON (for scripting) |
-| `-p, --plain` | Output TSV (stable, parseable) |
-| `--results-only` | JSON mode: omit envelope fields |
-| `-n, --dry-run` | Preview without making changes |
-| `-y, --force` | Skip confirmations |
-| `--no-input` | Never prompt (for CI) |
-
-## Multi-Account Usage
-
-```bash
-# Set default account
-export GOG_ACCOUNT=work@company.com
-
-# Or per-command
-gog -a personal@gmail.com gmail search "is:unread"
-gog -a work@company.com cal events
-```
-
-## Tips
-
-1. **Get file/doc IDs**: Extract from Google URLs. `https://docs.google.com/document/d/DOCID/edit` → DOCID
-2. **JSON output**: Use `-j --results-only` for clean JSON to pipe to `jq`
-3. **Calendar IDs**: Use `primary` for your main calendar, or the full calendar ID for others
-4. **Task list IDs**: Get from `gog tasks lists list`
-
-## Auth Troubleshooting
-
-```bash
-# Re-authorize with more scopes
-gog auth add you@gmail.com --services gmail,calendar,drive
-
-# Check token validity
-gog auth list --check
-
-# Remove and re-add account
-gog logout you@gmail.com
-gog login you@gmail.com
-```
+The old `gog` CLI (brew install steipete/tap/gogcli) is still installed but deprecated. Use `gws` for all new operations.

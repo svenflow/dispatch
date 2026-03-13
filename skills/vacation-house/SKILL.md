@@ -125,6 +125,53 @@ Many buyers offset costs with seasonal rentals. Consider:
 
 ---
 
+## Listing Enrichment Workflow
+
+When you need detailed property info (water source, septic, heating, etc.) that isn't in the basic API:
+
+### 1. Fetch Full Listing Text
+```bash
+# Get raw listing text from Redfin/Zillow
+~/.claude/skills/vacation-house/scripts/listing-details "https://www.redfin.com/..."
+
+# Or get structured JSON with basic field extraction
+~/.claude/skills/vacation-house/scripts/listing-details --json "https://www.redfin.com/..."
+```
+
+### 2. Agent Parses Text
+The CLI returns raw listing text. As an agent, you should extract:
+
+| Field | Look For |
+|-------|----------|
+| **Water Source** | "well", "city water", "public water", "municipal" |
+| **Sewer** | "septic", "city sewer", "public sewer" |
+| **Heating** | "forced air", "baseboard", "radiant", "oil", "propane", "wood stove" |
+| **Year Built** | "Built 1985", "Year built: 1985" |
+| **Days on Market** | "45 days on Redfin", "Listed 2 months ago" |
+| **Price History** | Previous sale prices, price reductions |
+| **HOA** | Monthly/yearly fees |
+| **Lot Features** | "pond", "stream", "frontage", "views", "trail" |
+
+### 3. Update Listing in D1
+```bash
+# Update listing with enriched data
+curl -X PATCH "https://plot-listings-api.nicklaudethorat.workers.dev/listings/<id>" \
+  -H "Content-Type: application/json" \
+  -d '{"water_source": "well", "sewer": "septic", "heating": "propane forced air"}'
+```
+
+### Example Agent Workflow
+```
+User: "tell me more about 156 W Lake Rd"
+
+1. listing-details "https://www.redfin.com/VT/Wilmington/156-W-Lake-Rd..."
+2. Parse text for water/septic/heating/year built
+3. PATCH to listings API with enriched fields
+4. Reply with findings
+```
+
+---
+
 ## Redfin CLI Tool
 
 Custom CLI that extracts cookies from Chrome to bypass Redfin's bot protection.
