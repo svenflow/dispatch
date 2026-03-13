@@ -36,6 +36,25 @@ from claude_agent_sdk import (
     HookMatcher,
 )
 
+# Patch SDK message parser to handle unknown message types gracefully.
+# The bundled parser raises MessageParseError for new types like rate_limit_event,
+# which kills the receive iterator and crashes the session.
+try:
+    import claude_agent_sdk._internal.message_parser as _mp
+    import claude_agent_sdk._internal.client as _client
+
+    _original_parse = _mp.parse_message
+
+    def _tolerant_parse(data):
+        try:
+            return _original_parse(data)
+        except Exception:
+            return SystemMessage(subtype=data.get("type", "unknown"), data=data)
+
+    _client.parse_message = _tolerant_parse  # type: ignore[assignment]
+except (ImportError, AttributeError):
+    pass  # SDK mocked in tests
+
 if TYPE_CHECKING:
     from claude_agent_sdk.types import (
         SyncHookJSONOutput,
@@ -389,6 +408,7 @@ class SDKSession:
             turn_limit = 30
 
         opts = ClaudeAgentOptions(
+            cli_path=Path.home() / ".local" / "bin" / "claude",  # Use system CLI (not bundled) for OAuth compat
             cwd=self.cwd,
             allowed_tools=tools,
             permission_mode=perm_mode,
@@ -398,8 +418,9 @@ class SDKSession:
             max_turns=turn_limit,
             max_buffer_size=10 * 1024 * 1024,  # 10MB - prevents crash on large Task outputs
             hooks={
-                "PreToolUse": [HookMatcher(matcher="Read", hooks=[self._resize_image_hook])],
-                "Stop": [HookMatcher(hooks=[self._stop_hook])],
+                "PreToolUse": [HookMatcher(matcher="Read", hooks=[self._resize_image_hook])],  # type: ignore[list-item]
+                "Stop": [HookMatcher(hooks=[self._stop_hook])],  # type: ignore[list-item]
+                "PreCompact": [HookMatcher(hooks=[self._pre_compact_hook])],  # type: ignore[list-item]
             }
         )
 
@@ -492,6 +513,39 @@ class SDKSession:
         except Exception as e:
             self._log.warning(f"IMAGE_CHECK_ERROR | {file_path} | {e}")
             return {}
+
+    async def _pre_compact_hook(self, input_data: "HookInputType", tool_use_id: str | None, context: "HookContext") -> "SyncHookJSONOutput":
+        """PreCompact hook: trigger session restart with context summary.
+
+        Fires when the CLI's context window is about to be compacted.
+        Instead of letting the CLI do a lossy compaction, we:
+        1. Run summarize-and-restart which generates an Opus summary
+        2. Kill and recreate the session with the summary as briefing
+        This preserves much more context across the boundary.
+        """
+        from assistant.common import get_session_name
+        session_name = get_session_name(self.chat_id, self.source)
+        self._log.info(f"PRECOMPACT | triggered | session={session_name} turns={self.turn_count}")
+        log.info(f"[{self.contact_name}] PreCompact hook fired (turns={self.turn_count})")
+
+        # Log to compactions.log for visibility
+        compaction_log = Path.home() / "dispatch/logs/compactions.log"
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(compaction_log, "a") as f:
+            f.write(f"{timestamp} | HOOK | PreCompact fired for {session_name}\n")
+
+        # Fire restart asynchronously - don't block the hook response
+        restart_script = Path.home() / "dispatch" / "bin" / "summarize-and-restart"
+        try:
+            subprocess.Popen(
+                [str(restart_script), session_name],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception as e:
+            self._log.error(f"PRECOMPACT | restart failed: {e}")
+
+        return {}
 
     async def _stop_hook(self, input_data: "HookInputType", tool_use_id: str | None, context: "HookContext") -> "SyncHookJSONOutput":
         """Stop hook: remind Claude to send updates via send-sms if needed.

@@ -197,7 +197,9 @@ async def check_deep_haiku(entries: list[dict[str, Any]], session_name: str) -> 
             TextBlock,
         )
 
+        from pathlib import Path
         options = ClaudeAgentOptions(
+            cli_path=Path.home() / ".local" / "bin" / "claude",  # Use system CLI for OAuth compat
             model="haiku",
             max_turns=1,
             permission_mode="bypassPermissions",
