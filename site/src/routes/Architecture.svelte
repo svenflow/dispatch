@@ -88,7 +88,7 @@
           <!-- Nav bar -->
           <rect x="4" y="16" width="132" height="16" rx="10" fill="#f9f9f9"/>
           <rect x="4" y="26" width="132" height="6" fill="#f9f9f9"/>
-          <text x="70" y="27" class="iphone-nav-title">Nikhil</text>
+          <text x="70" y="27" class="iphone-nav-title">Alice</text>
           <!-- Chat bubbles -->
           <g transform="translate(10, 38)">
             <!-- Received bubble (gray, left aligned) -->
@@ -177,7 +177,7 @@
             <g transform="translate(15, 38)">
               <rect x="0" y="0" width="115" height="50" rx="8" class="daemon-inner-box" class:active={step === 3}/>
               <text x="57" y="18" class="daemon-inner-title">🔍 Lookup</text>
-              <text x="57" y="35" class="daemon-inner-result" class:visible={step >= 3}>+1617... → Nikhil</text>
+              <text x="57" y="35" class="daemon-inner-result" class:visible={step >= 3}>+1617... → Alice</text>
             </g>
 
             <!-- ACL check -->
@@ -245,12 +245,12 @@
           <text x="45" y="45" class="session-bubble-status">idle</text>
         </g>
 
-        <!-- Active 1:1 session (Nikhil) -->
+        <!-- Active 1:1 session (Alice) -->
         <g transform="translate(300, 365)">
           <rect x="0" y="0" width="100" height="50" rx="8" class="session-bubble" class:selected={step >= 5}/>
           <rect x="0" y="0" width="100" height="18" rx="8" fill="{colors.orange}"/>
           <rect x="0" y="10" width="100" height="8" fill="{colors.orange}"/>
-          <text x="50" y="13" class="session-bubble-name">Nikhil</text>
+          <text x="50" y="13" class="session-bubble-name">Alice</text>
           <text x="50" y="33" class="session-bubble-tier admin">admin</text>
           <text x="50" y="45" class="session-bubble-status" class:active={step >= 5}>active</text>
         </g>
@@ -283,7 +283,7 @@
             <rect x="0" y="0" width="300" height="100" rx="10" class="session-box"/>
             <rect x="0" y="0" width="300" height="30" rx="10" fill="{colors.orange}"/>
             <rect x="0" y="15" width="300" height="15" fill="{colors.orange}"/>
-            <text x="15" y="21" class="session-title">Nikhil</text>
+            <text x="15" y="21" class="session-title">Alice</text>
             <text x="285" y="21" class="session-tier-label">admin</text>
 
             <g transform="translate(15, 40)">
@@ -363,7 +363,7 @@
       <div class="arrow">→</div>
       <div class="code-block">
         <div class="code-label">Wrapped for Claude</div>
-        <pre><code>---SMS FROM Nikhil (admin)---
+        <pre><code>---SMS FROM Alice (admin)---
 "Hey what's the weather today?"
 ---END SMS---</code></pre>
       </div>
