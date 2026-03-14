@@ -24,6 +24,7 @@ import socket
 import threading
 import queue
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any, List
@@ -58,7 +59,7 @@ from assistant.common import (
     get_reply_chain,
     ensure_transcript_dir,
 )
-from assistant.sdk_backend import SDKBackend, SessionRegistry
+from assistant.sdk_backend import SDKBackend, SessionRegistry, _fire_and_forget
 from assistant import perf
 from assistant.resources import ResourceRegistry, ManagedSQLiteReader
 from assistant.bus_helpers import (
@@ -1471,6 +1472,11 @@ class Manager:
         # Health check background task flag (prevents overlapping runs)
         self._health_check_running = False
 
+        # Message consumer: asyncio.Event for near-zero-latency notification
+        self._consumer_notify = asyncio.Event()
+        self._consumer_executor = ThreadPoolExecutor(1, thread_name_prefix="bus-consumer")
+        self._consumer_task: asyncio.Task | None = None
+
         # Initialize bus consumers
         self._consumer_runner = self._init_consumers()
 
@@ -1541,6 +1547,126 @@ class Manager:
         )
         thread.start()
         return thread
+
+    async def _run_message_consumer(self):
+        """Consume message.received events from bus and route to process_message.
+
+        Near-zero latency via asyncio.Event notification from poll loops.
+        Falls back to periodic 5s poll as safety net for missed signals.
+
+        Threading note: consumer.poll() runs on a dedicated single-thread executor
+        because it uses time.sleep() internally. consumer.commit() runs on the event
+        loop thread — it's a quick SQLite UPDATE (<0.1ms) and is always called after
+        poll() returns, so no concurrent access to the consumer's connection.
+        """
+        from assistant.bus_helpers import reconstruct_msg_from_bus
+
+        consumer = self._bus.consumer(
+            group_id="message-router",
+            topics=["messages"],
+            auto_commit=False,
+            auto_offset_reset="latest",  # Skip history on first start (already processed)
+        )
+
+        # Register consumer for clean shutdown (close_and_remove handles supervisor restarts)
+        if self._resource_registry:
+            self._resource_registry.close_and_remove("message-router-consumer")
+            self._resource_registry.register(
+                "message-router-consumer", consumer, consumer.close)
+
+        loop = asyncio.get_event_loop()
+        consecutive_errors = 0
+
+        log.info("Message consumer started (group=message-router)")
+
+        while not self._shutdown_flag:
+            try:
+                # Phase 1: Wait for notification or periodic fallback (5s safety net)
+                try:
+                    await asyncio.wait_for(self._consumer_notify.wait(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    pass  # Safety net — catches missed signals, e.g. after restart
+
+                # Phase 2: Read available records via dedicated thread
+                # 50ms timeout gives writer thread time to flush if notify fired before write
+                records = await loop.run_in_executor(
+                    self._consumer_executor, consumer.poll, 50
+                )
+
+                if not records:
+                    # Don't clear event — if it's still set, we retry immediately
+                    # This handles the write-queue race (notify before flush)
+                    continue
+
+                # Got records — clear the notification
+                self._consumer_notify.clear()
+
+                processed = 0
+                failed = 0
+                for record in records:
+                    if record.type != "message.received":
+                        log.debug(f"Consumer: skipping {record.type} at offset {record.offset}")
+                        continue
+
+                    try:
+                        msg = reconstruct_msg_from_bus(record.payload)
+                        await self.process_message(msg)
+                        processed += 1
+                    except asyncio.CancelledError:
+                        # Graceful shutdown: commit what we've processed, then exit
+                        consumer.commit()
+                        raise
+                    except Exception as e:
+                        failed += 1
+                        log.error(
+                            f"Consumer: failed to process message "
+                            f"(offset={record.offset}, key={record.key}): {e}"
+                        )
+                        produce_event(self._producer, "messages", "message.processing_failed", {
+                            "chat_id": record.key,
+                            "error": str(e),
+                            "original_offset": record.offset,
+                        }, key=record.key, source="consumer")
+
+                # ALWAYS commit after batch — never block on poison messages
+                consumer.commit()
+
+                if processed or failed:
+                    log.debug(f"Consumer batch: {processed} ok, {failed} failed")
+
+                consecutive_errors = 0
+
+            except asyncio.CancelledError:
+                log.info("Message consumer shutting down")
+                break
+            except Exception as e:
+                consecutive_errors += 1
+                log.error(f"Consumer error ({consecutive_errors}): {e}")
+                backoff = min(30, 2 ** consecutive_errors)
+                await asyncio.sleep(backoff)
+
+        log.info("Message consumer stopped")
+
+    def _on_consumer_done(self, task: asyncio.Task):
+        """Detect message consumer task death and auto-restart."""
+        if self._shutdown_flag:
+            return
+        try:
+            exc = task.exception()
+            log.error(f"Message consumer task died: {exc}. Restarting in 5s...")
+        except asyncio.CancelledError:
+            return
+
+        async def _restart():
+            await asyncio.sleep(5)
+            if not self._shutdown_flag:
+                self._consumer_task = asyncio.create_task(
+                    self._run_message_consumer(), name="message-consumer"
+                )
+                self._consumer_task.add_done_callback(self._on_consumer_done)
+                log.info("Message consumer task restarted")
+
+        _fire_and_forget(_restart(), name="consumer-restart")
 
     def _load_state(self) -> int:
         """Load the last processed message ROWID."""
@@ -2104,9 +2230,9 @@ You have 15 minutes. Work efficiently.
         group_info = f" [GROUP: {group_name or chat_identifier}]" if is_group else ""
         log.info(f"Processing message {rowid} from {phone}{group_info}: {text_preview}{attachment_info}")
 
-        produce_event(self._producer, "messages", "message.received",
-            sanitize_msg_for_bus(msg), key=msg.get("chat_identifier") or msg.get("phone"),
-            source=msg.get("source", "imessage"))
+        # NOTE: produce_event("message.received") is called by the poll loop,
+        # not here. This method is invoked by the bus consumer after reading
+        # the event, so producing here would create duplicates.
 
         # Lookup contact (sender) - supports both phone and email identifiers
         contact = self.contacts.lookup_identifier(phone)
@@ -2369,6 +2495,19 @@ You have 15 minutes. Work efficiently.
         self._shutdown_flag = True
         log.info("DAEMON | SHUTDOWN | START")
         lifecycle_log.info("DAEMON | SHUTDOWN | START")
+
+        # Drain message consumer: wake it to process remaining records, then cancel
+        if self._consumer_task and not self._consumer_task.done():
+            self._consumer_notify.set()  # Wake to drain remaining
+            try:
+                await asyncio.wait_for(self._consumer_task, timeout=2.0)
+            except asyncio.TimeoutError:
+                self._consumer_task.cancel()
+                await asyncio.gather(self._consumer_task, return_exceptions=True)
+            except Exception:
+                self._consumer_task.cancel()
+                await asyncio.gather(self._consumer_task, return_exceptions=True)
+            log.info("Message consumer drained and stopped")
 
         # Application-level teardown (not resource cleanup)
         try:
@@ -2665,8 +2804,18 @@ Keep the text concise - this is a nightly check-in, not a full report.
         loop.add_signal_handler(signal.SIGTERM, lambda: asyncio.create_task(self._shutdown()))
         loop.add_signal_handler(signal.SIGINT, lambda: asyncio.create_task(self._shutdown()))
 
-        # Start bus consumers (background thread)
+        # Register consumer executor for clean shutdown
+        resource_registry.register('consumer_executor', self._consumer_executor,
+            lambda: self._consumer_executor.shutdown(wait=False))
+
+        # Start audit consumers (background thread)
         self._consumer_thread = self._start_consumer_thread()
+
+        # Start message-router consumer (async task — processes messages from bus)
+        self._consumer_task = asyncio.create_task(
+            self._run_message_consumer(), name="message-consumer"
+        )
+        self._consumer_task.add_done_callback(self._on_consumer_done)
 
         # Start IPC server
         await self.ipc.start()
@@ -2790,18 +2939,16 @@ Keep the text concise - this is a nightly check-in, not a full report.
                         perf.timing("message_staleness_ms", staleness_ms, component="daemon", source="imessage")
                         if staleness_ms > 30000:  # Warn if >30s stale
                             log.warning(f"STALENESS | rowid={msg['rowid']} | staleness={staleness_ms:.0f}ms")
-                    try:
-                        inject_start = time.time()
-                        await self.process_message(msg)
-                        inject_ms = (time.time() - inject_start) * 1000
-                        perf.timing("poll_to_inject_ms", inject_ms, component="daemon", source="imessage")
-                        self._save_state(msg["rowid"])
-                    except asyncio.CancelledError:
-                        raise  # Don't swallow cancellation
-                    except Exception as e:
-                        log.error(f"Failed to process message {msg['rowid']}: {e}")
-                        # Still advance rowid to avoid infinite retry on bad messages
-                        self._save_state(msg["rowid"])
+                    # Produce to bus (PRIMARY delivery path) and advance state
+                    produce_event(self._producer, "messages", "message.received",
+                        sanitize_msg_for_bus(msg),
+                        key=msg.get("chat_identifier") or msg.get("phone"),
+                        source="imessage")
+                    self._save_state(msg["rowid"])
+
+                # Wake message consumer if any messages were produced
+                if messages:
+                    self._consumer_notify.set()
 
                 # Poll for reactions (same rowid sequence as messages)
                 reactions = await loop.run_in_executor(
@@ -2819,25 +2966,36 @@ Keep the text concise - this is a nightly check-in, not a full report.
                         log.error(f"Failed to process reaction {reaction['rowid']}: {e}")
                         self._save_state(reaction["rowid"])
 
-                # Process Signal messages from queue
+                # Process Signal messages from queue → produce to bus
                 signal_count = 0
                 while not self.signal_queue.empty():
                     try:
                         signal_msg = self.signal_queue.get_nowait()
-                        await self.process_message(signal_msg)
+                        produce_event(self._producer, "messages", "message.received",
+                            sanitize_msg_for_bus(signal_msg),
+                            key=signal_msg.get("chat_identifier") or signal_msg.get("phone"),
+                            source=signal_msg.get("source", "signal"))
                         signal_count += 1
                     except queue.Empty:
                         break
                 if signal_count > 0:
                     perf.incr("messages_read", count=signal_count, component="daemon", source="signal")
+                    self._consumer_notify.set()
 
-                # Process test messages from queue
+                # Process test messages from queue → produce to bus
+                test_count = 0
                 while not self.test_queue.empty():
                     try:
                         test_msg = self.test_queue.get_nowait()
-                        await self.process_message(test_msg)
+                        produce_event(self._producer, "messages", "message.received",
+                            sanitize_msg_for_bus(test_msg),
+                            key=test_msg.get("chat_identifier") or test_msg.get("phone"),
+                            source=test_msg.get("source", "test"))
+                        test_count += 1
                     except queue.Empty:
                         break
+                if test_count > 0:
+                    self._consumer_notify.set()
 
                 # Flush rowid state to disk once per poll cycle (batched)
                 self._flush_state()

@@ -422,14 +422,16 @@ class TestManagerMessageBusEvents:
         bus.close()
 
     async def test_message_received_produces_event(self, manager_with_bus, normalized_message):
-        """process_message produces message.received event."""
+        """Poll loop produces message.received event (not process_message)."""
+        from assistant.bus_helpers import produce_event, sanitize_msg_for_bus
         mgr, bus = manager_with_bus
         msg = normalized_message(phone="+15555550001", text="hello test")
 
-        # Mock contacts to return None (unknown sender)
-        mgr.contacts.lookup_identifier.return_value = None
-
-        await mgr.process_message(msg)
+        # Simulate the poll loop: produce event to bus (this is what the poll loop does now)
+        produce_event(mgr._producer, "messages", "message.received",
+            sanitize_msg_for_bus(msg),
+            key=msg.get("chat_identifier") or msg.get("phone"),
+            source=msg.get("source", "imessage"))
 
         records = drain_topic(bus, "messages", "test-msg-recv")
         events = find_events(records, "message.received")

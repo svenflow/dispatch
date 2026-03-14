@@ -1,5 +1,7 @@
 # Plan: Convert Message Injection to Bus Consumer (Option A)
 
+**Status: IMPLEMENTED** (2026-03-14)
+
 ## Goal
 Refactor the message processing pipeline so that `process_message()` is driven by a bus consumer instead of being called directly from the poll loop. Same process, minimal change.
 
