@@ -112,40 +112,26 @@ claude</code></pre>
     <p>Claude can help set these up when you're ready.</p>
   </section>
 
-  <section id="next">
-    <h2>Next Steps</h2>
-    <ul>
-      <li>
-        <button class="text-link" on:click={() => navigateTo('cli')}>CLI Reference</button>
-        <span class="link-desc">- All commands and options</span>
-      </li>
-      <li>
-        <button class="text-link" on:click={() => navigateTo('tiers')}>Contact Tiers</button>
-        <span class="link-desc">- Access control system</span>
-      </li>
-      <li>
-        <button class="text-link" on:click={() => navigateTo('philosophy')}>Philosophy</button>
-        <span class="link-desc">- Why a separate entity?</span>
-      </li>
-    </ul>
+  <section class="related">
+    <h2>Related</h2>
+    <div class="related-links">
+      <button class="related-link" on:click={() => navigateTo('cli')}>
+        <span class="related-label">CLI Reference</span>
+        <span class="related-desc">All commands and options</span>
+      </button>
+      <button class="related-link" on:click={() => navigateTo('tiers')}>
+        <span class="related-label">Contact Tiers</span>
+        <span class="related-desc">Access control system</span>
+      </button>
+      <button class="related-link" on:click={() => navigateTo('philosophy')}>
+        <span class="related-label">Philosophy</span>
+        <span class="related-desc">Why a separate entity?</span>
+      </button>
+    </div>
   </section>
 </article>
 
 <style>
-  .page {
-    max-width: var(--content-max-width);
-  }
-
-  .page-header {
-    margin-bottom: var(--space-6);
-  }
-
-  .lead {
-    font-size: 15px;
-    color: var(--text-secondary);
-    margin: 0;
-  }
-
   .toc {
     background: var(--bg-elevated);
     border: 1px solid var(--border-default);
@@ -183,10 +169,6 @@ claude</code></pre>
     font-size: 13px;
   }
 
-  section {
-    margin-bottom: var(--space-8);
-  }
-
   .section-desc {
     font-size: 13px;
     color: var(--text-secondary);
@@ -211,8 +193,5 @@ claude</code></pre>
     margin-top: var(--space-2);
   }
 
-  .link-desc {
-    color: var(--text-tertiary);
-  }
 
 </style>

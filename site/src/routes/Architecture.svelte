@@ -446,22 +446,8 @@
 </article>
 
 <style>
-  .page {
-    max-width: 700px;
-  }
-
-  .page-header {
-    margin-bottom: var(--space-6);
-  }
-
   .page-header h1 {
     margin-bottom: var(--space-1);
-  }
-
-  .lead {
-    font-size: 15px;
-    color: var(--text-secondary);
-    margin: 0;
   }
 
   .diagram-section {

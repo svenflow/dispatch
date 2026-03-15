@@ -133,7 +133,3 @@ produce_event(producer, "messages", "message.received", {'{'}"chat_id": "+161755
     </div>
   </section>
 </article>
-
-<style>
-
-</style>

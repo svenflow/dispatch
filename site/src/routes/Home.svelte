@@ -157,19 +157,12 @@ cp config.example.yaml config.local.yaml
 </article>
 
 <style>
-  .page {
-    max-width: var(--content-max-width);
-  }
-
   .page-header {
     margin-bottom: var(--space-8);
   }
 
   .lead {
-    font-size: 15px;
-    color: var(--text-secondary);
     line-height: 1.6;
-    margin: 0;
     max-width: 560px;
   }
 
@@ -350,10 +343,6 @@ cp config.example.yaml config.local.yaml
     color: var(--text-secondary);
     margin-top: var(--space-4);
     line-height: 1.6;
-  }
-
-  section {
-    margin-bottom: var(--space-8);
   }
 
   @media (max-width: 768px) {

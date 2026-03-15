@@ -185,7 +185,3 @@
     </div>
   </section>
 </article>
-
-<style>
-
-</style>

@@ -158,7 +158,3 @@ What I know about them:
     </div>
   </section>
 </article>
-
-<style>
-
-</style>
