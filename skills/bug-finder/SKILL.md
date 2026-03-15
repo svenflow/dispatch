@@ -321,6 +321,21 @@ Only send if there are ACCEPT or REFINE verdicts. If everything was refuted, ski
 
 **CI mode** (prompt contains "--ci"): Exit with non-zero status if any critical or high bugs are accepted. Print report to stdout.
 
+#### Persist Results to Bus
+
+**After generating the report (in ALL modes)**, publish a `scan.completed` event to the bus for historical tracking:
+
+```bash
+RUN_ID=$(date +%Y%m%d-%H%M)
+~/dispatch/bus/cli.py produce system \
+  '{"scanner":"bug-finder","run_id":"'"$RUN_ID"'","mode":"nightly","duration_seconds":DURATION,"summary":{"candidates":N,"accepted":A,"refuted":R,"needs_investigation":I},"findings":[ACCEPTED_AND_REFINED_FINDINGS_AS_JSON]}' \
+  --type scan.completed --source bug-finder --key "scan-bug-finder-$RUN_ID"
+```
+
+The `findings` array should include all ACCEPT and REFINE verdicts with their full details (id, title, severity, category, file, root_cause, suggested_fix, etc.). Refuted items go in `summary.refuted` count only, not in findings.
+
+This enables `bus reports --scanner bug-finder` to query historical scan results (stored in archive indefinitely).
+
 ## Graceful Degradation
 
 - **Not a git repo** — Explorer 1 falls back to `find` for recent files, Explorer 3 skips "changed files" coverage check

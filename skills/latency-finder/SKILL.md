@@ -26,7 +26,7 @@ The system has 4 key data sources for latency analysis:
 
 4. **System resources** — Process memory/CPU, open FDs, WAL file sizes, daemon health logs.
 
-5. **Archive tables** (`bus.db`, tables `records_archive` and `sdk_events_archive`) — Same schema as hot tables plus `archived_at` column. 90-day retention. Auto-populated when records are pruned from hot tables. Use for longer-term baselines and trend analysis beyond the hot table retention windows.
+5. **Archive tables** (`bus.db`, tables `records_archive` and `sdk_events_archive`) — Same schema as hot tables plus `archived_at` column. infinite retention. Auto-populated when records are pruned from hot tables. Use for longer-term baselines and trend analysis beyond the hot table retention windows.
 
 ### Dynamic Baselines
 
@@ -163,7 +163,7 @@ Prompt for the Explore subagent:
 ```
 You are a tool execution performance analyst. Analyze the sdk_events table in bus.db for slow tool calls and session bottlenecks.
 
-NOTE: bus.db has both hot tables (sdk_events: 3-day retention) and archive tables (sdk_events_archive: 90-day retention).
+NOTE: bus.db has both hot tables (sdk_events: 3-day retention) and archive tables (sdk_events_archive: infinite retention).
 For recent data (last 24h), query sdk_events. For longer-term baselines and trends, query sdk_events_archive.
 You can UNION ALL across both tables for complete coverage.
 
@@ -274,7 +274,7 @@ Prompt for the Explore subagent:
 ```
 You are a message delivery latency analyst. Measure end-to-end message delivery times using bus.db records. This covers both iMessage and Signal messages.
 
-NOTE: bus.db has both hot tables (records: 7-day retention) and archive tables (records_archive: 90-day retention).
+NOTE: bus.db has both hot tables (records: 7-day retention) and archive tables (records_archive: infinite retention).
 For recent data (last 24h), query records. For longer-term trends, use UNION ALL with records_archive.
 
 1. Find message.received -> message.sent pairs to measure response time:
@@ -614,7 +614,7 @@ RUN_ID=$(date +%Y%m%d-%H%M)
 
 The `findings` array should include all ACCEPT and REFINE verdicts with their full details (id, title, severity, category, metric, current_p95, baseline_p95, root_cause, fix, etc.). Refuted items go in `summary.refuted` count only, not in findings.
 
-This enables `bus reports --scanner latency-finder` to query historical scan results (stored in archive for 90 days).
+This enables `bus reports --scanner latency-finder` to query historical scan results (stored in archive indefinitely).
 
 ## Graceful Degradation
 

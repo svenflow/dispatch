@@ -56,7 +56,8 @@ DEFAULT_POLL_TIMEOUT_MS = 100
 DEFAULT_MAX_POLL_RECORDS = 500
 HEARTBEAT_TIMEOUT_MS = 300_000  # 5 minutes (all consumers are in-process, heartbeats are mainly for stale cleanup)
 AUTO_PRUNE_INTERVAL = 1000  # prune every N produces
-ARCHIVE_RETENTION_MS = 90 * 24 * 60 * 60 * 1000  # 90 days
+# Archive retention is infinite — archive records are never auto-pruned.
+# If manual cleanup is needed, use SQL directly on records_archive/sdk_events_archive.
 
 
 @dataclass
@@ -481,7 +482,7 @@ class Bus:
         """
         Archive and delete records past their topic's retention period.
         Records are moved to records_archive before deletion (if topic.archive=1).
-        Also prunes old archive records past ARCHIVE_RETENTION_MS.
+        Archive tables have infinite retention (never auto-pruned).
         Returns number of records deleted from hot tables.
         """
         now = _now_ms()
@@ -544,14 +545,7 @@ class Bus:
             raise
         total_deleted += sdk_deleted
 
-        # Prune old archive records past archive retention
-        archive_cutoff = now - ARCHIVE_RETENTION_MS
-        archive_pruned = self._conn.execute(
-            "DELETE FROM records_archive WHERE timestamp < ?", (archive_cutoff,)
-        ).rowcount
-        archive_pruned += self._conn.execute(
-            "DELETE FROM sdk_events_archive WHERE timestamp < ?", (archive_cutoff,)
-        ).rowcount
+        # Archive retention is infinite — no pruning of archive tables.
 
         # Prune stale consumer groups: members with no heartbeat for >1 hour
         # and groups with zero live members. Prevents unbounded metadata growth
@@ -583,9 +577,6 @@ class Bus:
             self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             logger.info("Pruned %d record(s) (incl. %d sdk_events), archived %d, checkpointed WAL",
                         total_deleted, sdk_deleted, total_archived + sdk_archived)
-            if archive_pruned > 0:
-                logger.info("Pruned %d old archive record(s) past %dd retention",
-                            archive_pruned, ARCHIVE_RETENTION_MS // (24 * 60 * 60 * 1000))
 
         return total_deleted
 
@@ -835,14 +826,7 @@ class Producer:
                 total_deleted += sdk_archived
                 total_archived += sdk_archived
 
-                # Prune old archive records past archive retention
-                archive_cutoff = now_ms - ARCHIVE_RETENTION_MS
-                prune_conn.execute(
-                    "DELETE FROM records_archive WHERE timestamp < ?", (archive_cutoff,)
-                )
-                prune_conn.execute(
-                    "DELETE FROM sdk_events_archive WHERE timestamp < ?", (archive_cutoff,)
-                )
+                # Archive retention is infinite — no pruning of archive tables.
 
                 if total_deleted > 0:
                     prune_conn.execute("PRAGMA incremental_vacuum")

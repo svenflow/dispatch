@@ -221,7 +221,7 @@ RUN_ID=$(date +%Y%m%d-%H%M)
 
 The `findings` array should include all accepted new skill proposals and skill improvement proposals with their full details (name, description, seed_spec, evidence, source_sessions, etc.). Refuted items go in `summary.refuted` count only, not in findings.
 
-This enables `bus reports --scanner skillify` to query historical scan results (stored in archive for 90 days).
+This enables `bus reports --scanner skillify` to query historical scan results (stored in archive indefinitely).
 
 ### Step 5: Build on Request
 
