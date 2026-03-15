@@ -148,22 +148,22 @@
     </table>
   </section>
 
-  <section class="related-pages">
+  <section class="related">
     <h2>Related</h2>
-    <ul>
-      <li>
-        <button class="text-link" on:click={() => navigateTo('message-bus')}>Message Bus</button>
-        <span class="link-desc">- Event taxonomy and bus integration</span>
-      </li>
-      <li>
-        <button class="text-link" on:click={() => navigateTo('health')}>Health & Healing</button>
-        <span class="link-desc">- Monitoring and automatic recovery</span>
-      </li>
-      <li>
-        <button class="text-link" on:click={() => navigateTo('cli')}>CLI Reference</button>
-        <span class="link-desc">- Full command reference</span>
-      </li>
-    </ul>
+    <div class="related-links">
+      <button class="related-link" on:click={() => navigateTo('message-bus')}>
+        <span class="related-label">Message Bus</span>
+        <span class="related-desc">Event taxonomy and bus integration</span>
+      </button>
+      <button class="related-link" on:click={() => navigateTo('health')}>
+        <span class="related-label">Health & Healing</span>
+        <span class="related-desc">Monitoring and automatic recovery</span>
+      </button>
+      <button class="related-link" on:click={() => navigateTo('cli')}>
+        <span class="related-label">CLI Reference</span>
+        <span class="related-desc">Full command reference</span>
+      </button>
+    </div>
   </section>
 </article>
 
@@ -184,5 +184,50 @@
 
   section {
     margin-bottom: var(--space-8);
+  }
+
+  .related {
+    margin-top: var(--space-12);
+    padding-top: var(--space-8);
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  .related h2 {
+    font-size: 14px;
+    margin-bottom: var(--space-4);
+  }
+
+  .related-links {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: var(--space-3);
+  }
+
+  .related-link {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    padding: var(--space-4);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-default);
+    cursor: pointer;
+    text-align: left;
+    font-family: inherit;
+    transition: border-color var(--transition-fast);
+  }
+
+  .related-link:hover {
+    border-color: var(--border-strong);
+  }
+
+  .related-label {
+    font-weight: 500;
+    font-size: 13px;
+    color: var(--text-primary);
+  }
+
+  .related-desc {
+    font-size: 12px;
+    color: var(--text-tertiary);
   }
 </style>

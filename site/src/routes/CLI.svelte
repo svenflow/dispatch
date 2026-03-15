@@ -17,6 +17,7 @@
       <li><a href="#watchdog">Watchdog</a></li>
       <li><a href="#identity">Identity</a></li>
       <li><a href="#messaging">Messaging</a></li>
+      <li><a href="#scheduling">Scheduling</a></li>
       <li><a href="#bus">Event Bus</a></li>
       <li><a href="#identifiers">Session Identifiers</a></li>
       <li><a href="#env">Environment</a></li>
@@ -183,6 +184,24 @@
       <div class="cmd-desc">Send Signal message</div>
       <pre><code>~/.claude/skills/signal/scripts/send-signal "+15555551234" "message"
 ~/.claude/skills/signal/scripts/send-signal-group "base64-group-id" "message"</code></pre>
+    </div>
+  </section>
+
+  <section id="scheduling">
+    <h2>Scheduling</h2>
+
+    <div class="cmd-block">
+      <div class="cmd-name">remind add</div>
+      <div class="cmd-desc">Create a reminder (one-shot or recurring)</div>
+      <pre><code>./bin/claude-assistant remind add --title "Check deploy" --in 30m --contact "+phone"
+./bin/claude-assistant remind add --title "Nightly scan" --cron "0 2 * * *" --tz "America/New_York"</code></pre>
+    </div>
+
+    <div class="cmd-block">
+      <div class="cmd-name">remind list / cancel / preview</div>
+      <pre><code>./bin/claude-assistant remind list
+./bin/claude-assistant remind cancel &lt;id&gt;
+./bin/claude-assistant remind preview "0 2 * * *" --next 5</code></pre>
     </div>
   </section>
 

@@ -115,22 +115,22 @@ produce_event(producer, "messages", "message.received", {'{'}"chat_id": "+161755
 {'}'})</code></pre>
   </section>
 
-  <section>
+  <section class="related">
     <h2>Related</h2>
-    <ul>
-      <li>
-        <button class="text-link" on:click={() => navigateTo('analytics')}>Analytics</button>
-        <span class="link-desc">- Dashboards and metrics powered by bus events</span>
-      </li>
-      <li>
-        <button class="text-link" on:click={() => navigateTo('cli')}>CLI Reference</button>
-        <span class="link-desc">- All commands including bus CLI</span>
-      </li>
-      <li>
-        <button class="text-link" on:click={() => navigateTo('scheduling')}>Scheduling</button>
-        <span class="link-desc">- Reminders and tasks that produce bus events</span>
-      </li>
-    </ul>
+    <div class="related-links">
+      <button class="related-link" on:click={() => navigateTo('analytics')}>
+        <span class="related-label">Analytics</span>
+        <span class="related-desc">Dashboards and metrics powered by bus events</span>
+      </button>
+      <button class="related-link" on:click={() => navigateTo('cli')}>
+        <span class="related-label">CLI Reference</span>
+        <span class="related-desc">All commands including bus CLI</span>
+      </button>
+      <button class="related-link" on:click={() => navigateTo('scheduling')}>
+        <span class="related-label">Scheduling & Tasks</span>
+        <span class="related-desc">Reminders and tasks that produce bus events</span>
+      </button>
+    </div>
   </section>
 </article>
 
@@ -151,5 +151,50 @@ produce_event(producer, "messages", "message.received", {'{'}"chat_id": "+161755
 
   section {
     margin-bottom: var(--space-8);
+  }
+
+  .related {
+    margin-top: var(--space-12);
+    padding-top: var(--space-8);
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  .related h2 {
+    font-size: 14px;
+    margin-bottom: var(--space-4);
+  }
+
+  .related-links {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: var(--space-3);
+  }
+
+  .related-link {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    padding: var(--space-4);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-default);
+    cursor: pointer;
+    text-align: left;
+    font-family: inherit;
+    transition: border-color var(--transition-fast);
+  }
+
+  .related-link:hover {
+    border-color: var(--border-strong);
+  }
+
+  .related-label {
+    font-weight: 500;
+    font-size: 13px;
+    color: var(--text-primary);
+  }
+
+  .related-desc {
+    font-size: 12px;
+    color: var(--text-tertiary);
   }
 </style>

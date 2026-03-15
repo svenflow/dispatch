@@ -157,7 +157,7 @@
       </div>
     </div>
 
-    <p class="more">67+ skills total</p>
+    <p class="more">Representative selection of 67+ total skills</p>
   </section>
 
   <section>

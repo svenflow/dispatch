@@ -134,6 +134,11 @@
         <div class="arch-box">Tools</div>
       </div>
     </div>
+    <p class="arch-summary">
+      Messages arrive via iMessage polling (100ms) or Signal socket push. The daemon looks up
+      the sender's tier, wraps the message, and injects it into their dedicated Claude session.
+      <button class="text-link" on:click={() => navigateTo('architecture')}>See full architecture →</button>
+    </p>
   </section>
 
   <section>
@@ -338,6 +343,13 @@ cp config.example.yaml config.local.yaml
     width: 1px;
     height: 16px;
     background: var(--border-strong);
+  }
+
+  .arch-summary {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-top: var(--space-4);
+    line-height: 1.6;
   }
 
   section {
