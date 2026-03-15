@@ -114,7 +114,7 @@ def cmd_produce(args):
                 sys.exit(1)
 
         producer = bus.producer()
-        record = producer.send(
+        producer.send(
             args.topic,
             payload=payload,
             key=args.key,
@@ -122,7 +122,7 @@ def cmd_produce(args):
             source=args.source,
             headers=headers,
         )
-        print(f"Produced to {record.topic}[{record.partition}] @ offset {record.offset}")
+        print(f"Produced to {args.topic} (key={args.key}, type={args.type})")
 
 
 def cmd_consume(args):

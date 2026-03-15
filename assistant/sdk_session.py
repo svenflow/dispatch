@@ -644,9 +644,8 @@ class SDKSession:
             # Template is like '~/.claude/skills/.../send-sms "{chat_id}"'
             # Extract the script path (before the first space) and expand ~
             script_path = str(Path(send_tpl.split()[0]).expanduser())
-            bare_chat_id = self.chat_id.lstrip("+")
             proc = subprocess.Popen(
-                [script_path, bare_chat_id, f"[{assistant_name.upper()}] Compacting conversation\u2026"],
+                [script_path, self.chat_id, f"[{assistant_name.upper()}] Compacting conversation\u2026"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )

@@ -1411,14 +1411,24 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
                 "contact_name": contact_name, "tier": tier,
                 "reason": "restart_requested", "clean": clean,
             }, source="daemon")
-            session = await self.create_session(
-                contact_name,
-                chat_id,
-                tier,
-                source,
-                reg.get("type", "individual"),
-                resume_id=resume_id,
-            )
+            session_type = reg.get("type", "individual")
+            if session_type == "group":
+                display_name = reg.get("display_name") or contact_name
+                session = await self.create_group_session(
+                    chat_id=chat_id,
+                    display_name=display_name,
+                    source=source,
+                    resume_id=resume_id,
+                )
+            else:
+                session = await self.create_session(
+                    contact_name,
+                    chat_id,
+                    tier,
+                    source,
+                    session_type,
+                    resume_id=resume_id,
+                )
             lifecycle_log.info(f"RESTART | {reg.get('session_name', chat_id)} | COMPLETE")
             return session
         return None
@@ -1447,7 +1457,8 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
             if reason.startswith("stuck("):
                 from assistant.common import get_session_name
                 session_name = get_session_name(session.chat_id, session.source)
-                stuck_minutes = (datetime.now() - session.last_inject_at).total_seconds() / 60
+                # last_inject_at is guaranteed non-None here (stuck detection requires it)
+                stuck_minutes = (datetime.now() - session.last_inject_at).total_seconds() / 60 if session.last_inject_at else 0
 
                 async def _investigate_and_maybe_restart(cid: str):
                     try:

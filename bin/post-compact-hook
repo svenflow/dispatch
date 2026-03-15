@@ -17,9 +17,9 @@ HOME_DIR="$HOME"
 INPUT="$(cat)"
 
 # Extract fields from JSON input
-CWD=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('cwd',''))" 2>/dev/null || echo "")
-COMPACT_SUMMARY=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('compact_summary',''))" 2>/dev/null || echo "")
-SESSION_ID=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('session_id',''))" 2>/dev/null || echo "")
+CWD=$(echo "$INPUT" | jq -r '.cwd // empty' 2>/dev/null || echo "")
+COMPACT_SUMMARY=$(echo "$INPUT" | jq -r '.compact_summary // empty' 2>/dev/null || echo "")
+SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || echo "")
 
 # Derive session_name from cwd: ~/transcripts/imessage/_16175969496 -> imessage/_16175969496
 SESSION_NAME=""
@@ -62,23 +62,21 @@ if [[ -n "$CHAT_ID" ]]; then
   fi
 
   # Check if group chat (hex UUID without + prefix)
-  BARE_CHAT_ID="${CHAT_ID#+}"
   if [[ "$RAW_CHAT_ID" != _* && ${#RAW_CHAT_ID} -ge 20 ]]; then
     # Group chat — use group send for signal, regular for imessage (uses hex ID)
     if [[ "$SOURCE" == "signal" ]]; then
       SEND_CMD="$HOME_DIR/.claude/skills/signal/scripts/send-signal-group"
     fi
-    "$SEND_CMD" "$BARE_CHAT_ID" "[SVEN] Done compacting ✓" 2>/dev/null &
-  else
-    "$SEND_CMD" "$BARE_CHAT_ID" "[SVEN] Done compacting ✓" 2>/dev/null &
   fi
+  "$SEND_CMD" "$CHAT_ID" "[SVEN] Done compacting ✓" 2>/dev/null &
 fi
 
 # 4. Log to bus via bus CLI
 if [[ -n "$SESSION_NAME" ]]; then
-  "$SCRIPT_DIR/bus" produce system compaction.completed \
+  uv run "$HOME_DIR/dispatch/bus/cli.py" produce system \
+    "{\"session_name\":\"$SESSION_NAME\",\"chat_id\":\"$CHAT_ID\",\"session_id\":\"$SESSION_ID\"}" \
+    --type compaction.completed \
     --key "$SESSION_NAME" \
     --source compaction \
-    --payload "{\"session_name\":\"$SESSION_NAME\",\"chat_id\":\"$CHAT_ID\",\"session_id\":\"$SESSION_ID\"}" \
     2>/dev/null || true
 fi

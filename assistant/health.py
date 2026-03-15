@@ -274,12 +274,12 @@ async def check_stuck_haiku(session_cwd: str, session_id: str | None,
 
         # Read last 64KB of transcript for recent activity
         entries_text = ""
-        with open(transcript_path, "r") as f:
+        with open(transcript_path, "rb") as f:
             f.seek(0, os.SEEK_END)
             size = f.tell()
             chunk = min(size, 65536)  # 64KB
             f.seek(size - chunk)
-            raw = f.read()
+            raw = f.read().decode("utf-8", errors="replace")
             # Get last 30 valid JSON lines
             lines = [line for line in raw.strip().split("\n") if line.strip()]
             recent = lines[-30:]

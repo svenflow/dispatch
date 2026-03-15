@@ -1408,9 +1408,10 @@ class IPCServer:
         elif cmd == "restart_session":
             chat_id = request.get("chat_id")
             tier = request.get("tier")  # Optional tier override
+            clean = request.get("clean", False)  # Clean restart (no resume)
             if not chat_id:
                 return {"ok": False, "error": "Missing chat_id"}
-            session = await self.backend.restart_session(chat_id, tier_override=tier)
+            session = await self.backend.restart_session(chat_id, tier_override=tier, clean=clean)
             return {"ok": session is not None, "message": f"Restarted {chat_id}" if session else "Failed to restart"}
         elif cmd == "set_model":
             chat_id = request.get("chat_id")

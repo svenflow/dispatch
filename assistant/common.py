@@ -402,10 +402,10 @@ def ensure_transcript_dir(session_name: str) -> Path:
     if not link_path.exists() and target_path.exists():
       link_path.symlink_to(target_path)
 
-  # Create/update settings.json with PostCompact hook.
+  # Create/update settings.json with hooks:
+  # - PostCompact: sends "Done compacting" SMS and logs to bus
+  # - PreToolUse(WebFetch): blocks WebFetch, redirects to webfetch CLI (scrapling)
   # PreCompact is handled by Python SDK hooks in sdk_session.py.
-  # PostCompact uses a settings.json command hook because the Python SDK
-  # doesn't have a PostCompact hook type yet — but the CLI supports it.
   post_compact_hook = {
     "hooks": [
       {
@@ -414,9 +414,22 @@ def ensure_transcript_dir(session_name: str) -> Path:
       }
     ]
   }
+  webfetch_block_hook = {
+    "matcher": "WebFetch",
+    "hooks": [
+      {
+        "type": "command",
+        "command": f"{HOME}/.claude/skills/webfetch/hooks/webfetch-block.sh",
+        "timeout": 5,
+      }
+    ]
+  }
   settings_file = claude_dir / "settings.json"
   if not settings_file.exists():
-    settings = {"hooks": {"PostCompact": [post_compact_hook]}}
+    settings = {"hooks": {
+      "PostCompact": [post_compact_hook],
+      "PreToolUse": [webfetch_block_hook],
+    }}
     settings_file.write_text(json.dumps(settings, indent=2))
   else:
     try:
@@ -426,6 +439,15 @@ def ensure_transcript_dir(session_name: str) -> Path:
       hooks.pop("PreCompact", None)
       # Ensure PostCompact hook is present and up-to-date
       hooks["PostCompact"] = [post_compact_hook]
+      # Ensure WebFetch block hook is present (merge, don't overwrite)
+      pre_tool_hooks = hooks.get("PreToolUse", [])
+      has_webfetch = any(h.get("matcher") == "WebFetch" for h in pre_tool_hooks)
+      if not has_webfetch:
+        pre_tool_hooks.append(webfetch_block_hook)
+      else:
+        # Update existing WebFetch hook entry
+        pre_tool_hooks = [webfetch_block_hook if h.get("matcher") == "WebFetch" else h for h in pre_tool_hooks]
+      hooks["PreToolUse"] = pre_tool_hooks
       settings_file.write_text(json.dumps(existing, indent=2))
     except (json.JSONDecodeError, Exception):
       pass
