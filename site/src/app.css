@@ -345,3 +345,22 @@ hr {
 .text-link:hover {
   color: var(--accent-hover);
 }
+
+/* ═══════ Shared Page Layout ═══════ */
+.page {
+  max-width: var(--content-max-width);
+}
+
+.page-header {
+  margin-bottom: var(--space-6);
+}
+
+.lead {
+  font-size: 15px;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+article.page section {
+  margin-bottom: var(--space-8);
+}

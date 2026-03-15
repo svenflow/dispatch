@@ -258,24 +258,6 @@ if __name__ == "__main__":
 </article>
 
 <style>
-  .page {
-    max-width: var(--content-max-width);
-  }
-
-  .page-header {
-    margin-bottom: var(--space-6);
-  }
-
-  .lead {
-    font-size: 15px;
-    color: var(--text-secondary);
-    margin: 0;
-  }
-
-  section {
-    margin-bottom: var(--space-8);
-  }
-
   .category {
     margin: var(--space-4) 0;
     border: 1px solid var(--border-default);

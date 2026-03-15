@@ -194,26 +194,8 @@
 </article>
 
 <style>
-  .page {
-    max-width: var(--content-max-width);
-  }
-
-  .page-header {
-    margin-bottom: var(--space-6);
-  }
-
   .page-header h1 {
     margin-bottom: var(--space-1);
-  }
-
-  .lead {
-    font-size: 15px;
-    color: var(--text-secondary);
-    margin: 0;
-  }
-
-  section {
-    margin-bottom: var(--space-8);
   }
 
   .tier-interval {

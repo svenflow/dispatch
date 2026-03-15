@@ -182,24 +182,6 @@ i'm **Jarvis** — your household assistant
 </article>
 
 <style>
-  .page {
-    max-width: var(--content-max-width);
-  }
-
-  .page-header {
-    margin-bottom: var(--space-6);
-  }
-
-  .lead {
-    font-size: 15px;
-    color: var(--text-secondary);
-    margin: 0;
-  }
-
-  section {
-    margin-bottom: var(--space-8);
-  }
-
   /* Soul sections */
   .soul-section {
     border: 1px solid var(--border-default);

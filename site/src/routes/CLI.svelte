@@ -11,16 +11,16 @@
   <nav class="toc">
     <div class="toc-title">Contents</div>
     <ul>
-      <li><a href="#daemon">Daemon</a></li>
-      <li><a href="#session">Sessions</a></li>
-      <li><a href="#monitoring">Monitoring</a></li>
-      <li><a href="#watchdog">Watchdog</a></li>
-      <li><a href="#identity">Identity</a></li>
-      <li><a href="#messaging">Messaging</a></li>
-      <li><a href="#scheduling">Scheduling</a></li>
-      <li><a href="#bus">Event Bus</a></li>
-      <li><a href="#identifiers">Session Identifiers</a></li>
-      <li><a href="#env">Environment</a></li>
+      <li><button class="text-link" on:click={() => { document.getElementById('daemon')?.scrollIntoView({ behavior: 'smooth' }) }}>Daemon</button></li>
+      <li><button class="text-link" on:click={() => { document.getElementById('session')?.scrollIntoView({ behavior: 'smooth' }) }}>Sessions</button></li>
+      <li><button class="text-link" on:click={() => { document.getElementById('monitoring')?.scrollIntoView({ behavior: 'smooth' }) }}>Monitoring</button></li>
+      <li><button class="text-link" on:click={() => { document.getElementById('watchdog')?.scrollIntoView({ behavior: 'smooth' }) }}>Watchdog</button></li>
+      <li><button class="text-link" on:click={() => { document.getElementById('identity')?.scrollIntoView({ behavior: 'smooth' }) }}>Identity</button></li>
+      <li><button class="text-link" on:click={() => { document.getElementById('messaging')?.scrollIntoView({ behavior: 'smooth' }) }}>Messaging</button></li>
+      <li><button class="text-link" on:click={() => { document.getElementById('scheduling')?.scrollIntoView({ behavior: 'smooth' }) }}>Scheduling</button></li>
+      <li><button class="text-link" on:click={() => { document.getElementById('bus')?.scrollIntoView({ behavior: 'smooth' }) }}>Event Bus</button></li>
+      <li><button class="text-link" on:click={() => { document.getElementById('identifiers')?.scrollIntoView({ behavior: 'smooth' }) }}>Session Identifiers</button></li>
+      <li><button class="text-link" on:click={() => { document.getElementById('env')?.scrollIntoView({ behavior: 'smooth' }) }}>Environment</button></li>
     </ul>
   </nav>
 
@@ -301,20 +301,6 @@
 </article>
 
 <style>
-  .page {
-    max-width: var(--content-max-width);
-  }
-
-  .page-header {
-    margin-bottom: var(--space-6);
-  }
-
-  .lead {
-    font-size: 15px;
-    color: var(--text-secondary);
-    margin: 0;
-  }
-
   .toc {
     background: var(--bg-elevated);
     border: 1px solid var(--border-default);
@@ -344,12 +330,8 @@
     margin: 0;
   }
 
-  .toc a {
+  .toc button {
     font-size: 12px;
-  }
-
-  section {
-    margin-bottom: var(--space-8);
   }
 
   .cmd-block {

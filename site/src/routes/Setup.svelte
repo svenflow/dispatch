@@ -11,8 +11,8 @@
   <nav class="toc">
     <div class="toc-title">Contents</div>
     <ul>
-      <li><a href="#human-setup">Part 1: Human Setup</a></li>
-      <li><a href="#claude-setup">Part 2: Claude Setup</a></li>
+      <li><button class="text-link" on:click={() => { document.getElementById('human-setup')?.scrollIntoView({ behavior: 'smooth' }) }}>Part 1: Human Setup</button></li>
+      <li><button class="text-link" on:click={() => { document.getElementById('claude-setup')?.scrollIntoView({ behavior: 'smooth' }) }}>Part 2: Claude Setup</button></li>
     </ul>
   </nav>
 
@@ -175,10 +175,6 @@ claude</code></pre>
     margin: 0;
   }
 
-  .toc a {
-    font-size: 12px;
-  }
-
   .callout {
     background: var(--bg-elevated);
     border-left: 3px solid var(--accent);
@@ -213,21 +209,6 @@ claude</code></pre>
     font-size: 12px;
     color: var(--text-tertiary);
     margin-top: var(--space-2);
-  }
-
-  .text-link {
-    background: none;
-    border: none;
-    padding: 0;
-    color: var(--accent);
-    font-size: inherit;
-    font-family: inherit;
-    cursor: pointer;
-    transition: color var(--transition-fast);
-  }
-
-  .text-link:hover {
-    color: var(--accent-hover);
   }
 
   .link-desc {
