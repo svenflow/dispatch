@@ -504,11 +504,14 @@ class SDKSession:
         if self.tier in ("favorite", "family"):
             opts.can_use_tool = self._permission_check
 
-        # Session resume: if resume_id is set, use it to resume a previous session.
-        # Otherwise generate a fresh ID for a new session.
+        # Session resume: use --resume <session_id> to continue a previous session.
+        # CLI 2.1+ error: "--session-id can only be used with --continue or --resume
+        # if --fork-session is also specified" — means --session-id + --resume needs
+        # --fork-session. Fix: use --resume <id> alone (no --session-id).
+        # For fresh sessions: --session-id <uuid> alone works fine (sets ID for new session).
         if resume_id or self.resume_id:
             session_id = resume_id or self.resume_id
-            opts.extra_args = {"session-id": session_id, "resume": "true"}
+            opts.extra_args = {"resume": session_id}
         else:
             fresh_session_id = str(uuid.uuid4())
             opts.extra_args = {"session-id": fresh_session_id}
