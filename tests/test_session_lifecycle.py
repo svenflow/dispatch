@@ -90,15 +90,21 @@ class TestSessionHealthStates:
 
     async def test_healthy_when_alive_no_errors(self, sdk_session):
         await sdk_session.start()
-        assert sdk_session.is_healthy()
+        healthy, reason = sdk_session.is_healthy()
+        assert healthy
+        assert reason == "ok"
 
     async def test_unhealthy_when_dead(self, sdk_session):
-        assert not sdk_session.is_healthy()
+        healthy, reason = sdk_session.is_healthy()
+        assert not healthy
+        assert reason == "dead"
 
     async def test_unhealthy_after_3_errors(self, sdk_session):
         await sdk_session.start()
         sdk_session._error_count = 3
-        assert not sdk_session.is_healthy()
+        healthy, reason = sdk_session.is_healthy()
+        assert not healthy
+        assert "error_count" in reason
 
     async def test_unhealthy_with_stale_queue(self, sdk_session):
         """Messages pending but no activity for 10+ minutes = unhealthy."""
@@ -107,14 +113,17 @@ class TestSessionHealthStates:
         await sdk_session._message_queue.put("stale msg")
         # Backdate last_activity
         sdk_session.last_activity = datetime.now() - timedelta(minutes=15)
-        assert not sdk_session.is_healthy()
+        healthy, reason = sdk_session.is_healthy()
+        assert not healthy
+        assert "stale_queue" in reason
 
     async def test_healthy_with_recent_queue(self, sdk_session):
         """Messages pending with recent activity = still healthy."""
         await sdk_session.start()
         await sdk_session._message_queue.put("fresh msg")
         sdk_session.last_activity = datetime.now()
-        assert sdk_session.is_healthy()
+        healthy, reason = sdk_session.is_healthy()
+        assert healthy
 
     async def test_busy_during_processing(self, sdk_session):
         """Session should be busy while processing a query."""

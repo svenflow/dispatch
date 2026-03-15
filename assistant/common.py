@@ -402,25 +402,24 @@ def ensure_transcript_dir(session_name: str) -> Path:
     if not link_path.exists() and target_path.exists():
       link_path.symlink_to(target_path)
 
-  # Create settings.json with PreCompact hook
-  # Uses summarize-and-restart which: 1) generates Opus summary, 2) saves to .pending-summary.md, 3) restarts session
+  # Create settings.json (hooks are handled by Python SDK hooks in sdk_session.py,
+  # so settings.json only needs minimal config — no command hooks needed)
   settings_file = claude_dir / "settings.json"
   if not settings_file.exists():
-    settings = {
-      "hooks": {
-        "PreCompact": [
-          {
-            "hooks": [
-              {
-                "type": "command",
-                "command": f"{HOME}/dispatch/bin/summarize-and-restart {session_name}",
-                "async": True,
-              }
-            ]
-          }
-        ]
-      }
-    }
+    settings = {}
     settings_file.write_text(json.dumps(settings, indent=2))
+  else:
+    # Migrate existing settings.json: remove old PreCompact command hooks
+    # since compaction is now handled natively by the SDK with Python hooks
+    try:
+      existing = json.loads(settings_file.read_text())
+      hooks = existing.get("hooks", {})
+      if "PreCompact" in hooks:
+        del hooks["PreCompact"]
+        if not hooks:
+          existing.pop("hooks", None)
+        settings_file.write_text(json.dumps(existing, indent=2))
+    except (json.JSONDecodeError, Exception):
+      pass
 
   return transcript_dir

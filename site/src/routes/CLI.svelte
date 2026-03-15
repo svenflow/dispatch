@@ -72,7 +72,7 @@
       <div class="cmd-name">restart-session</div>
       <div class="cmd-desc">Restart a session with optional flags</div>
       <pre><code>./bin/claude-assistant restart-session &lt;session&gt;
-./bin/claude-assistant restart-session &lt;session&gt; --no-compact
+./bin/claude-assistant restart-session &lt;session&gt; --clean
 ./bin/claude-assistant restart-session &lt;session&gt; --tier family</code></pre>
     </div>
 

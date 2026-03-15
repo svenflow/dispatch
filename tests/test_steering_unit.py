@@ -256,7 +256,7 @@ class TestSessionLifecycle:
         session._client._query_delay = 0.5
         await session.inject("slow")
         await asyncio.sleep(0.15)
-        assert session.is_healthy()
+        assert session.is_healthy()[0]
 
     async def test_session_id_captured(self, session):
         """Session ID should be captured from ResultMessage."""

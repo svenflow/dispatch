@@ -2656,14 +2656,14 @@ class Manager:
             produce_event(self._producer, "messages", "message.sent" if success else "message.failed",
                 message_sent_payload(phone, message, is_group=False, success=success,
                                      source="daemon-control"),
-                key=phone, source="daemon")
+                key=f"imessage/{phone}", source="daemon")
             return success
         except Exception as e:
             log.error(f"Error sending SMS to {phone}: {e}")
             produce_event(self._producer, "messages", "message.failed",
                 message_sent_payload(phone, message, is_group=False, success=False,
                                      error=str(e), source="daemon-control"),
-                key=phone, source="daemon")
+                key=f"imessage/{phone}", source="daemon")
             return False
 
     def _send_sms_image(self, phone: str, image_path: str, caption: str | None = None) -> bool:
@@ -3011,10 +3011,11 @@ You have 15 minutes. Work efficiently.
         elif not contact:
             # Unknown sender for individual (non-group) message - ignore
             log.info(f"Unknown sender {phone}, ignoring (not in any Claude tier group)")
+            source = msg.get("source", "imessage")
             produce_event(self._producer, "messages", "message.ignored", {
                 "phone": phone, "reason": "unknown_sender",
                 "is_group": is_group, "chat_identifier": chat_identifier,
-            }, key=phone, source=msg.get("source", "imessage"))
+            }, key=f"{source}/{phone}", source=source)
         elif sender_tier in ("admin", "partner", "family", "favorite"):
             # Blessed individual: route to their SDK session
             # For individuals, phone IS the chat_id
@@ -3049,15 +3050,15 @@ You have 15 minutes. Work efficiently.
 
         produce_event(self._producer, "messages", "reaction.received",
             sanitize_reaction_for_bus(reaction),
-            key=reaction.get("chat_identifier") or reaction.get("phone"),
-            source=reaction.get("source", "imessage"))
+            key=f"{source}/{reaction.get('chat_identifier') or reaction.get('phone')}",
+            source=source)
 
         # Skip reaction removals - they don't need to be surfaced
         if is_removal:
             log.debug(f"Ignoring reaction removal {rowid} from {phone}: {emoji}")
             produce_event(self._producer, "messages", "reaction.ignored", {
                 "phone": phone, "emoji": emoji, "reason": "removal",
-            }, key=phone, source=reaction.get("source", "imessage"))
+            }, key=f"{source}/{phone}", source=source)
             return
 
         # Only care about reactions to OUR messages (is_from_me on target)
@@ -3065,7 +3066,7 @@ You have 15 minutes. Work efficiently.
             log.debug(f"Ignoring reaction {rowid} to someone else's message from {phone}")
             produce_event(self._producer, "messages", "reaction.ignored", {
                 "phone": phone, "emoji": emoji, "reason": "not_from_me",
-            }, key=phone, source=reaction.get("source", "imessage"))
+            }, key=f"{source}/{phone}", source=source)
             return
 
         # Lookup contact
@@ -3074,7 +3075,7 @@ You have 15 minutes. Work efficiently.
             log.debug(f"Ignoring reaction {rowid} from unknown contact {phone}")
             produce_event(self._producer, "messages", "reaction.ignored", {
                 "phone": phone, "emoji": emoji, "reason": "unknown_sender",
-            }, key=phone, source=reaction.get("source", "imessage"))
+            }, key=f"{source}/{phone}", source=source)
             return
 
         sender_name = contact["name"]
@@ -3085,7 +3086,7 @@ You have 15 minutes. Work efficiently.
             log.debug(f"Ignoring reaction {rowid} from {sender_name} (tier: {sender_tier})")
             produce_event(self._producer, "messages", "reaction.ignored", {
                 "phone": phone, "emoji": emoji, "reason": "non_blessed_tier",
-            }, key=phone, source=reaction.get("source", "imessage"))
+            }, key=f"{source}/{phone}", source=source)
             return
 
         # Determine chat_id (group vs individual)
@@ -3533,11 +3534,11 @@ Keep the text concise - this is a nightly check-in, not a full report.
         # Lazy loading: sessions created on first message (not pre-warmed)
         log.info("Lazy loading enabled - sessions will be created on first message")
 
-        # Recreate sessions that have pending summaries from previous shutdown
-        # This preserves context across daemon restarts
-        recreated = await self.sessions.recreate_sessions_with_pending_summaries()
+        # Recreate sessions that were active during previous shutdown
+        # Sessions resume via stored session_id (native compaction handles context)
+        recreated = await self.sessions.recreate_active_sessions()
         if recreated:
-            log.info(f"Recreated {recreated} sessions with pending context from previous shutdown")
+            log.info(f"Recreated {recreated} active sessions from previous shutdown")
 
         # Start Signal daemon and listener (if not disabled)
         if SIGNAL_ENABLED:
@@ -3601,7 +3602,7 @@ Keep the text concise - this is a nightly check-in, not a full report.
                 poll_start = time.time()
                 try:
                     messages = await loop.run_in_executor(
-                        None, self.messages.get_new_messages, self.last_rowid
+                        self._chat_reader._executor, self.messages.get_new_messages, self.last_rowid
                     )
                     poll_duration_ms = (time.time() - poll_start) * 1000
                     # Perf: log poll cycle (sample every 10th to avoid log bloat)
@@ -3644,9 +3645,10 @@ Keep the text concise - this is a nightly check-in, not a full report.
                         if staleness_ms > 30000:  # Warn if >30s stale
                             log.warning(f"STALENESS | rowid={msg['rowid']} | staleness={staleness_ms:.0f}ms")
                     # Produce to bus (PRIMARY delivery path) and advance state
+                    raw_key = msg.get("chat_identifier") or msg.get("phone")
                     produce_event(self._producer, "messages", "message.received",
                         sanitize_msg_for_bus(msg),
-                        key=msg.get("chat_identifier") or msg.get("phone"),
+                        key=f"imessage/{raw_key}",
                         source="imessage")
                     self._save_state(msg["rowid"])
 
@@ -3656,7 +3658,7 @@ Keep the text concise - this is a nightly check-in, not a full report.
 
                 # Poll for reactions (same rowid sequence as messages)
                 reactions = await loop.run_in_executor(
-                    None, self.messages.get_new_reactions, self.last_rowid
+                    self._chat_reader._executor, self.messages.get_new_reactions, self.last_rowid
                 )
 
                 for reaction in reactions:
@@ -3675,10 +3677,12 @@ Keep the text concise - this is a nightly check-in, not a full report.
                 while not self.signal_queue.empty():
                     try:
                         signal_msg = self.signal_queue.get_nowait()
+                        sig_source = signal_msg.get("source", "signal")
+                        sig_raw_key = signal_msg.get("chat_identifier") or signal_msg.get("phone")
                         produce_event(self._producer, "messages", "message.received",
                             sanitize_msg_for_bus(signal_msg),
-                            key=signal_msg.get("chat_identifier") or signal_msg.get("phone"),
-                            source=signal_msg.get("source", "signal"))
+                            key=f"{sig_source}/{sig_raw_key}",
+                            source=sig_source)
                         signal_count += 1
                     except queue.Empty:
                         break
@@ -3691,10 +3695,12 @@ Keep the text concise - this is a nightly check-in, not a full report.
                 while not self.test_queue.empty():
                     try:
                         test_msg = self.test_queue.get_nowait()
+                        test_source = test_msg.get("source", "test")
+                        test_raw_key = test_msg.get("chat_identifier") or test_msg.get("phone")
                         produce_event(self._producer, "messages", "message.received",
                             sanitize_msg_for_bus(test_msg),
-                            key=test_msg.get("chat_identifier") or test_msg.get("phone"),
-                            source=test_msg.get("source", "test"))
+                            key=f"{test_source}/{test_raw_key}",
+                            source=test_source)
                         test_count += 1
                     except queue.Empty:
                         break

@@ -331,14 +331,13 @@ class SDKBackend:
         except (json.JSONDecodeError, ValueError):
             return None
 
-    async def recreate_sessions_with_pending_summaries(self) -> int:
+    async def recreate_active_sessions(self) -> int:
         """Recreate sessions that were active during previous daemon shutdown.
 
         Called at startup to preserve context across daemon restarts.
-        Recreates sessions that either:
-        1. Have a .pending-summary.md file (summary was generated before shutdown)
-        2. Were marked as was_active in registry (catches cases where shutdown
-           was too fast for summary generation, e.g. SIGTERM during self-restart)
+        Sessions are recreated if they were marked as was_active in the registry.
+        When a stored session_id exists, it is passed as resume_id to enable
+        native session resume (the SDK will compact and continue).
 
         Returns the number of sessions recreated.
         """
@@ -353,13 +352,8 @@ class SDKBackend:
             if not session_name:
                 continue
 
-            # Check if there's a pending summary OR the session was marked active
-            transcript_dir = TRANSCRIPTS_DIR / session_name
-            pending_file = transcript_dir / ".pending-summary.md"
-            has_pending = pending_file.exists()
             was_active = entry.get("was_active", False)
-
-            if not has_pending and not was_active:
+            if not was_active:
                 continue
 
             # Get session metadata from registry
@@ -379,10 +373,12 @@ class SDKBackend:
             else:
                 restart_role = "passive"
 
-            reason = "pending_summary" if has_pending else "was_active"
-            log.info(f"STARTUP | Recreating session ({reason}): {session_name}"
-                     f" [restart_role={restart_role}]")
-            lifecycle_log.info(f"STARTUP | RECREATE_{reason.upper()} | {session_name}")
+            # Get stored session_id for resume support
+            stored_session_id = entry.get("session_id")
+
+            log.info(f"STARTUP | Recreating session (was_active): {session_name}"
+                     f" [restart_role={restart_role}, resume_id={stored_session_id}]")
+            lifecycle_log.info(f"STARTUP | RECREATE_WAS_ACTIVE | {session_name}")
 
             try:
                 if session_type == "group":
@@ -392,6 +388,7 @@ class SDKBackend:
                         display_name=display_name,
                         source=source,
                         restart_role=restart_role,
+                        resume_id=stored_session_id,
                     )
                 else:
                     await self.create_session(
@@ -401,6 +398,7 @@ class SDKBackend:
                         source=source,
                         session_type=session_type,
                         restart_role=restart_role,
+                        resume_id=stored_session_id,
                     )
                 recreated += 1
                 # Clear the was_active flag after successful recreation
@@ -416,6 +414,7 @@ class SDKBackend:
 
         return recreated
 
+
     # ──────────────────────────────────────────────────────────────
     # Individual sessions
     # ──────────────────────────────────────────────────────────────
@@ -428,6 +427,7 @@ class SDKBackend:
         source: str = "imessage",
         session_type: str = "individual",
         restart_role: str | None = None,
+        resume_id: str | None = None,
     ) -> SDKSession:
         """Create a new SDK session for an individual contact."""
         async with self._lock:
@@ -452,7 +452,7 @@ class SDKBackend:
 
             lifecycle_log.info(
                 f"CREATE | {session_name} | START | contact={contact_name} "
-                f"tier={tier} chat_id={chat_id} source={source}"
+                f"tier={tier} chat_id={chat_id} source={source} resume_id={resume_id}"
             )
 
             # Resolve model: check registry for explicit override, else default to opus
@@ -468,6 +468,7 @@ class SDKBackend:
                 source=source,
                 model=model,
                 producer=self._producer,
+                resume_id=resume_id,
             )
             await session.start(resume_session_id=None)
             self.sessions[chat_id] = session
@@ -825,6 +826,7 @@ Gemini analyzed the attached image:
         participants: list | None = None,
         source: str = "imessage",
         restart_role: str | None = None,
+        resume_id: str | None = None,
     ) -> SDKSession:
         """Create a group session."""
         async with self._lock:
@@ -858,6 +860,7 @@ Gemini analyzed the attached image:
                 session_type="group",
                 source=source,
                 producer=self._producer,
+                resume_id=resume_id,
             )
             await session.start(resume_session_id=None)
             self.sessions[chat_id] = session
@@ -1374,32 +1377,39 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
             except Exception as e:
                 log.warning(f"Failed to delete session index {index_file}: {e}")
 
-    async def restart_session(self, chat_id: str, tier_override: str | None = None) -> Optional[SDKSession]:
+    async def restart_session(self, chat_id: str, tier_override: str | None = None, clean: bool = False) -> Optional[SDKSession]:
         """Kill and recreate a session.
 
         Args:
             chat_id: The chat ID to restart
             tier_override: Optional tier to use instead of registry value
+            clean: If True, clear the SDK session index and stored session_id
+                   to force a completely fresh session (no resume)
         """
         # Save session info before killing
         reg = self.registry.get(chat_id)
 
         await self.kill_session(chat_id)
 
-        # Clear the SDK session index to prevent auto-resume of poisoned session
-        if reg and reg.get("session_name"):
+        if clean and reg and reg.get("session_name"):
+            # Clean mode: clear session index and stored session_id for fresh start
             self._clear_sdk_session_index(reg["session_name"])
+            reg.pop("session_id", None)
+            self.registry.register(**reg)
+            lifecycle_log.info(f"RESTART_CLEAN | {reg.get('session_name', chat_id)} | Cleared session index and resume ID")
 
         if reg:
-            lifecycle_log.info(f"RESTART | {reg.get('session_name', chat_id)} | START")
+            lifecycle_log.info(f"RESTART | {reg.get('session_name', chat_id)} | START | clean={clean}")
             # Group chats use display_name; individuals use contact_name
             contact_name = reg.get("contact_name") or reg.get("display_name", "Unknown")
             # Use tier_override if provided, else fall back to registry or default
             tier = tier_override or reg.get("tier", "admin")
             source = reg.get("source", "imessage")
+            # For normal restarts, pass stored session_id to enable resume
+            resume_id = None if clean else reg.get("session_id")
             produce_session_event(self._producer, chat_id, "session.restarted", {
                 "contact_name": contact_name, "tier": tier,
-                "reason": "restart_requested",
+                "reason": "restart_requested", "clean": clean,
             }, source="daemon")
             session = await self.create_session(
                 contact_name,
@@ -1407,6 +1417,7 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
                 tier,
                 source,
                 reg.get("type", "individual"),
+                resume_id=resume_id,
             )
             lifecycle_log.info(f"RESTART | {reg.get('session_name', chat_id)} | COMPLETE")
             return session
@@ -1420,10 +1431,11 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
         # Skip if recently healed by fast_health_check or deep_health_check
         if chat_id in self._recently_healed:
             return True
-        if not session.is_healthy():
+        healthy, reason = session.is_healthy()
+        if not healthy:
             lifecycle_log.info(
                 f"HEALTH_CHECK | {session.contact_name} | UNHEALTHY | "
-                f"alive={session.is_alive()} errors={session._error_count}"
+                f"reason={reason} alive={session.is_alive()} errors={session._error_count}"
             )
             produce_session_event(self._producer, chat_id, "session.crashed", {
                 "contact_name": session.contact_name,
@@ -1467,7 +1479,7 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
                 produce_event(self._producer, "messages", "message.sent", {
                     "chat_id": admin_phone, "text": message,
                     "is_group": False, "success": True, "context": "auth_error",
-                }, key=admin_phone, source="daemon")
+                }, key=f"imessage/{admin_phone}", source="daemon")
             else:
                 log.warning(f"AUTH_ERROR_NOTIFY | SMS failed: {result.stderr}")
         except Exception as e:
@@ -1692,6 +1704,7 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
         session = self.sessions.get(chat_id)
         if not session:
             return None
+        healthy, health_reason = session.is_healthy()
         return {
             "chat_id": chat_id,
             "contact_name": session.contact_name,
@@ -1699,7 +1712,8 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
             "session_type": session.session_type,
             "source": session.source,
             "is_alive": session.is_alive(),
-            "is_healthy": session.is_healthy(),
+            "is_healthy": healthy,
+            "health_reason": health_reason,
             "is_busy": session.is_busy,
             "turn_count": session.turn_count,
             "session_id": session.session_id,
@@ -1743,82 +1757,21 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
                     return ""
         return ""
 
-    async def _generate_shutdown_summaries(self, sessions: list) -> dict[str, bool]:
-        """Generate summaries for all active sessions before shutdown.
-
-        Runs summarize-session for each session concurrently with a timeout.
-        Returns dict mapping session_name -> success.
-        """
-        SUMMARIZE_SCRIPT = HOME / "dispatch/bin/summarize-session"
-        TIMEOUT_PER_SESSION = 60  # seconds
-
-        if not sessions:
-            return {}
-
-        log.info(f"SHUTDOWN | Generating summaries for {len(sessions)} active sessions...")
-
-        async def summarize_one(session: SDKSession) -> tuple[str, bool]:
-            """Generate summary for one session."""
-            session_name = get_session_name(session.chat_id, session.source)
-            try:
-                proc = await asyncio.create_subprocess_exec(
-                    str(UV), "run", str(SUMMARIZE_SCRIPT), session_name,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                try:
-                    stdout, stderr = await asyncio.wait_for(
-                        proc.communicate(),
-                        timeout=TIMEOUT_PER_SESSION
-                    )
-                    if proc.returncode == 0:
-                        log.info(f"SHUTDOWN | Summary generated for {session_name}")
-                        return (session_name, True)
-                    else:
-                        log.warning(f"SHUTDOWN | Summary failed for {session_name}: {stderr.decode()[:200]}")
-                        return (session_name, False)
-                except asyncio.TimeoutError:
-                    proc.kill()
-                    await proc.wait()
-                    log.warning(f"SHUTDOWN | Summary timeout for {session_name}")
-                    return (session_name, False)
-            except Exception as e:
-                log.error(f"SHUTDOWN | Summary error for {session_name}: {e}")
-                return (session_name, False)
-
-        # Run all summaries concurrently
-        results = await asyncio.gather(*[summarize_one(s) for s in sessions], return_exceptions=True)
-
-        # Process results
-        summary_results = {}
-        for result in results:
-            if isinstance(result, Exception):
-                log.error(f"SHUTDOWN | Summary exception: {result}")
-            elif isinstance(result, tuple):
-                session_name, success = result
-                summary_results[session_name] = success
-
-        success_count = sum(1 for v in summary_results.values() if v)
-        log.info(f"SHUTDOWN | Generated {success_count}/{len(sessions)} summaries")
-        return summary_results
-
     async def shutdown(self):
-        """Clean shutdown: generate summaries, save session_ids, disconnect all clients."""
+        """Clean shutdown: save session_ids, disconnect all clients.
+
+        Native Claude Code compaction handles context preservation.
+        Sessions resume via stored session_id on restart.
+        """
         log.info("SHUTDOWN | Saving session_ids and disconnecting all clients...")
         async with self._lock:
             sessions = list(self.sessions.values())
             self.sessions.clear()
 
         # Mark all active sessions in registry so they get recreated on startup
-        # (even if summary generation fails or is killed before completing)
         for s in sessions:
             if s.chat_id:
                 self.registry.mark_was_active(s.chat_id)
-
-        # Generate summaries for active sessions before stopping them
-        # This preserves context across daemon restarts
-        if sessions:
-            await self._generate_shutdown_summaries(sessions)
 
         # Save session_ids for future resume
         for s in sessions:
@@ -1844,38 +1797,6 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
     # System prompt builders (identical to current tmux prompts)
     # ──────────────────────────────────────────────────────────────
 
-    def _get_pending_summary(self, session_name: str) -> str | None:
-        """Get and consume pending summary from compaction.
-
-        Reads .pending-summary.md if it exists, validates it, deletes it, and returns content.
-        Returns None if no pending summary or validation fails.
-        """
-        transcript_dir = ensure_transcript_dir(session_name)
-        pending_file = transcript_dir / ".pending-summary.md"
-
-        if not pending_file.exists():
-            return None
-
-        try:
-            summary = pending_file.read_text()
-
-            # Validate length
-            if len(summary) < 100:
-                log.warning(f"Pending summary too short ({len(summary)} chars), ignoring")
-                pending_file.unlink()
-                return None
-            if len(summary) > 10000:
-                log.warning(f"Pending summary too long ({len(summary)} chars), truncating")
-                summary = summary[:10000] + "\n\n[truncated]"
-
-            # Consume the file (delete after reading)
-            pending_file.unlink()
-            log.info(f"Injected pending summary for {session_name} ({len(summary)} chars)")
-            return summary
-
-        except Exception as e:
-            log.error(f"Error reading pending summary: {e}")
-            return None
 
     async def _build_individual_system_prompt(
         self,
@@ -1894,19 +1815,15 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
         soul_content, contact_notes, memory_summary, chat_context = await asyncio.gather(
             self._get_soul_content(),
             self._get_contact_notes(contact_name),
-            self._get_memory_summary(session_name),
+            self._get_memory_summary(contact_name),
             self._get_chat_context(session_name),
         )
-
-        # Check for pending summary from compaction
-        pending_summary = self._get_pending_summary(session_name)
 
         # Build sections with clear labels
         soul_section = f"\n## My Identity (from SOUL.md)\n\n{soul_content}\n" if soul_content else ""
         notes_section = f"\n## About {contact_name} (from Contacts.app)\n\n{contact_notes}\n" if contact_notes else ""
         memory_section = f"\n## About {contact_name} (from memories)\n\n{memory_summary}\n" if memory_summary else ""
         context_section = f"\n## Current Conversation Context\n\n{chat_context}\n" if chat_context else ""
-        summary_section = f"\n## Previous Session Context\n\n{pending_summary}\n" if pending_summary else ""
 
         # Determine send command and history based on source
         from assistant.backends import get_backend
@@ -1975,7 +1892,7 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
 
         return f"""SESSION START - INDIVIDUAL {backend.label} CHAT: {contact_name} ({tier} tier)
 Chat ID: {chat_id}
-{soul_section}{notes_section}{memory_section}{context_section}{summary_section}
+{soul_section}{notes_section}{memory_section}{context_section}
 {action_block}
 
 **If you need more context** about what you were doing before restart:
@@ -2046,13 +1963,9 @@ Quick reference:
                     part += f"\n**From memories:**\n{mem}\n"
                 participant_context_parts.append(part)
 
-        # Check for pending summary from compaction
-        pending_summary = self._get_pending_summary(session_name)
-
         participants_section = "\n".join(participant_lines) if participant_lines else "- (unknown participants)"
         participant_context_section = "\n".join(participant_context_parts) if participant_context_parts else ""
         chat_context_section = f"\n## Current Conversation Context\n\n{chat_context}\n" if chat_context else ""
-        summary_section = f"\n## Previous Session Context\n\n{pending_summary}\n" if pending_summary else ""
 
         shown_name = display_name or chat_id
 
@@ -2101,7 +2014,7 @@ Chat ID: {chat_id}
 Participants:
 {participants_section}
 {soul_section}
-{participant_context_section}{chat_context_section}{summary_section}
+{participant_context_section}{chat_context_section}
 {action_block}
 
 **To send a message to this group using heredoc (no temp files - avoids race conditions between sessions):**

@@ -66,11 +66,13 @@ if TYPE_CHECKING:
         StopHookInput,
         SubagentStopHookInput,
         PreCompactHookInput,
+        NotificationHookInput,
     )
     # Union of all hook input types
     HookInputType = (
         PreToolUseHookInput | PostToolUseHookInput | PostToolUseFailureHookInput |
-        UserPromptSubmitHookInput | StopHookInput | SubagentStopHookInput | PreCompactHookInput
+        UserPromptSubmitHookInput | StopHookInput | SubagentStopHookInput |
+        PreCompactHookInput | NotificationHookInput
     )
 
 from assistant.common import SKILLS_DIR, UV
@@ -131,6 +133,7 @@ class SDKSession:
         source: str = "imessage",
         model: str = "opus",
         producer=None,
+        resume_id: Optional[str] = None,
     ):
         self.chat_id = chat_id
         self.contact_name = contact_name
@@ -140,6 +143,7 @@ class SDKSession:
         self.source = source
         self.model = model
         self._producer = producer
+        self.resume_id = resume_id
 
         self._client: Optional[ClaudeSDKClient] = None
         self._message_queue: asyncio.Queue[str] = asyncio.Queue()
@@ -255,26 +259,32 @@ class SDKSession:
     def is_alive(self) -> bool:
         return self.running and self._task is not None and not self._task.done()
 
-    def is_healthy(self) -> bool:
+    def is_healthy(self) -> tuple[bool, str]:
+        """Check session health. Returns (healthy, reason) tuple.
+
+        The reason string describes why the session is unhealthy, or "ok" if healthy.
+        """
         if not self.is_alive():
-            return False
+            return False, "dead"
         if self._error_count >= 3:
-            return False
+            return False, f"error_count={self._error_count}"
         # API errors (e.g. context too large, image size limits)
         if self._consecutive_error_turns >= 3:
-            return False
+            return False, f"consecutive_error_turns={self._consecutive_error_turns}"
         # Stale: messages pending but no activity for 10+ min
         if self._message_queue.qsize() > 0:
             idle = (datetime.now() - self.last_activity).total_seconds()
             if idle > 600:
-                return False
-        # Stuck: message was injected but no ResultMessage received for 10+ min.
+                return False, f"stale_queue(qsize={self._message_queue.qsize()}, idle={idle:.0f}s)"
+        # Stuck: message was injected but no ResultMessage received for 20+ min.
         # Catches silent SDK connection hangs where process is alive but not responding.
+        # Using 20 min (1200s) instead of 10 min to avoid false positives during
+        # long subagent operations (e.g. explore/plan subagents can run 10-15 min).
         if self.last_inject_at and self.last_inject_at > self.last_response_at:
             stuck_seconds = (datetime.now() - self.last_inject_at).total_seconds()
-            if stuck_seconds > 600:
-                return False
-        return True
+            if stuck_seconds > 1200:
+                return False, f"stuck(inject={stuck_seconds:.0f}s_ago)"
+        return True, "ok"
 
     async def interrupt(self):
         """Interrupt a stuck session."""
@@ -485,6 +495,7 @@ class SDKSession:
                 "PreToolUse": [HookMatcher(matcher="Read", hooks=[self._resize_image_hook])],  # type: ignore[list-item]
                 "Stop": [HookMatcher(hooks=[self._stop_hook])],  # type: ignore[list-item]
                 "PreCompact": [HookMatcher(hooks=[self._pre_compact_hook])],  # type: ignore[list-item]
+                "Notification": [HookMatcher(hooks=[self._notification_hook])],  # type: ignore[list-item]
             }
         )
 
@@ -492,13 +503,14 @@ class SDKSession:
         if self.tier in ("favorite", "family"):
             opts.can_use_tool = self._permission_check
 
-        # Always use fresh session ID to prevent auto-resume from sessions-index.json
-        # The SDK/CLI auto-resumes from ~/.claude/projects/<cwd>/sessions-index.json
-        # unless we explicitly provide a new session ID.
-        # We intentionally DO NOT resume SDK sessions - the custom compact system
-        # handles context persistence via transcript files and handoff briefings.
-        fresh_session_id = str(uuid.uuid4())
-        opts.extra_args = {"session-id": fresh_session_id}
+        # Session resume: if resume_id is set, use it to resume a previous session.
+        # Otherwise generate a fresh ID for a new session.
+        if resume_id or self.resume_id:
+            session_id = resume_id or self.resume_id
+            opts.extra_args = {"session-id": session_id, "resume": "true"}
+        else:
+            fresh_session_id = str(uuid.uuid4())
+            opts.extra_args = {"session-id": fresh_session_id}
 
         return opts
 
@@ -594,13 +606,12 @@ class SDKSession:
             return {}
 
     async def _pre_compact_hook(self, input_data: "HookInputType", tool_use_id: str | None, context: "HookContext") -> "SyncHookJSONOutput":
-        """PreCompact hook: trigger session restart with context summary.
+        """PreCompact hook: notify and let Claude Code compact natively.
 
         Fires when the CLI's context window is about to be compacted.
-        Instead of letting the CLI do a lossy compaction, we:
-        1. Run summarize-and-restart which generates an Opus summary
-        2. Kill and recreate the session with the summary as briefing
-        This preserves much more context across the boundary.
+        We send an SMS notification and log the event, then return empty
+        to let the native compaction proceed. The Notification hook will
+        handle post-compaction logging.
         """
         from assistant.common import get_session_name
         session_name = get_session_name(self.chat_id, self.source)
@@ -641,19 +652,74 @@ class SDKSession:
         except Exception as e:
             self._log.error(f"PRECOMPACT | send notice failed: {e}")
 
-        # Fire restart asynchronously - don't block the hook response
-        restart_script = Path.home() / "dispatch" / "bin" / "summarize-and-restart"
+        # Let native compaction proceed (no more summarize-and-restart)
+        return {}
+
+    async def _notification_hook(self, input_data: "HookInputType", tool_use_id: str | None, context: "HookContext") -> "SyncHookJSONOutput":
+        """Notification hook: handle post-compaction notifications.
+
+        The SDK fires a Notification event after compaction completes.
+        We use this to send the "done compacting" SMS and archive the compact summary.
+        """
+        notification_type = input_data.get("notification_type", "")
+        message = input_data.get("message", "")
+
+        # Only handle compaction-related notifications
+        if "compact" not in notification_type.lower() and "compact" not in message.lower():
+            return {}
+
+        from assistant.common import get_session_name
+        session_name = get_session_name(self.chat_id, self.source)
+        self._log.info(f"POSTCOMPACT | completed | session={session_name}")
+        log.info(f"[{self.contact_name}] Compaction completed")
+
+        # Log compaction.completed bus event with compact summary
+        produce_event(self._producer, "system", "compaction.completed", {
+            "session_name": session_name,
+            "chat_id": self.chat_id,
+            "contact_name": self.contact_name,
+            "turn_count": self.turn_count,
+            "compact_summary": message,
+        }, source="compaction")
+
+        # Log to compactions.log
+        compaction_log = Path.home() / "dispatch/logs/compactions.log"
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(compaction_log, "a") as f:
+            f.write(f"{timestamp} | HOOK | Compaction completed for {session_name}\n")
+
+        # Archive the compact summary to .compactions/ directory
         try:
-            proc2 = subprocess.Popen(
-                [str(restart_script), session_name],
+            transcript_dir = Path(self.cwd)
+            compactions_dir = transcript_dir / ".compactions"
+            compactions_dir.mkdir(exist_ok=True)
+            archive_file = compactions_dir / f"{datetime.now().strftime('%Y%m%d-%H%M%S')}.md"
+            archive_file.write_text(f"# Compaction Summary\n\nNotification: {message}\n")
+            self._log.info(f"POSTCOMPACT | archived to {archive_file}")
+        except Exception as e:
+            self._log.error(f"POSTCOMPACT | archive failed: {e}")
+
+        # Send "done compacting" SMS (fire-and-forget)
+        try:
+            from assistant import config
+            from assistant.backends import get_backend
+            assistant_name = config.get("assistant.name", "Assistant")
+            backend = get_backend(self.source)
+            if self.session_type == "group":
+                send_tpl = backend.send_group_cmd
+            else:
+                send_tpl = backend.send_cmd
+            script_path = str(Path(send_tpl.split()[0]).expanduser())
+            bare_chat_id = self.chat_id.lstrip("+")
+            proc = subprocess.Popen(
+                [script_path, bare_chat_id, f"[{assistant_name.upper()}] Done compacting \u2713"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
-            # Reap in a background thread to prevent zombie processes
             import threading
-            threading.Thread(target=proc2.wait, daemon=True, name="reap-compact-restart").start()
+            threading.Thread(target=proc.wait, daemon=True, name="reap-compact-done-sms").start()
         except Exception as e:
-            self._log.error(f"PRECOMPACT | restart failed: {e}")
+            self._log.error(f"POSTCOMPACT | send notice failed: {e}")
 
         return {}
 

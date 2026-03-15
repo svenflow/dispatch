@@ -418,66 +418,41 @@ def cmd_kill_sessions(args):
 
 
 def cmd_compact_session(args):
-    """Compact a session (generate summary without restarting)."""
-    session = args.session
-    chat_id = _session_name_to_chat_id(session)
+    """Compact a session.
 
-    if not chat_id:
-        return _session_not_found(session)
-
-    # Get session_name from registry
-    registry = _load_registry()
-    session_data = registry.get(chat_id, {})
-    session_name = session_data.get("session_name")
-
-    if not session_name:
-        print(f"Error: Could not find session_name for {session}")
-        return 1
-
-    # Run summarize-session script
-    script = ASSISTANT_DIR / "bin" / "summarize-session"
-    dry_run_flag = ["--dry-run"] if args.dry_run else []
-
-    print(f"Compacting session: {session_name}")
-    result = subprocess.run(
-        [str(script), session_name] + dry_run_flag,
-        capture_output=False,
-    )
-    return result.returncode
+    Compaction is now handled natively by Claude Code. Sessions compact
+    automatically when context fills up. Use restart-session --clean
+    for a completely fresh start.
+    """
+    print("Compaction is now handled natively by Claude Code.")
+    print("Sessions compact automatically when context fills up.")
+    print("Use 'restart-session --clean <session>' for a fresh start.")
+    return 0
 
 
 def cmd_restart_session(args):
-    """Restart a specific session (with optional compaction)."""
+    """Restart a specific session.
+
+    By default, the session resumes from its previous state (native compaction).
+    Use --clean to force a completely fresh session (clears session index and resume ID).
+    """
     session = args.session
     chat_id = _session_name_to_chat_id(session)
 
     if not chat_id:
         return _session_not_found(session)
 
-    # Compact first unless --no-compact flag
-    if not getattr(args, 'no_compact', False):
-        # Get session_name for compaction
-        registry = _load_registry()
-        session_data = registry.get(chat_id, {})
-        session_name = session_data.get("session_name")
+    is_clean = getattr(args, 'clean', False)
 
-        if session_name:
-            script = ASSISTANT_DIR / "bin" / "summarize-session"
-            print(f"Compacting session before restart...")
-            result = subprocess.run(
-                [str(script), session_name],
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode == 0:
-                print(f"Compaction complete")
-            else:
-                print(f"Compaction failed (continuing with restart): {result.stderr[:200] if result.stderr else 'unknown error'}")
-
-    # Build restart command with optional tier override
-    restart_cmd = {"cmd": "restart_session", "chat_id": chat_id}
+    # Build restart command with optional tier override and clean flag
+    restart_cmd: dict[str, str | bool] = {"cmd": "restart_session", "chat_id": chat_id}
     if getattr(args, 'tier', None):
         restart_cmd["tier"] = args.tier
+    if is_clean:
+        restart_cmd["clean"] = True
+
+    mode = "clean (fresh session)" if is_clean else "normal (with resume)"
+    print(f"Restarting session ({mode})...")
 
     resp = _ipc_command(restart_cmd)
     if resp.get("ok"):
@@ -1049,16 +1024,15 @@ def main():
     # restart-session
     restart_session_parser = subparsers.add_parser("restart-session", help="Restart a specific session (compacts first)")
     restart_session_parser.add_argument("session", help="Session name (imessage/_15555550100), chat_id, or contact name")
-    restart_session_parser.add_argument("--no-compact", action="store_true", help="Skip compaction before restart")
     restart_session_parser.add_argument("--tier", choices=["admin", "partner", "family", "favorite"], help="Override tier for restarted session")
+    restart_session_parser.add_argument("--clean", action="store_true", help="Force fresh session (clears session index and resume ID)")
 
     # restart-sessions
     subparsers.add_parser("restart-sessions", help="Restart all sessions")
 
-    # compact-session
-    compact_session_parser = subparsers.add_parser("compact-session", help="Compact a session (generate summary without restart)")
-    compact_session_parser.add_argument("session", help="Session name (imessage/_15555550100), chat_id, or contact name")
-    compact_session_parser.add_argument("--dry-run", action="store_true", help="Generate and print summary without saving")
+    # compact-session (deprecated — compaction is now native)
+    compact_session_parser = subparsers.add_parser("compact-session", help="[Deprecated] Compaction is now handled natively by Claude Code")
+    compact_session_parser.add_argument("session", nargs="?", help="Session name (ignored — compaction is automatic)")
 
     # set-model
     set_model_parser = subparsers.add_parser("set-model", help="Set model for a session (opus, sonnet, haiku)")
