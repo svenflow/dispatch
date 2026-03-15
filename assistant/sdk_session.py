@@ -98,7 +98,7 @@ def _is_send_command(cmd: str) -> bool:
     """Check if a Bash command is a message send.
 
     Matches the executable (first token) against known send script paths.
-    Strips leading env vars and quotes to find the actual command.
+    Strips outer quotes to extract the command path.
     """
     # Extract first token (the executable), stripping quotes
     stripped = cmd.strip().strip('"').strip("'")

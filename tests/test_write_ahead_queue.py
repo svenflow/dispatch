@@ -515,3 +515,80 @@ class TestIsSendCommandAdversarial:
 
     def test_actual_reply_with_full_path(self):
         assert _is_send_command('~/.claude/skills/sms-assistant/scripts/reply "hello"')
+
+
+# ── message.sent emission test ───────────────────────────────────────
+
+@pytest.mark.asyncio
+class TestMessageSentEmission:
+    """Test message.sent event emission from tool result handler."""
+
+    async def test_send_command_emits_message_sent(self, sdk_session):
+        """Bash tool result with send script should emit message.sent."""
+        mock_producer = MagicMock()
+        mock_producer.send_sdk_event = MagicMock()
+        sdk_session._producer = mock_producer
+
+        await sdk_session.start()
+
+        # Simulate: AssistantMessage(ToolUseBlock) → UserMessage(ToolResultBlock) → ResultMessage
+        from tests.conftest import (
+            FakeToolUseBlock, FakeAssistantMessage, FakeToolResultBlock,
+            FakeResultMessage, FakeUserMessage,
+        )
+        tool_id = "tool_send_1"
+        send_cmd = '~/.claude/skills/sms-assistant/scripts/send-sms "+1234" "hello"'
+
+        # UserMessage wraps tool results in the SDK protocol
+        tool_result_msg = FakeUserMessage([
+            FakeToolResultBlock(tool_use_id=tool_id, content="SENT|+1234", is_error=False),
+        ])
+
+        sdk_session._client._responses = [
+            FakeAssistantMessage([FakeToolUseBlock("Bash", {"command": send_cmd}, tool_id)]),
+            tool_result_msg,
+            FakeResultMessage(),
+        ]
+
+        produced_events = []
+
+        def capture_event(*args, **kwargs):
+            produced_events.append(args)
+
+        with patch("assistant.sdk_session.produce_event", side_effect=capture_event):
+            await sdk_session.inject("send a message")
+            await asyncio.sleep(1.0)
+
+        sent_events = [e for e in produced_events if len(e) > 2 and e[2] == "message.sent"]
+        assert len(sent_events) >= 1, f"Expected message.sent event, got events: {[e[2] for e in produced_events if len(e) > 2]}"
+        assert sent_events[0][3]["chat_id"] == sdk_session.chat_id
+        assert send_cmd in sent_events[0][3]["command"]
+
+
+# ── Replay in restart_session test ───────────────────────────────────
+
+@pytest.mark.asyncio
+class TestReplayOnRestart:
+    """Test that replay fires during restart_session (not just startup)."""
+
+    async def test_restart_session_triggers_replay(self, sdk_backend):
+        """restart_session should call _replay_undelivered after recreating."""
+        session = await sdk_backend.create_session(
+            "Test User", "test:+15555551234", "admin", source="test"
+        )
+
+        replay_calls = []
+        original_replay = sdk_backend._replay_undelivered
+
+        async def tracking_replay(chat_id, stored_session_id, **kwargs):
+            replay_calls.append((chat_id, stored_session_id))
+            return await original_replay(chat_id, stored_session_id, **kwargs)
+
+        sdk_backend._replay_undelivered = tracking_replay
+
+        # Restart the session
+        new_session = await sdk_backend.restart_session("test:+15555551234")
+
+        assert new_session is not None
+        assert len(replay_calls) == 1
+        assert replay_calls[0][0] == "test:+15555551234"

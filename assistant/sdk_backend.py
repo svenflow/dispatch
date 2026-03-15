@@ -1517,6 +1517,11 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
                     resume_id=resume_id,
                 )
             lifecycle_log.info(f"RESTART | {reg.get('session_name', chat_id)} | COMPLETE")
+            # Replay any undelivered messages from WAL after crash recovery
+            try:
+                await self._replay_undelivered(chat_id, resume_id)
+            except Exception as e:
+                log.warning(f"RESTART_REPLAY_FAILED | {chat_id} | {e}")
             return session
         return None
 
