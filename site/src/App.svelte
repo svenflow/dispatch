@@ -4,30 +4,50 @@
   import Sidebar from './lib/Sidebar.svelte'
   import Home from './routes/Home.svelte'
   import Setup from './routes/Setup.svelte'
-  import GettingStarted from './routes/GettingStarted.svelte'
   import Tiers from './routes/Tiers.svelte'
   import Skills from './routes/Skills.svelte'
   import CLI from './routes/CLI.svelte'
   import Architecture from './routes/Architecture.svelte'
   import Configuration from './routes/Configuration.svelte'
   import Philosophy from './routes/Philosophy.svelte'
+  import Messaging from './routes/Messaging.svelte'
+  import MessageBus from './routes/MessageBus.svelte'
+  import Memory from './routes/Memory.svelte'
+  import HealthHealing from './routes/HealthHealing.svelte'
+  import Analytics from './routes/Analytics.svelte'
+  import Postmortems from './routes/Postmortems.svelte'
 
   const pages = {
     'home': Home,
     'philosophy': Philosophy,
     'setup': Setup,
-    'getting-started': GettingStarted,
     'tiers': Tiers,
     'skills': Skills,
     'cli': CLI,
     'architecture': Architecture,
     'configuration': Configuration,
+    'messaging': Messaging,
+    'message-bus': MessageBus,
+    'memory': Memory,
+    'health': HealthHealing,
+    'analytics': Analytics,
+    'postmortems': Postmortems,
+  }
+
+  // Redirects for old routes
+  const redirects = {
+    'getting-started': 'setup',
   }
 
   let currentPage = 'home'
 
   function getPageFromHash() {
     const hash = window.location.hash.replace('#', '').replace('/', '')
+    // Handle redirects
+    if (redirects[hash]) {
+      window.location.hash = redirects[hash]
+      return redirects[hash]
+    }
     return pages[hash] ? hash : 'home'
   }
 

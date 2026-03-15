@@ -1,15 +1,18 @@
 # Dispatch
 
-A personal AI assistant daemon that turns Claude into a full computer-controlling agent with SMS/Signal messaging, browser automation, smart home control, and persistent memory.
+Turn a Mac into an always-on AI assistant with its own identity — its own iCloud, Gmail, and phone number. Not acting as you. A separate entity in your household.
+
+**[Documentation](https://svenflow.github.io/dispatch/)** · **[Architecture](#architecture)** · **[Quick Start](#installation)**
 
 ## Overview
 
 Dispatch runs a daemon that:
 - **Receives messages** from iMessage and Signal in real-time
-- **Routes them to Claude SDK sessions** based on contact tier (admin, family, favorites, etc.)
+- **Routes them to Claude SDK sessions** based on contact tier (admin, partner, family, favorites, bots)
 - **Gives Claude full computer control**: browser automation, file management, smart home, messaging
 - **Maintains persistent memory** across conversations with full-text search
-- **Auto-recovers from crashes** via watchdog daemon with exponential backoff
+- **Auto-recovers from crashes** via multi-tier health monitoring and watchdog daemon
+- **Records all events** to a Kafka-on-SQLite bus for audit trails and analytics
 
 Each contact gets their own persistent Claude session with conversation history, memories, and tier-appropriate tool access.
 
@@ -282,6 +285,14 @@ uv run ruff check assistant/
 | Watchdog cycle | 60 seconds |
 | Max consecutive failures | 5 |
 | Session log size | 10MB (5 backups) |
+
+## Documentation
+
+Full documentation is available at **[svenflow.github.io/dispatch](https://svenflow.github.io/dispatch/)**, covering:
+
+- **Getting Started** — Philosophy, setup guide
+- **Core Systems** — Architecture, messaging, tiers & permissions, skills, CLI reference
+- **Operations** — Message bus, memory, health & healing, analytics, postmortems, configuration
 
 ## License
 

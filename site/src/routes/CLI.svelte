@@ -13,6 +13,7 @@
       <li><a href="#watchdog">Watchdog</a></li>
       <li><a href="#identity">Identity</a></li>
       <li><a href="#messaging">Messaging</a></li>
+      <li><a href="#bus">Event Bus</a></li>
       <li><a href="#identifiers">Session Identifiers</a></li>
       <li><a href="#env">Environment</a></li>
     </ul>
@@ -178,6 +179,31 @@
       <div class="cmd-desc">Send Signal message</div>
       <pre><code>~/.claude/skills/signal/scripts/send-signal "+15555551234" "message"
 ~/.claude/skills/signal/scripts/send-signal-group "base64-group-id" "message"</code></pre>
+    </div>
+  </section>
+
+  <section id="bus">
+    <h2>Event Bus</h2>
+
+    <div class="cmd-block">
+      <div class="cmd-name">bus stats</div>
+      <div class="cmd-desc">Show event counts by type and time range</div>
+      <pre><code>./bin/bus stats</code></pre>
+    </div>
+
+    <div class="cmd-block">
+      <div class="cmd-name">bus tail</div>
+      <div class="cmd-desc">Tail recent events (like kafka-console-consumer)</div>
+      <pre><code>./bin/bus tail
+./bin/bus tail --type msg.received
+./bin/bus tail --type session.compacted --limit 10</code></pre>
+    </div>
+
+    <div class="cmd-block">
+      <div class="cmd-name">bus export</div>
+      <div class="cmd-desc">Export events to JSON for analysis</div>
+      <pre><code>./bin/bus export --since 24h > events.json
+./bin/bus export --type sdk.tool_call --since 1h</code></pre>
     </div>
   </section>
 

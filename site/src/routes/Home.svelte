@@ -66,29 +66,29 @@
   <section>
     <h2>What It Does</h2>
     <div class="feature-grid">
-      <div class="feature">
+      <div class="feature clickable" on:click={() => navigateTo('messaging')} on:keydown={() => {}} role="button" tabindex="0">
         <div class="feature-title">Messaging</div>
         <div class="feature-desc">iMessage + Signal with real-time polling and group chat support</div>
       </div>
-      <div class="feature">
+      <div class="feature clickable" on:click={() => navigateTo('tiers')} on:keydown={() => {}} role="button" tabindex="0">
         <div class="feature-title">Tiered Access</div>
         <div class="feature-desc">Admin, Partner, Family, Favorite tiers with scoped permissions</div>
       </div>
-      <div class="feature">
+      <div class="feature clickable" on:click={() => navigateTo('skills')} on:keydown={() => {}} role="button" tabindex="0">
         <div class="feature-title">67+ Skills</div>
         <div class="feature-desc">Browser automation, smart home, iOS dev, payments, and more</div>
       </div>
-      <div class="feature">
+      <div class="feature clickable" on:click={() => navigateTo('memory')} on:keydown={() => {}} role="button" tabindex="0">
         <div class="feature-title">Persistent Memory</div>
         <div class="feature-desc">Remembers conversations, preferences, and context across sessions</div>
       </div>
-      <div class="feature">
-        <div class="feature-title">Computer Control</div>
-        <div class="feature-desc">Full access to the Mac—files, apps, browser, terminal</div>
+      <div class="feature clickable" on:click={() => navigateTo('message-bus')} on:keydown={() => {}} role="button" tabindex="0">
+        <div class="feature-title">Event Bus</div>
+        <div class="feature-desc">Kafka-on-SQLite audit trail with fire-and-forget writes</div>
       </div>
-      <div class="feature">
-        <div class="feature-title">Auto-Recovery</div>
-        <div class="feature-desc">Watchdog daemon with crash recovery and health monitoring</div>
+      <div class="feature clickable" on:click={() => navigateTo('health')} on:keydown={() => {}} role="button" tabindex="0">
+        <div class="feature-title">Health & Healing</div>
+        <div class="feature-desc">Multi-tier monitoring with automatic recovery and watchdog</div>
       </div>
     </div>
   </section>
@@ -146,8 +146,7 @@ cp config.example.yaml config.local.yaml
     <p class="note">
       Full setup requires configuring macOS permissions, creating the assistant's
       iCloud account, and setting up Contacts groups. See the
-      <button class="text-link" on:click={() => navigateTo('getting-started')}>Getting Started</button>
-      guide.
+      <button class="text-link" on:click={() => navigateTo('setup')}>Setup Guide</button>.
     </p>
   </section>
 </article>
@@ -249,6 +248,15 @@ cp config.example.yaml config.local.yaml
   .feature {
     padding: var(--space-4);
     background: var(--bg-elevated);
+  }
+
+  .feature.clickable {
+    cursor: pointer;
+    transition: background var(--transition-fast);
+  }
+
+  .feature.clickable:hover {
+    background: var(--bg-surface);
   }
 
   .feature-title {

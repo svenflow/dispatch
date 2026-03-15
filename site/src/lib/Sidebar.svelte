@@ -2,16 +2,36 @@
   export let currentPage;
   export let onNavigate;
 
-  const navItems = [
-    { id: 'home', label: 'Overview' },
-    { id: 'philosophy', label: 'Philosophy' },
-    { id: 'setup', label: 'Setup Guide' },
-    { id: 'getting-started', label: 'Quick Start' },
-    { id: 'tiers', label: 'Contact Tiers' },
-    { id: 'skills', label: 'Skills' },
-    { id: 'cli', label: 'CLI Reference' },
-    { id: 'architecture', label: 'Architecture' },
-    { id: 'configuration', label: 'Configuration' },
+  const navGroups = [
+    {
+      title: 'Getting Started',
+      items: [
+        { id: 'home', label: 'Overview' },
+        { id: 'philosophy', label: 'Philosophy' },
+        { id: 'setup', label: 'Setup Guide' },
+      ],
+    },
+    {
+      title: 'Core Systems',
+      items: [
+        { id: 'architecture', label: 'Architecture' },
+        { id: 'messaging', label: 'Messaging' },
+        { id: 'tiers', label: 'Tiers & Permissions' },
+        { id: 'skills', label: 'Skills' },
+        { id: 'cli', label: 'CLI Reference' },
+      ],
+    },
+    {
+      title: 'Operations',
+      items: [
+        { id: 'message-bus', label: 'Message Bus' },
+        { id: 'memory', label: 'Memory' },
+        { id: 'health', label: 'Health & Healing' },
+        { id: 'analytics', label: 'Analytics' },
+        { id: 'postmortems', label: 'Postmortems' },
+        { id: 'configuration', label: 'Configuration' },
+      ],
+    },
   ];
 
   let mobileMenuOpen = false;
@@ -40,25 +60,27 @@
 <aside class="sidebar" class:mobile-open={mobileMenuOpen}>
   <div class="sidebar-header">
     <span class="logo">Dispatch</span>
-    <span class="version">v1.0</span>
+    <span class="version">v2.0</span>
   </div>
 
   <nav class="nav">
-    <div class="nav-section">
-      <div class="nav-section-title">Documentation</div>
-      {#each navItems as item}
-        <button
-          class="nav-item"
-          class:active={currentPage === item.id}
-          on:click={() => handleNav(item.id)}
-        >
-          {item.label}
-          {#if currentPage === item.id}
-            <span class="nav-indicator"></span>
-          {/if}
-        </button>
-      {/each}
-    </div>
+    {#each navGroups as group}
+      <div class="nav-section">
+        <div class="nav-section-title">{group.title}</div>
+        {#each group.items as item}
+          <button
+            class="nav-item"
+            class:active={currentPage === item.id}
+            on:click={() => handleNav(item.id)}
+          >
+            {item.label}
+            {#if currentPage === item.id}
+              <span class="nav-indicator"></span>
+            {/if}
+          </button>
+        {/each}
+      </div>
+    {/each}
   </nav>
 
   <div class="sidebar-footer">
@@ -172,6 +194,11 @@
 
   .nav-section {
     padding: 0 var(--space-3);
+    margin-bottom: var(--space-4);
+  }
+
+  .nav-section:last-child {
+    margin-bottom: 0;
   }
 
   .nav-section-title {
