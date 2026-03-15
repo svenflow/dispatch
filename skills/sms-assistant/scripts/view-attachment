@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# view-attachment - Convert and downscale image attachments for viewing with Claude's Read tool
+#
+# Usage: view-attachment <image_path> [image_path ...]
+#
+# - HEIC files are converted to JPEG
+# - Images over 256KB are downscaled to fit under the Read tool limit
+# - Output files go to /tmp with predictable names
+
+set -euo pipefail
+
+MAX_BYTES=262144  # 256KB
+
+if [ $# -eq 0 ]; then
+    echo "Usage: view-attachment <image_path> [image_path ...]" >&2
+    exit 1
+fi
+
+for src in "$@"; do
+    if [ ! -f "$src" ]; then
+        echo "Error: file not found: $src" >&2
+        continue
+    fi
+
+    basename_noext="${src##*/}"
+    basename_noext="${basename_noext%.*}"
+    ext="${src##*.}"
+    ext_lower="$(echo "$ext" | tr '[:upper:]' '[:lower:]')"
+
+    # Determine output path and format
+    if [ "$ext_lower" = "heic" ] || [ "$ext_lower" = "heif" ]; then
+        out="/tmp/${basename_noext}.jpg"
+        sips -s format jpeg "$src" --out "$out" >/dev/null 2>&1
+    else
+        out="/tmp/${basename_noext}.${ext_lower}"
+        cp "$src" "$out"
+    fi
+
+    # Downscale if over 256KB
+    attempt=0
+    while [ "$(stat -f%z "$out")" -gt "$MAX_BYTES" ]; do
+        attempt=$((attempt + 1))
+        if [ $attempt -gt 10 ]; then
+            echo "Warning: could not reduce $src below 256KB after 10 attempts" >&2
+            break
+        fi
+
+        # Get current dimensions
+        width=$(sips -g pixelWidth "$out" | tail -1 | awk '{print $2}')
+        height=$(sips -g pixelHeight "$out" | tail -1 | awk '{print $2}')
+
+        # Scale down by 70% each iteration
+        new_width=$(( width * 70 / 100 ))
+        new_height=$(( height * 70 / 100 ))
+
+        # Ensure minimum dimensions
+        [ "$new_width" -lt 100 ] && new_width=100
+        [ "$new_height" -lt 100 ] && new_height=100
+
+        sips --resampleHeightWidth "$new_height" "$new_width" "$out" >/dev/null 2>&1
+
+        # If not JPEG yet, convert to JPEG for better compression
+        if [ "$ext_lower" != "jpg" ] && [ "$ext_lower" != "jpeg" ] && [ "$ext_lower" != "heic" ] && [ "$ext_lower" != "heif" ]; then
+            jpg_out="/tmp/${basename_noext}.jpg"
+            sips -s format jpeg "$out" --out "$jpg_out" >/dev/null 2>&1
+            rm -f "$out"
+            out="$jpg_out"
+        fi
+    done
+
+    echo "$out"
+done

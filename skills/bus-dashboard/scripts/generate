@@ -1,0 +1,599 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# ///
+"""Generate a Dispatch Bus dashboard HTML from bus.db.
+
+Usage:
+  generate [--hours N] [--output PATH] [--publish] [--public]
+
+Options:
+  --hours N      Hours to look back (default: 6)
+  --output PATH  Output HTML file path (default: /tmp/bus-dashboard/index.html)
+  --publish      Publish to sven-pages after generating
+  --public       Make published page public (implies --publish)
+"""
+
+import argparse
+import json
+import os
+import sqlite3
+import subprocess
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+
+
+def query_bus_data(db_path: str, hours: int) -> dict:
+    conn = sqlite3.connect(db_path)
+    cutoff = int((time.time() - hours * 3600) * 1000)
+
+    # Total records
+    total = conn.execute(
+        "SELECT COUNT(*) FROM records WHERE timestamp > ?", (cutoff,)
+    ).fetchone()[0]
+
+    # Time range
+    time_range = conn.execute(
+        "SELECT MIN(timestamp), MAX(timestamp) FROM records WHERE timestamp > ?",
+        (cutoff,),
+    ).fetchone()
+    start_time = datetime.fromtimestamp(time_range[0] / 1000) if time_range[0] else None
+    end_time = datetime.fromtimestamp(time_range[1] / 1000) if time_range[1] else None
+
+    # Topics
+    topics = conn.execute("SELECT COUNT(*) FROM topics").fetchone()[0]
+
+    # Event type counts
+    event_types = conn.execute(
+        """SELECT topic, type, COUNT(*) as cnt FROM records
+           WHERE timestamp > ? GROUP BY topic, type ORDER BY cnt DESC""",
+        (cutoff,),
+    ).fetchall()
+
+    # 15-min buckets
+    rows = conn.execute(
+        "SELECT timestamp FROM records WHERE timestamp > ? ORDER BY timestamp",
+        (cutoff,),
+    ).fetchall()
+    buckets = {}
+    for (ts,) in rows:
+        dt = datetime.fromtimestamp(ts / 1000)
+        bucket = dt.strftime("%H:") + str(dt.minute // 15 * 15).zfill(2)
+        buckets[bucket] = buckets.get(bucket, 0) + 1
+
+    # Messages per contact/group
+    msg_rows = conn.execute(
+        """SELECT payload FROM records
+           WHERE timestamp > ? AND type = 'message.received'""",
+        (cutoff,),
+    ).fetchall()
+    contact_msgs = {}
+    for (payload_str,) in msg_rows:
+        try:
+            p = json.loads(payload_str)
+            name = p.get("group_name") or p.get("phone", "unknown")
+            contact_msgs[name] = contact_msgs.get(name, 0) + 1
+        except Exception:
+            pass
+
+    # Turn durations per session
+    turn_rows = conn.execute(
+        """SELECT payload FROM records
+           WHERE timestamp > ? AND type = 'sdk.turn_complete'""",
+        (cutoff,),
+    ).fetchall()
+    session_durs = {}
+    all_durs = []
+    for (payload_str,) in turn_rows:
+        try:
+            p = json.loads(payload_str)
+            name = p.get("contact_name", "unknown")
+            d = p.get("duration_ms", 0)
+            if d > 0:
+                session_durs.setdefault(name, []).append(d)
+                all_durs.append(d)
+        except Exception:
+            pass
+
+    # Unique sessions
+    session_names = set()
+    contact_names = set()
+    all_rows = conn.execute(
+        "SELECT payload FROM records WHERE timestamp > ?", (cutoff,)
+    ).fetchall()
+    for (payload_str,) in all_rows:
+        try:
+            p = json.loads(payload_str)
+            if p.get("session_name"):
+                session_names.add(p["session_name"])
+            if p.get("contact_name"):
+                contact_names.add(p["contact_name"])
+            if p.get("group_name"):
+                contact_names.add(p["group_name"])
+        except Exception:
+            pass
+
+    # Lifecycle events
+    lifecycle = []
+    lc_rows = conn.execute(
+        """SELECT type, timestamp FROM records
+           WHERE timestamp > ? AND type IN (
+               'daemon.started', 'daemon.stopped', 'healme.triggered',
+               'compaction.triggered', 'session.killed', 'session.restarted'
+           ) ORDER BY timestamp""",
+        (cutoff,),
+    ).fetchall()
+    for evt_type, ts in lc_rows:
+        dt = datetime.fromtimestamp(ts / 1000)
+        lifecycle.append({"time": dt.strftime("%H:%M:%S"), "type": evt_type})
+
+    conn.close()
+
+    return {
+        "total": total,
+        "topics": topics,
+        "sessions": len(session_names),
+        "contacts": len([c for c in contact_names if c]),
+        "start_time": start_time,
+        "end_time": end_time,
+        "event_types": [
+            {"topic": t, "type": ty, "count": c} for t, ty, c in event_types
+        ],
+        "buckets": dict(sorted(buckets.items())),
+        "contact_msgs": dict(
+            sorted(contact_msgs.items(), key=lambda x: -x[1])
+        ),
+        "session_durs": {
+            k: {"avg": sum(v) / len(v) / 1000, "count": len(v)}
+            for k, v in sorted(session_durs.items())
+        },
+        "avg_response": sum(all_durs) / len(all_durs) / 1000 if all_durs else 0,
+        "turn_count": len(all_durs),
+        "lifecycle": lifecycle,
+    }
+
+
+def get_topic_class(topic: str) -> str:
+    if topic == "messages":
+        return "msg"
+    if topic == "sessions":
+        return "session"
+    return "system"
+
+
+def get_lifecycle_class(evt_type: str) -> str:
+    mapping = {
+        "daemon.started": "started",
+        "daemon.stopped": "stopped",
+        "healme.triggered": "healme",
+        "compaction.triggered": "compaction",
+        "session.killed": "stopped",
+        "session.restarted": "started",
+    }
+    return mapping.get(evt_type, "started")
+
+
+# Friendly name mapping for known group/session slugs
+FRIENDLY_NAMES = {}
+
+
+def friendly_name(raw: str) -> str:
+    """Convert raw session/group names to human-readable names."""
+    if raw in FRIENDLY_NAMES:
+        return FRIENDLY_NAMES[raw]
+    # Clean up common patterns
+    if raw.startswith("+"):
+        return raw  # phone numbers stay as-is
+    # Replace hyphens with " + " for group names
+    if "-" in raw and not raw.startswith("."):
+        parts = raw.split("-")
+        return " + ".join(p.capitalize() for p in parts)
+    return raw
+
+
+def generate_html(data: dict, hours: int) -> str:
+    now = datetime.now()
+    start_hour = data["start_time"].strftime("%H:%M") if data["start_time"] else "?"
+    end_hour = data["end_time"].strftime("%H:%M") if data["end_time"] else "?"
+    date_str = now.strftime("%b %d, %Y")
+
+    # Get key stats
+    msgs_in = sum(
+        e["count"] for e in data["event_types"] if e["type"] == "message.received"
+    )
+    injections = sum(
+        e["count"] for e in data["event_types"] if e["type"] == "session.injected"
+    )
+    daemon_starts = sum(
+        e["count"] for e in data["event_types"] if e["type"] == "daemon.started"
+    )
+    avg_resp = f"{data['avg_response']:.0f}s"
+
+    # Timeline JSON
+    timeline_json = json.dumps(
+        [{"t": k, "v": v} for k, v in data["buckets"].items()]
+    )
+
+    # Contacts JSON
+    contacts_json = json.dumps(
+        [
+            {"name": friendly_name(k), "count": v}
+            for k, v in data["contact_msgs"].items()
+        ]
+    )
+
+    # Events JSON
+    events_json = json.dumps(
+        [
+            {
+                "type": e["type"],
+                "count": e["count"],
+                "topic": get_topic_class(e["topic"]),
+            }
+            for e in data["event_types"]
+        ]
+    )
+
+    # Response times JSON
+    responses_json = json.dumps(
+        [
+            {
+                "name": friendly_name(k),
+                "avg": round(v["avg"], 1),
+                "unit": "s",
+                "count": v["count"],
+            }
+            for k, v in sorted(
+                data["session_durs"].items(), key=lambda x: x[1]["avg"]
+            )
+        ]
+    )
+
+    # Lifecycle JSON
+    lifecycle_json = json.dumps(
+        [
+            {"time": e["time"], "type": get_lifecycle_class(e["type"])}
+            for e in data["lifecycle"]
+        ]
+    )
+
+    # Find spike bucket
+    max_bucket = max(data["buckets"].items(), key=lambda x: x[1]) if data["buckets"] else ("?", 0)
+    spike_callout = ""
+    if max_bucket[1] > 150:  # significant spike
+        spike_callout = f"""
+  <div class="callout animate-in delay-3">
+    <span class="callout-icon">⚡</span>
+    <div>
+      <strong>{max_bucket[0]} — {max_bucket[1]} events in 15 minutes.</strong>
+      Significant activity spike detected in this window.
+    </div>
+  </div>"""
+
+    # Determine lifecycle time range
+    if data["start_time"] and data["end_time"]:
+        lc_start_hour = data["start_time"].hour
+        lc_end_hour = data["end_time"].hour + 1
+    else:
+        lc_start_hour = 0
+        lc_end_hour = 24
+
+    lc_labels = " ".join(
+        f"<span>{h}:00</span>" for h in range(lc_start_hour, lc_end_hour + 1)
+    )
+
+    gen_time = now.strftime("%b %d, %Y %-I:%M %p")
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dispatch Bus — {hours} Hour Window</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {{
+    --ink: #1a1816;
+    --ink-secondary: #5c5650;
+    --ink-tertiary: #8a8279;
+    --ink-muted: #b5ada5;
+    --surface-0: #f7f5f2;
+    --surface-1: #edeae6;
+    --surface-2: #e3e0db;
+    --surface-3: #d9d5cf;
+    --border: rgba(26, 24, 22, 0.08);
+    --border-emphasis: rgba(26, 24, 22, 0.15);
+    --signal-orange: #c2410c;
+    --signal-orange-soft: rgba(194, 65, 12, 0.08);
+    --signal-green: #15803d;
+    --signal-green-soft: rgba(21, 128, 61, 0.08);
+    --signal-red: #b91c1c;
+    --signal-red-soft: rgba(185, 28, 28, 0.08);
+    --signal-blue: #1d4ed8;
+    --signal-blue-soft: rgba(29, 78, 216, 0.06);
+  }}
+  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+  body {{
+    font-family: 'Space Grotesk', sans-serif;
+    background: var(--surface-0);
+    color: var(--ink);
+    -webkit-font-smoothing: antialiased;
+  }}
+  .page {{ max-width: 1200px; margin: 0 auto; padding: 48px 32px 64px; }}
+  .header {{ display: flex; align-items: baseline; gap: 16px; margin-bottom: 8px; }}
+  .header h1 {{ font-size: 28px; font-weight: 700; letter-spacing: -0.5px; }}
+  .header .window {{ font-family: 'JetBrains Mono', monospace; font-size: 13px; color: var(--ink-tertiary); }}
+  .subtitle {{ font-size: 14px; color: var(--ink-secondary); margin-bottom: 48px; line-height: 1.5; }}
+  .subtitle strong {{ color: var(--ink); font-weight: 600; }}
+  .pulse-row {{ display: flex; align-items: center; gap: 8px; margin-bottom: 48px; }}
+  .pulse-dot {{ width: 8px; height: 8px; border-radius: 50%; background: var(--ink-tertiary); opacity: 0.5; }}
+  .pulse-label {{ font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--ink-tertiary); text-transform: uppercase; letter-spacing: 1px; }}
+  .stats-strip {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 1px; background: var(--border); margin-bottom: 56px; }}
+  .stat {{ background: var(--surface-0); padding: 24px 20px; }}
+  .stat:first-child {{ padding-left: 0; }}
+  .stat-value {{ font-size: 36px; font-weight: 700; letter-spacing: -1.5px; line-height: 1; margin-bottom: 6px; }}
+  .stat-value.orange {{ color: var(--signal-orange); }}
+  .stat-label {{ font-size: 11px; text-transform: uppercase; letter-spacing: 1.2px; color: var(--ink-tertiary); font-weight: 500; }}
+  .section-title {{ font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; color: var(--ink-muted); font-weight: 600; margin-bottom: 20px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }}
+  .timeline-section {{ margin-bottom: 56px; }}
+  .timeline-grid {{ display: flex; gap: 2px; align-items: flex-end; height: 160px; padding-bottom: 28px; position: relative; }}
+  .timeline-bar-group {{ flex: 1; display: flex; flex-direction: column; align-items: center; height: 100%; justify-content: flex-end; position: relative; }}
+  .timeline-bar {{ width: 100%; min-height: 2px; background: var(--signal-orange); opacity: 0.7; transition: opacity 0.15s ease; }}
+  .timeline-bar:hover {{ opacity: 1; }}
+  .timeline-bar.spike {{ opacity: 0.9; }}
+  .timeline-label {{ position: absolute; bottom: -24px; font-family: 'JetBrains Mono', monospace; font-size: 10px; color: var(--ink-muted); white-space: nowrap; }}
+  .timeline-tooltip {{ position: absolute; top: -28px; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--ink-secondary); opacity: 0; transition: opacity 0.15s ease; pointer-events: none; }}
+  .timeline-bar-group:hover .timeline-tooltip {{ opacity: 1; }}
+  .two-col {{ display: grid; grid-template-columns: 1fr 1fr; gap: 48px; margin-bottom: 56px; }}
+  .contact-row {{ display: grid; grid-template-columns: 1fr 60px 100px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--border); gap: 12px; }}
+  .contact-row:last-child {{ border-bottom: none; }}
+  .contact-row:hover {{ background: var(--surface-1); margin: 0 -8px; padding-left: 8px; padding-right: 8px; }}
+  .contact-name {{ font-size: 14px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+  .contact-count {{ font-family: 'JetBrains Mono', monospace; font-size: 13px; color: var(--ink-secondary); text-align: right; }}
+  .contact-bar-wrap {{ height: 6px; background: var(--surface-2); overflow: hidden; }}
+  .contact-bar {{ height: 100%; background: var(--signal-orange); opacity: 0.6; }}
+  .event-row {{ display: grid; grid-template-columns: 1fr 48px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--border); }}
+  .event-row:last-child {{ border-bottom: none; }}
+  .event-row:hover {{ background: var(--surface-1); margin: 0 -8px; padding-left: 8px; padding-right: 8px; }}
+  .event-type {{ font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--ink-secondary); }}
+  .event-count {{ font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--ink-tertiary); text-align: right; }}
+  .event-type .dot {{ display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 8px; vertical-align: middle; }}
+  .dot-msg {{ background: var(--signal-orange); }}
+  .dot-session {{ background: var(--signal-blue); }}
+  .dot-system {{ background: var(--signal-green); }}
+  .lifecycle-section {{ margin-bottom: 56px; }}
+  .lifecycle-track {{ position: relative; height: 56px; background: var(--surface-1); overflow: hidden; }}
+  .lifecycle-line {{ position: absolute; top: 50%; left: 0; right: 0; height: 1px; background: var(--border-emphasis); }}
+  .lifecycle-event {{ position: absolute; top: 50%; transform: translate(-50%, -50%); width: 10px; height: 10px; border-radius: 50%; cursor: default; }}
+  .lifecycle-event.started {{ background: var(--signal-green); box-shadow: 0 0 0 3px var(--signal-green-soft); }}
+  .lifecycle-event.stopped {{ background: var(--signal-red); box-shadow: 0 0 0 3px var(--signal-red-soft); }}
+  .lifecycle-event.healme {{ background: var(--signal-orange); box-shadow: 0 0 0 3px var(--signal-orange-soft); width: 12px; height: 12px; }}
+  .lifecycle-event.compaction {{ background: var(--signal-blue); box-shadow: 0 0 0 3px var(--signal-blue-soft); }}
+  .lifecycle-labels {{ display: flex; justify-content: space-between; margin-top: 8px; }}
+  .lifecycle-labels span {{ font-family: 'JetBrains Mono', monospace; font-size: 10px; color: var(--ink-muted); }}
+  .lifecycle-legend {{ display: flex; gap: 20px; margin-top: 12px; }}
+  .legend-item {{ display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--ink-tertiary); }}
+  .legend-dot {{ width: 6px; height: 6px; border-radius: 50%; }}
+  .response-section {{ margin-bottom: 56px; }}
+  .response-grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 1px; background: var(--border); }}
+  .response-card {{ background: var(--surface-0); padding: 20px 16px; }}
+  .response-name {{ font-size: 12px; color: var(--ink-tertiary); margin-bottom: 8px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+  .response-time {{ font-size: 24px; font-weight: 700; letter-spacing: -0.8px; line-height: 1; margin-bottom: 4px; }}
+  .response-unit {{ font-size: 14px; font-weight: 500; color: var(--ink-tertiary); }}
+  .response-meta {{ font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--ink-muted); }}
+  .callout {{ display: flex; align-items: flex-start; gap: 12px; padding: 16px 20px; background: var(--signal-orange-soft); border-left: 2px solid var(--signal-orange); margin-bottom: 56px; font-size: 13px; color: var(--ink-secondary); line-height: 1.5; }}
+  .callout strong {{ color: var(--ink); }}
+  .callout-icon {{ font-size: 16px; flex-shrink: 0; margin-top: 1px; }}
+  .footer {{ padding-top: 24px; border-top: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }}
+  .footer-left {{ font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--ink-muted); }}
+  .footer-right {{ font-size: 12px; color: var(--ink-muted); }}
+  @keyframes fadeSlideUp {{ from {{ opacity: 0; transform: translateY(8px); }} to {{ opacity: 1; transform: translateY(0); }} }}
+  .animate-in {{ animation: fadeSlideUp 0.4s ease-out both; }}
+  .delay-1 {{ animation-delay: 0.1s; }} .delay-2 {{ animation-delay: 0.2s; }}
+  .delay-3 {{ animation-delay: 0.3s; }} .delay-4 {{ animation-delay: 0.4s; }}
+  .delay-5 {{ animation-delay: 0.5s; }} .delay-6 {{ animation-delay: 0.6s; }}
+  .delay-7 {{ animation-delay: 0.7s; }}
+  @media (max-width: 768px) {{
+    .page {{ padding: 32px 20px 48px; }}
+    .header {{ flex-direction: column; gap: 4px; }}
+    .header h1 {{ font-size: 24px; }}
+    .two-col {{ grid-template-columns: 1fr; gap: 40px; }}
+    .stat-value {{ font-size: 28px; }}
+    .contact-row {{ grid-template-columns: 1fr 48px; }}
+    .contact-bar-wrap {{ display: none; }}
+    .lifecycle-legend {{ flex-wrap: wrap; }}
+    .footer {{ flex-direction: column; gap: 8px; align-items: flex-start; }}
+  }}
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="header animate-in">
+    <h1>Dispatch Bus</h1>
+    <span class="window">{start_hour} → {end_hour} EDT · {date_str}</span>
+  </div>
+  <p class="subtitle animate-in delay-1">
+    <strong>{data['total']:,} events</strong> across {data['topics']} topics, {data['sessions']} sessions.
+  </p>
+  <div class="pulse-row animate-in delay-1">
+    <div class="pulse-dot"></div>
+    <span class="pulse-label">Snapshot · {end_hour} EDT</span>
+  </div>
+  <div class="stats-strip animate-in delay-2">
+    <div class="stat"><div class="stat-value">{msgs_in}</div><div class="stat-label">Messages In</div></div>
+    <div class="stat"><div class="stat-value">{injections}</div><div class="stat-label">Injections</div></div>
+    <div class="stat"><div class="stat-value">{data['turn_count']}</div><div class="stat-label">Turns Complete</div></div>
+    <div class="stat"><div class="stat-value orange">{avg_resp}</div><div class="stat-label">Avg Response</div></div>
+    <div class="stat"><div class="stat-value">{daemon_starts}</div><div class="stat-label">Daemon Starts</div></div>
+  </div>
+  {spike_callout}
+  <div class="timeline-section animate-in delay-3">
+    <div class="section-title">Event Volume · 15-min buckets</div>
+    <div class="timeline-grid" id="timeline"></div>
+  </div>
+  <div class="two-col animate-in delay-4">
+    <div>
+      <div class="section-title">Message Volume by Source</div>
+      <div id="contacts"></div>
+    </div>
+    <div>
+      <div class="section-title">Event Types</div>
+      <div id="events"></div>
+    </div>
+  </div>
+  <div class="response-section animate-in delay-5">
+    <div class="section-title">Avg Response Time by Session</div>
+    <div class="response-grid" id="responses"></div>
+  </div>
+  <div class="lifecycle-section animate-in delay-6">
+    <div class="section-title">Daemon Lifecycle</div>
+    <div class="lifecycle-track" id="lifecycle-track">
+      <div class="lifecycle-line"></div>
+    </div>
+    <div class="lifecycle-labels">{lc_labels}</div>
+    <div class="lifecycle-legend">
+      <div class="legend-item"><div class="legend-dot" style="background:var(--signal-green)"></div>started</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--signal-red)"></div>stopped</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--signal-orange)"></div>healme</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--signal-blue)"></div>compaction</div>
+    </div>
+  </div>
+  <div class="footer animate-in delay-7">
+    <span class="footer-left">dispatch/state/bus.db · {data['topics']} topics · sqlite</span>
+    <span class="footer-right">Generated by Sven · {gen_time}</span>
+  </div>
+</div>
+<script>
+const timeline = {timeline_json};
+const maxV = Math.max(...timeline.map(d => d.v));
+const el = document.getElementById("timeline");
+timeline.forEach((d, i) => {{
+  const group = document.createElement("div");
+  group.className = "timeline-bar-group";
+  const h = Math.max(2, (d.v / maxV) * 130);
+  const isSpike = d.v > maxV * 0.6;
+  const isLast = i === timeline.length - 1;
+  group.innerHTML = `
+    <div class="timeline-tooltip">${{d.v}}${{isLast ? ' (partial)' : ''}}</div>
+    <div class="timeline-bar${{isSpike ? ' spike' : ''}}" style="height:${{h}}px;${{isLast ? 'opacity:0.35;' : ''}}"></div>
+    ${{i % 4 === 0 ? `<span class="timeline-label">${{d.t}}</span>` : ''}}
+  `;
+  el.appendChild(group);
+}});
+
+const contacts = {contacts_json};
+const maxMsg = contacts[0]?.count || 1;
+const contactsEl = document.getElementById("contacts");
+contacts.forEach(c => {{
+  const row = document.createElement("div");
+  row.className = "contact-row";
+  row.innerHTML = `
+    <span class="contact-name">${{c.name}}</span>
+    <span class="contact-count">${{c.count}}</span>
+    <div class="contact-bar-wrap"><div class="contact-bar" style="width:${{(c.count/maxMsg)*100}}%"></div></div>
+  `;
+  contactsEl.appendChild(row);
+}});
+
+const events = {events_json};
+const eventsEl = document.getElementById("events");
+events.forEach(e => {{
+  const dotClass = e.topic === "msg" ? "dot-msg" : e.topic === "session" ? "dot-session" : "dot-system";
+  const row = document.createElement("div");
+  row.className = "event-row";
+  row.innerHTML = `
+    <span class="event-type"><span class="dot ${{dotClass}}"></span>${{e.type}}</span>
+    <span class="event-count">${{e.count}}</span>
+  `;
+  eventsEl.appendChild(row);
+}});
+
+const responses = {responses_json};
+const responsesEl = document.getElementById("responses");
+responses.forEach(r => {{
+  const card = document.createElement("div");
+  card.className = "response-card";
+  card.innerHTML = `
+    <div class="response-name">${{r.name}}</div>
+    <div class="response-time">${{r.avg}}<span class="response-unit">${{r.unit}}</span></div>
+    <div class="response-meta">${{r.count}} turns</div>
+  `;
+  responsesEl.appendChild(card);
+}});
+
+const lifecycleEvents = {lifecycle_json};
+const track = document.getElementById("lifecycle-track");
+const startMin = {lc_start_hour} * 60;
+const endMin = {lc_end_hour} * 60;
+const rangeMin = endMin - startMin;
+lifecycleEvents.forEach(e => {{
+  const parts = e.time.split(":");
+  const mins = parseInt(parts[0]) * 60 + parseInt(parts[1]) + parseInt(parts[2]) / 60;
+  const pct = ((mins - startMin) / rangeMin) * 100;
+  const dot = document.createElement("div");
+  dot.className = `lifecycle-event ${{e.type}}`;
+  dot.style.left = `${{pct}}%`;
+  dot.title = `${{e.time}} — ${{e.type}}`;
+  track.appendChild(dot);
+}});
+</script>
+</body>
+</html>"""
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Generate Dispatch Bus dashboard")
+    parser.add_argument("--hours", type=int, default=6, help="Hours to look back")
+    parser.add_argument(
+        "--output",
+        default="/tmp/bus-dashboard/index.html",
+        help="Output HTML path",
+    )
+    parser.add_argument(
+        "--db",
+        default=os.path.expanduser("~/dispatch/state/bus.db"),
+        help="Path to bus.db",
+    )
+    parser.add_argument("--publish", action="store_true", help="Publish to sven-pages")
+    parser.add_argument(
+        "--public", action="store_true", help="Make published page public"
+    )
+    args = parser.parse_args()
+
+    if args.public:
+        args.publish = True
+
+    if not os.path.exists(args.db):
+        print(f"Error: {args.db} not found", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Querying bus.db for last {args.hours} hours...")
+    data = query_bus_data(args.db, args.hours)
+    print(f"Found {data['total']:,} events")
+
+    html = generate_html(data, args.hours)
+
+    output_path = Path(args.output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(html)
+    print(f"Written to {output_path}")
+
+    if args.publish:
+        publish_script = os.path.expanduser(
+            "~/.claude/skills/sven-pages/scripts/publish"
+        )
+        cmd = [publish_script, str(output_path.parent)]
+        if args.public:
+            cmd.append("--public")
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        print(result.stdout)
+        if result.returncode != 0:
+            print(result.stderr, file=sys.stderr)
+            sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

@@ -322,6 +322,25 @@ rm -f /tmp/dispatch-watchdog-crashes.txt
 ~/dispatch/bin/watchdog
 ```
 
+## Scheduling Tasks
+
+**CRITICAL: NEVER create new LaunchAgents or launchd plists for scheduled tasks.** The ONLY LaunchAgents allowed are:
+- `com.dispatch.daemon.plist` — the main daemon
+- `com.dispatch.watchdog.plist` — the watchdog
+
+**ALL scheduled/recurring tasks MUST use the reminder system** (`~/dispatch/state/reminders.json`). The daemon's poll loop fires reminders at their scheduled times — no separate processes needed.
+
+```bash
+# Add a nightly task at 2am ET (see setup-nightly-tasks.py for examples)
+# Use mode "script" for shell commands, "agent" for Claude sessions
+~/dispatch/scripts/setup-nightly-tasks.py
+
+# List existing reminders
+claude-assistant remind list
+```
+
+Current nightly tasks (all 2am ET): memory consolidation, skillify, bug finder, vacation house scraper.
+
 ## Transcript Directories
 
 Each contact has their own directory, organized by backend:

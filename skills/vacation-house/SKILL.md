@@ -1,6 +1,6 @@
 ---
 name: vacation-house
-description: Track ski house search in VT/NH/ME. Criteria, websites, properties, timing strategy. Use when discussing vacation home buying.
+description: Track ski house search in Vermont. Criteria, websites, properties, timing strategy. Use when discussing vacation home buying.
 ---
 
 # Vacation House Search
@@ -15,8 +15,9 @@ Nikhil & Caro are looking to buy a ski house in the next 1-2 years.
 | **Bathrooms** | 3+ full minimum |
 | **Land** | 10+ acres minimum |
 | **Water** | Pond or lake frontage (huge bonus) |
-| **Location** | Vermont, New Hampshire, or Maine |
-| **Ski access** | Max 45 min to a ski mountain |
+| **Location** | **Vermont ONLY** |
+| **Ski access** | Max 45 min to a ski mountain. **Killington is the #1 priority mountain.** |
+| **Property type** | Houses only — **NO vacant land, lots, or land-only listings** |
 | **Setting** | Rural, dark skies (no main streets) |
 
 ## Caroline's Aesthetic (THE VIBE)
@@ -79,21 +80,25 @@ These are the gold standard - match this energy:
 
 ## Area Notes
 
-### Vermont
-- **Stowe** - Most prestigious, strong appreciation, $$$ premium
-- **Sugarbush/Mad River Valley** - More affordable entry, authentic VT vibe, good rentals
-- **Killington/Okemo area** - Strong short-term rental market to offset costs
-- **Northeast Kingdom** - Most affordable, more remote, less rental income potential
+### Vermont (ONLY state searched)
+- **Killington/Okemo area** — **Primary target.** Strong short-term rental market, closest to Boston
+- **Sugarbush/Mad River Valley** — More affordable entry, authentic VT vibe, good rentals
+- **Stowe** — Most prestigious, strong appreciation, $$$ premium
+- **Northeast Kingdom** — Most affordable, more remote, less rental income potential
 
-### New Hampshire
-- **White Mountains** - Often more affordable than VT equivalents
-- **Lakes Region** - Great water access, less ski proximity
-- **Mt. Sunapee/Ragged Mountain area** - Underrated, good value
+### Ski Mountain Priority
+**Killington is the #1 ski mountain.** Always list Killington distance first. The scraper enriches every listing with driving distances to 9 VT mountains:
+1. Killington (always first)
+2. Sugarbush
+3. Stowe
+4. Okemo
+5. Stratton
+6. Mount Snow
+7. Jay Peak
+8. Burke Mountain
+9. Mad River Glen
 
-### Maine
-- **Sugarloaf area** - Best skiing in Maine, growing market
-- **Sunday River area** - More accessible from Boston
-- **Lakes region** - Beautiful but longer drive to slopes
+**Ski distances must NEVER be "unknown".** The `enrich_ski_distances()` function uses `goplaces distance` CLI as a fallback when the main enrichment pipeline doesn't produce ski data.
 
 ## Properties of Interest
 
@@ -372,4 +377,156 @@ Every listing saved must include:
 
 ---
 
-*Last updated: 2026-02-15*
+## Nightly Scraper Pipeline
+
+Runs as a **2am ET reminder** via the dispatch daemon's reminder system (NOT a LaunchAgent). The scraper **only collects data** — the skill handles presentation, publishing, and notification.
+
+### Architecture: Scraper vs Skill
+
+**Scraper** (`nightly-scraper` CLI) — data collection only:
+- Discovery, dedupe, enrichment (scrapling), refinement (AI scoring), verification
+- Outputs JSON with all listing data
+- Archives to `~/Documents/vacation-houses/{date}/`
+
+**Skill** (this document) — presentation and delivery:
+- Generate HTML report from scraper JSON
+- Publish to sven-pages for visual browsing
+- Send SMS with summary + link to report
+- The scraper should NOT format SMS or publish pages
+
+### Pipeline Steps
+1. **DISCOVERY**: `unified-search` across 6 VT sources: Redfin, Zillow, Hickok & Boardman, Coldwell Banker, **Ski Country Real Estate** (Killington specialist), **LandSearch VT** (houses with acreage). Houses only — Redfin uses `property-type=house`, Zillow filters out land/manufactured, Ski Country filters by beds/baths, LandSearch uses `type=house`.
+2. **DEDUPE**: Compares against Cloudflare D1 database — skips already-seen listings
+3. **ENRICHMENT**: Scrapling (webfetch) scrapes each listing page for detailed property info (acres, construction style, water features, year built, heating). Google Places API checks nearby POIs (fire stations, airports). **Use scrapling for all scraping — never claude CLI web search.**
+3b. **PARCEL ENRICHMENT**: For each listing with lat/lon, fetch VCGI parcel data from `vcgi-cache-proxy.nicklaudethorat.workers.dev/parcel?lat=X&lng=Y`. Stores parcel geometry (GeoJSON polygon), assessed values (land + improvement), official acreage, SPAN, owner, town. Used for map overlays in the HTML report.
+4. **REFINEMENT**: Each new listing scored 1-10 by Claude Opus (via `claude -p --model opus`) against:
+   - Hard requirements (beds, baths, acres, ski proximity)
+   - Caroline's vibe criteria (log cabin, rustic, water, views, character)
+   - Similarity to the 2 favorite properties
+5. **VERIFICATION**: Re-scrapes listing URL and cross-checks enriched data against source text to catch hallucinations. Downgrades score by 2 if verification fails.
+6. **ARCHIVE**: All results saved to `~/Documents/vacation-houses/{date}/nightly-scraper-results.md`
+
+### "Good to Know" Enrichment
+
+Every listing gets nearby POI checks via Google Places:
+- **Fire stations** — proximity is GOOD for rural properties (safety), but being right next to one is bad (noise/sirens)
+- **Airports** — nearby airports are bad (noise), regional airports are neutral info
+- **Town info** — construction style, year built, heating type, water source from listing scrape
+
+### Publishing Results (sven-pages + frontend skill)
+
+**Instead of cramming results into SMS, publish a beautiful visual HTML report.**
+
+Use the **bus dashboard design pattern** — the same warm papery aesthetic from the Dispatch Bus dashboard:
+
+**Design System (MUST follow):**
+- **Typography**: Space Grotesk (sans-serif) + JetBrains Mono (monospace) via Google Fonts
+- **Color palette**: Warm papery `#f7f5f2` base, sepia-tinted grays, single accent `#c2410c` (signal orange)
+- **CSS variables**: `--ink`, `--ink-secondary`, `--ink-tertiary`, `--surface-0/1/2`, `--signal-orange/green/red/blue`
+- **Stats strip**: Large numbers (36px) with 1px grid dividers
+- **Section titles**: 11px uppercase, `letter-spacing: 1.5px`, muted color with bottom border
+- **Callout boxes**: Left-border accent + soft background tint
+- **Staggered entry animations**: `fadeSlideUp` with delay classes
+- **Mobile-responsive**: Breakpoint at 768px
+
+**Report must include:**
+1. Header with title + date window (JetBrains Mono)
+2. **Executive summary** — lead with what matters: "No unicorns today" or "1 amazing find." Write 2-3 sentences about the best listings in plain language, not pipeline metrics. Do NOT show verification counts, enrichment rates, or pipeline internals at the top. The reader wants to know: "did we find a house?"
+3. Stats strip — user-facing metrics only: Must-See count, Worth a Look count, Interesting count, Total Scanned, States
+4. **Best find callout** — highlight the single best listing with a link to jump to its card
+5. **Featured listing cards** for enriched properties, each with:
+   - **Photo carousel** (10 photos from Redfin `bigphoto` URLs, swipeable with touch support)
+   - Score circle badge (color-coded: green 5+, blue 4, amber 3, red 1-2)
+   - Verification status tag
+   - Address as deep link to listing URL
+   - Price in JetBrains Mono + signal orange
+   - Meta row: beds, baths, sqft, acres, drive time, ski distance
+   - Tags: construction style, water features, acreage, vibe match
+   - **Parcel & Terrain Maps** (two side-by-side MapLibre GL maps per listing):
+     - **Satellite + Parcel Overlay**: ESRI satellite imagery with VCGI parcel boundary polygon in blue
+     - **Terrain Map**: AWS Terrarium terrain tiles with parcel boundary
+     - Both auto-center on listing lat/lon, zoom to fit parcel
+     - Parcel geometry from VCGI via `vcgi-cache-proxy.nicklaudethorat.workers.dev`
+     - Tiles via `sven-plot-proxy.nicklaudethorat.workers.dev` (satellite, terrain, OSM)
+     - MapLibre GL JS v4 embedded in HTML report
+   - **VCGI Parcel Info Row**: Assessed value (land + improvement), official acreage, SPAN, owner
+   - Description paragraph
+   - Good to Know (max 3 items)
+   - Flags callout (red-tinted)
+5. Quick reference table of ALL listings (sortable by score)
+6. Score distribution bar chart
+7. Footer with source info
+
+**Photo scraping**: Fetch Redfin listing HTML via webfetch, extract `bigphoto` URLs with `grep -oE 'https://ssl\.cdn-redfin\.com/photo/.*/bigphoto/[^"]+' | sort -u | head -20`
+
+**Parcel + Terrain Maps** (via MapLibre GL JS):
+- Include MapLibre GL JS v4 (`unpkg.com/maplibre-gl@4.1.2`) in HTML `<head>`
+- For each listing with `vcgi_geometry`, render TWO side-by-side map containers (200px height each):
+  1. **Satellite + Parcel**: ESRI satellite tiles via `sven-plot-proxy.nicklaudethorat.workers.dev/satellite/{z}/{y}/{x}`
+  2. **Terrain + Parcel**: AWS Terrarium terrain tiles via `sven-plot-proxy.nicklaudethorat.workers.dev/terrain/{z}/{x}/{y}.png`
+- Add parcel boundary as GeoJSON source with fill (#3b82f6, opacity 0.2) and line (#3b82f6, width 2)
+- Auto-fit bounds to parcel geometry with padding
+- Show VCGI info below maps: assessed value, official acreage, SPAN
+4. Publish to sven-pages:
+   ```bash
+   ~/.claude/skills/sven-pages/scripts/publish ./report-folder --name vacation-scraper-YYYY-MM-DD --public
+   ```
+4. SMS just sends a short summary + link:
+   ```
+   🏡 3 new listings today (top score: 8/10)
+   ⭐ 187 East Hill Rd, Woodbury VT — $1.25M — 8/10
+   🔹 206 Conway Rd, Starksboro VT — $727K — 7/10
+   🔹 338 Percy Rd, Stark NH — $700K — 6/10
+
+   Full report: https://sven-pages-worker.nicklaudethorat.workers.dev/vacation-scraper-2026-03-15/
+   ```
+
+### Model Policy
+
+**ALL AI calls in the scraper MUST use opus.** Never haiku, never sonnet.
+- Enrichment parsing: `claude -p ... --model opus`
+- Refinement scoring: `claude -p ... --model opus`
+- Verification: `claude -p ... --model opus`
+
+### SMS Format Requirements
+
+Every listing in SMS MUST include:
+- Address + price
+- Clickable listing URL (right below address, not buried)
+- Ski distances (show "unknown" if not available, never omit)
+- Score and vibe match
+- Drive from Brighton
+- NEVER truncate with "and X more" — link to full report instead
+
+### Manual Run
+```bash
+# Full pipeline with SMS notification
+~/.claude/skills/vacation-house/scripts/nightly-scraper --notify
+
+# Dry run (no D1 sync, no SMS)
+~/.claude/skills/vacation-house/scripts/nightly-scraper --dry-run
+
+# Custom score threshold
+~/.claude/skills/vacation-house/scripts/nightly-scraper --notify --min-score 7
+
+# JSON output
+~/.claude/skills/vacation-house/scripts/nightly-scraper --json
+```
+
+### Scheduling
+Runs via the **dispatch daemon reminder system** at 2am ET daily (same batch as consolidation, skillify, bug finder). **NEVER create a LaunchAgent for this** — always use reminders.
+
+```bash
+# Check reminder status
+claude-assistant remind list
+
+# The reminder fires an agent-mode task that:
+# 1. Runs the scraper CLI
+# 2. Builds a beautiful HTML report (bus dashboard design)
+# 3. Publishes to sven-pages
+# 4. Sends SMS summary + link to the group chat
+```
+
+---
+
+*Last updated: 2026-03-15*

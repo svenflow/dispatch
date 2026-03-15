@@ -319,6 +319,9 @@ async function handleCommand(message) {
     case 'javascript':
       return await executeScript(params.tabId, params.code || params.text);
 
+    case 'eval_all_frames':
+      return await executeScriptAllFrames(params.tabId, params.code || params.text);
+
     // Window management
     case 'resize_window':
       return await resizeWindow(params.tabId, params.width, params.height);
@@ -464,6 +467,23 @@ async function executeScript(tabId, code) {
     world: 'MAIN'
   });
   return results?.[0]?.result;
+}
+
+// Execute script in ALL frames (including cross-origin iframes)
+async function executeScriptAllFrames(tabId, code) {
+  const results = await chrome.scripting.executeScript({
+    target: { tabId, allFrames: true },
+    func: (code) => {
+      try {
+        return eval(code);
+      } catch (e) {
+        return { error: e.message };
+      }
+    },
+    args: [code],
+    world: 'MAIN'
+  });
+  return results?.map(r => r.result).filter(r => r !== undefined && r !== null);
 }
 
 // Click by element ref

@@ -6,12 +6,11 @@
 """
 Unified Ski Home Search - Aggregates listings from ALL sources.
 
-Searches 9 sources in parallel:
-- Redfin (VT, NH, ME)
-- Zillow (VT, NH, ME)
+Searches Vermont only across multiple sources:
+- Redfin (VT)
+- Zillow (VT)
 - Hickok & Boardman (VT ski properties)
-- Coldwell Banker Lifestyles (VT/NH ski homes)
-- Mahoosuc Realty (Sunday River / Bethel ME)
+- Coldwell Banker Lifestyles (VT ski homes)
 
 Usage:
     unified-search search                          # Search all with defaults
@@ -287,6 +286,8 @@ def search_zillow(state: str, criteria: dict) -> list:
         "baths": {"min": criteria.get('min_baths', 3)},
         "lot": {"min": 435600},  # 10 acres in sqft
         "con": {"value": False},  # No condos
+        "land": {"value": False},  # No vacant land
+        "manu": {"value": False},  # No manufactured homes
     }
     if criteria.get('max_price'):
         filter_state["price"] = {"max": criteria['max_price']}
@@ -406,6 +407,175 @@ def search_mahoosuc(criteria: dict) -> list:
     return run_local_cli("mahoosuc", args, timeout_sec=30)
 
 
+WEBFETCH = Path.home() / ".claude/skills/webfetch/scripts/webfetch"
+
+
+def run_webfetch(url: str, timeout_sec: int = 30) -> str:
+    """Fetch a URL using webfetch and return markdown content."""
+    try:
+        result = subprocess.run(
+            [str(WEBFETCH), url],
+            capture_output=True, text=True, timeout=timeout_sec
+        )
+        return result.stdout if result.returncode == 0 else ""
+    except:
+        return ""
+
+
+def search_skicountry(criteria: dict) -> list:
+    """Search Ski Country Real Estate (Killington/Pico specialist)."""
+    # Fetch all residential listings sorted by price descending
+    content = run_webfetch(
+        "https://skicountryrealestate.com/sales/search?view=allproperties&sort=price&order=desc",
+        timeout_sec=30
+    )
+    if not content:
+        return []
+
+    listings = []
+    min_beds = criteria.get('min_beds', 3)
+    min_baths = criteria.get('min_baths', 3)
+    max_price = criteria.get('max_price')
+
+    # Parse listing blocks from markdown output
+    # Format: address - town, Vermont. description
+    # With beds, baths, sqft, price on nearby lines
+    lines = content.split('\n')
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+
+        # Look for price lines like "$599,000"
+        price_match = re.search(r'\$([0-9,]+)', line)
+        if price_match and not any(kw in line.lower() for kw in ['mls', 'ft2']):
+            price_str = price_match.group(1).replace(',', '')
+            if price_str.isdigit():
+                price = int(price_str)
+
+                # Skip land-only (no bedrooms mentioned in nearby lines)
+                context = '\n'.join(lines[max(0, i-5):min(len(lines), i+10)])
+
+                # Skip if price too low (land) or too high
+                if price < 100000:
+                    i += 1
+                    continue
+                if max_price and price > max_price:
+                    i += 1
+                    continue
+
+                beds_match = re.search(r'(\d+)\s*Bed', context)
+                baths_match = re.search(r'(\d+)\s*Bath', context)
+                sqft_match = re.search(r'([0-9,]+)\s*FT2', context)
+
+                beds = int(beds_match.group(1)) if beds_match else 0
+                baths = int(baths_match.group(1)) if baths_match else 0
+
+                # Skip land-only (no beds/baths) and below minimum
+                if beds == 0 and baths == 0:
+                    i += 1
+                    continue
+                if beds < min_beds or baths < min_baths:
+                    i += 1
+                    continue
+
+                # Extract address from nearby lines
+                addr_match = re.search(r'(\d+\s+[\w\s]+)\s*-\s*([\w\s]+),\s*Vermont', context)
+                address = f"{addr_match.group(1).strip()}, {addr_match.group(2).strip()}, VT" if addr_match else ""
+
+                # Extract MLS link
+                link_match = re.search(r'\(/sales/search\?view=property&id=([^)]+)\)', context)
+                url = f"https://skicountryrealestate.com/sales/search?view=property&id={link_match.group(1)}" if link_match else ""
+
+                sqft_str = sqft_match.group(1).replace(',', '') if sqft_match else ""
+                sqft = int(sqft_str) if sqft_str.isdigit() else None
+
+                if address:
+                    listings.append({
+                        'address': address,
+                        'price': price,
+                        'beds': beds,
+                        'baths': baths,
+                        'sqft': sqft,
+                        'url': url,
+                        'source': 'Ski Country RE',
+                        'state': 'VT'
+                    })
+        i += 1
+
+    return listings[:20]
+
+
+def search_landsearch(criteria: dict) -> list:
+    """Search LandSearch.com for VT houses with land."""
+    min_beds = criteria.get('min_beds', 3)
+    content = run_webfetch(
+        f"https://www.landsearch.com/properties/vermont?type=house&min-beds={min_beds}&min-size=10-acres&sort=newest",
+        timeout_sec=30
+    )
+    if not content:
+        return []
+
+    listings = []
+    max_price = criteria.get('max_price')
+    min_baths = criteria.get('min_baths', 3)
+
+    # Parse listing blocks from markdown
+    # Format: [$price size acres \n County beds bd, baths ba • sqft sq ft](/properties/slug/id)
+    pattern = re.compile(
+        r'\[\$([0-9,]+)\s*([\d.]+)\s*acres.*?\n'
+        r'.*?(\d+)\s*bd,\s*(\d+)\s*ba\s*•?\s*([0-9,]*)\s*sq ft\]'
+        r'\(/properties/([^)]+)\)',
+        re.DOTALL
+    )
+
+    for m in pattern.finditer(content):
+        price = int(m.group(1).replace(',', ''))
+        acres = float(m.group(2))
+        beds = int(m.group(3))
+        baths = int(m.group(4))
+        sqft_str = m.group(5).replace(',', '')
+        sqft = int(sqft_str) if sqft_str.isdigit() else None
+        slug = m.group(6)
+
+        if max_price and price > max_price:
+            continue
+        if baths < min_baths:
+            continue
+
+        # Extract address from slug (e.g., "119-newton-hill-rd-vernon-vt-05354/5023922")
+        addr_parts = slug.split('/')[0].split('-')
+        # Find VT in parts to split address from zip
+        vt_idx = None
+        for idx, p in enumerate(addr_parts):
+            if p.lower() == 'vt':
+                vt_idx = idx
+                break
+
+        if vt_idx:
+            street = ' '.join(addr_parts[:vt_idx]).title()
+            town = addr_parts[vt_idx - 1] if vt_idx > 0 else ""
+            # Reconstruct: try to find town vs street separation
+            address = f"{street}, VT"
+        else:
+            address = ' '.join(addr_parts).title()
+
+        url = f"https://www.landsearch.com/properties/{slug}"
+
+        listings.append({
+            'address': address,
+            'price': price,
+            'beds': beds,
+            'baths': baths,
+            'sqft': sqft,
+            'acres': acres,
+            'url': url,
+            'source': 'LandSearch',
+            'state': 'VT'
+        })
+
+    return listings[:20]
+
+
 def normalize_listing(listing: dict) -> dict:
     """Normalize listing fields."""
     price = listing.get('price')
@@ -520,18 +690,18 @@ def cmd_search(args):
     # Build list of all search tasks
     search_tasks = []
 
-    # Redfin for all 3 states
-    for state in ["VT", "NH", "ME"]:
+    # Vermont only (Killington proximity is key)
+    for state in ["VT"]:
         search_tasks.append((f"Redfin {state}", search_redfin, (state, criteria)))
 
-    # Zillow for all 3 states
-    for state in ["VT", "NH", "ME"]:
+    for state in ["VT"]:
         search_tasks.append((f"Zillow {state}", search_zillow, (state, criteria)))
 
-    # Boutique sources
+    # Boutique sources (VT-focused)
     search_tasks.append(("Hickok & Boardman", search_hickok, None))
     search_tasks.append(("Coldwell Banker", search_cblife, None))
-    search_tasks.append(("Mahoosuc Realty", search_mahoosuc, None))
+    search_tasks.append(("Ski Country RE", search_skicountry, None))
+    search_tasks.append(("LandSearch VT", search_landsearch, None))
 
     if not args.json:
         console.print(f"[dim]Searching {len(search_tasks)} sources in parallel...[/dim]\n")

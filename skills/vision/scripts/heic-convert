@@ -1,0 +1,117 @@
+#!/bin/bash
+# heic-convert - Convert HEIC/large images to JPEG, optionally downscaling to fit under 256KB
+# Uses macOS sips (no dependencies)
+
+set -euo pipefail
+
+MAX_SIZE=262144  # 256KB in bytes
+MAX_ATTEMPTS=6
+
+usage() {
+  echo "Usage: heic-convert [--no-downscale] <file1> [file2 ...]"
+  echo ""
+  echo "Converts HEIC (and other image formats) to JPEG using macOS sips."
+  echo "By default, downscales large images iteratively to fit under 256KB"
+  echo "so they can be read by Claude's Read tool."
+  echo ""
+  echo "Options:"
+  echo "  --no-downscale  Convert format only, don't resize to fit under 256KB"
+  echo ""
+  echo "Output files are written to /tmp/ and paths are printed to stdout."
+  exit 1
+}
+
+if [[ $# -eq 0 ]]; then
+  usage
+fi
+
+downscale=true
+files=()
+
+for arg in "$@"; do
+  case "$arg" in
+    --no-downscale) downscale=false ;;
+    --help|-h) usage ;;
+    *) files+=("$arg") ;;
+  esac
+done
+
+if [[ ${#files[@]} -eq 0 ]]; then
+  echo "Error: No files specified." >&2
+  usage
+fi
+
+for input in "${files[@]}"; do
+  # Resolve path
+  if [[ ! "$input" = /* ]]; then
+    input="$(pwd)/$input"
+  fi
+
+  if [[ ! -f "$input" ]]; then
+    echo "Error: File not found: $input" >&2
+    continue
+  fi
+
+  basename=$(basename "$input")
+  name="${basename%.*}"
+  ext="${basename##*.}"
+  ext_lower=$(echo "$ext" | tr '[:upper:]' '[:lower:]')
+  output="/tmp/${name}.jpg"
+
+  # If already a small-enough JPEG and no conversion needed, just copy/report
+  if [[ "$ext_lower" == "jpg" || "$ext_lower" == "jpeg" ]]; then
+    file_size=$(stat -f%z "$input" 2>/dev/null || stat --printf="%s" "$input" 2>/dev/null)
+    if [[ "$downscale" == false ]] || [[ "$file_size" -le "$MAX_SIZE" ]]; then
+      # Already JPEG and small enough (or no downscale requested)
+      if [[ "$input" != "$output" ]]; then
+        cp "$input" "$output"
+      fi
+      echo "$output"
+      continue
+    fi
+  fi
+
+  # Convert to JPEG
+  sips -s format jpeg "$input" --out "$output" >/dev/null 2>&1
+  if [[ $? -ne 0 ]]; then
+    echo "Error: sips failed to convert $input" >&2
+    continue
+  fi
+
+  # Downscale iteratively if needed
+  if [[ "$downscale" == true ]]; then
+    attempt=0
+    while [[ $attempt -lt $MAX_ATTEMPTS ]]; do
+      file_size=$(stat -f%z "$output" 2>/dev/null || stat --printf="%s" "$output" 2>/dev/null)
+      if [[ "$file_size" -le "$MAX_SIZE" ]]; then
+        break
+      fi
+
+      # Get current dimensions
+      width=$(sips -g pixelWidth "$output" | tail -1 | awk '{print $2}')
+      height=$(sips -g pixelHeight "$output" | tail -1 | awk '{print $2}')
+
+      # Scale down by 70% each iteration
+      new_width=$(( width * 70 / 100 ))
+      new_height=$(( height * 70 / 100 ))
+
+      if [[ $new_width -lt 100 ]] || [[ $new_height -lt 100 ]]; then
+        echo "Warning: $basename cannot be reduced below 256KB without becoming tiny" >&2
+        break
+      fi
+
+      sips -z "$new_height" "$new_width" "$output" >/dev/null 2>&1
+      # Re-save as JPEG to recompress after resize
+      sips -s format jpeg "$output" --out "$output" >/dev/null 2>&1
+
+      attempt=$((attempt + 1))
+    done
+
+    final_size=$(stat -f%z "$output" 2>/dev/null || stat --printf="%s" "$output" 2>/dev/null)
+    if [[ "$final_size" -gt "$MAX_SIZE" ]]; then
+      echo "Warning: $basename is ${final_size} bytes (still over 256KB limit)" >&2
+    fi
+  fi
+
+  echo "$output"
+done

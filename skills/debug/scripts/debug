@@ -1,0 +1,970 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# ///
+"""
+debug - Diagnose and troubleshoot the Dispatch personal assistant system.
+
+Usage:
+    debug status                          # System dashboard
+    debug trace <chat_id> [--since 1h]    # End-to-end message trace
+    debug session <name|chat_id>          # Session deep-dive
+    debug incident [--since 1h]           # Auto-scan for anomalies
+    debug routing <chat_id>               # Contact routing info
+"""
+
+import argparse
+import json
+import os
+import re
+import sqlite3
+import subprocess
+import sys
+import time
+from datetime import datetime, timedelta
+from pathlib import Path
+
+# ── Paths ──────────────────────────────────────────────────────────
+HOME = Path.home()
+DISPATCH = HOME / "dispatch"
+STATE = DISPATCH / "state"
+LOGS = DISPATCH / "logs"
+BUS_DB = STATE / "bus.db"
+SESSIONS_JSON = STATE / "sessions.json"
+DAEMON_PID = STATE / "daemon.pid"
+CHAT_DB = HOME / "Library" / "Messages" / "chat.db"
+SESSION_LOGS = LOGS / "sessions"
+
+# macOS Core Data epoch offset
+MACOS_EPOCH_OFFSET = 978307200
+
+# ── ANSI Colors ────────────────────────────────────────────────────
+BOLD = "\033[1m"
+DIM = "\033[2m"
+RED = "\033[31m"
+GREEN = "\033[32m"
+YELLOW = "\033[33m"
+BLUE = "\033[34m"
+MAGENTA = "\033[35m"
+CYAN = "\033[36m"
+RESET = "\033[0m"
+
+# Disable colors if not a terminal
+if not sys.stdout.isatty():
+    BOLD = DIM = RED = GREEN = YELLOW = BLUE = MAGENTA = CYAN = RESET = ""
+
+
+def _no_color():
+    global BOLD, DIM, RED, GREEN, YELLOW, BLUE, MAGENTA, CYAN, RESET
+    BOLD = DIM = RED = GREEN = YELLOW = BLUE = MAGENTA = CYAN = RESET = ""
+
+
+# ── Helpers ────────────────────────────────────────────────────────
+
+def parse_duration(s: str) -> timedelta:
+    """Parse duration string like '1h', '30m', '2d' to timedelta."""
+    match = re.match(r'^(\d+)([smhd])$', s.strip())
+    if not match:
+        raise ValueError(f"Invalid duration: {s}. Use format like 1h, 30m, 2d")
+    val, unit = int(match.group(1)), match.group(2)
+    if unit == 's': return timedelta(seconds=val)
+    if unit == 'm': return timedelta(minutes=val)
+    if unit == 'h': return timedelta(hours=val)
+    if unit == 'd': return timedelta(days=val)
+    raise ValueError(f"Unknown unit: {unit}")
+
+
+def ts_ms_to_str(ts_ms: int) -> str:
+    """Convert Unix ms timestamp to human-readable string."""
+    return datetime.fromtimestamp(ts_ms / 1000).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def ts_ms_to_dt(ts_ms: int) -> datetime:
+    """Convert Unix ms timestamp to datetime."""
+    return datetime.fromtimestamp(ts_ms / 1000)
+
+
+def now_ms() -> int:
+    return int(time.time() * 1000)
+
+
+def chatdb_to_unix_ms(chatdb_ts: int) -> int:
+    """Convert chat.db Core Data nanoseconds to Unix milliseconds."""
+    return int(chatdb_ts / 1_000_000) + MACOS_EPOCH_OFFSET * 1000
+
+
+def unix_ms_to_chatdb(unix_ms: int) -> int:
+    """Convert Unix ms to chat.db Core Data nanoseconds."""
+    return (unix_ms - MACOS_EPOCH_OFFSET * 1000) * 1_000_000
+
+
+def load_sessions() -> dict:
+    """Load sessions.json registry."""
+    try:
+        with open(SESSIONS_JSON) as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"{YELLOW}Warning: Could not load sessions.json: {e}{RESET}", file=sys.stderr)
+        return {}
+
+
+def find_session(identifier: str, sessions: dict) -> tuple[str | None, dict | None]:
+    """Find a session by chat_id, session_name, or contact_name."""
+    # Direct chat_id match
+    if identifier in sessions:
+        return identifier, sessions[identifier]
+    # Match by session_name
+    for cid, s in sessions.items():
+        if s.get("session_name") == identifier:
+            return cid, s
+    # Match by contact_name (case-insensitive)
+    for cid, s in sessions.items():
+        name = s.get("contact_name") or s.get("display_name") or ""
+        if name.lower() == identifier.lower():
+            return cid, s
+    # Partial match
+    for cid, s in sessions.items():
+        name = s.get("contact_name") or s.get("display_name") or ""
+        if identifier.lower() in name.lower() or identifier.lower() in cid.lower():
+            return cid, s
+    return None, None
+
+
+def query_bus(sql: str, params: tuple = ()) -> list[tuple]:
+    """Query bus.db safely."""
+    try:
+        conn = sqlite3.connect(f"file:{BUS_DB}?mode=ro", uri=True, timeout=5)
+        conn.execute("PRAGMA journal_mode=WAL")
+        cursor = conn.execute(sql, params)
+        rows = cursor.fetchall()
+        conn.close()
+        return rows
+    except sqlite3.OperationalError as e:
+        if "locked" in str(e).lower():
+            print(f"{YELLOW}Warning: bus.db locked, skipping{RESET}", file=sys.stderr)
+        else:
+            print(f"{YELLOW}Warning: bus.db error: {e}{RESET}", file=sys.stderr)
+        return []
+    except Exception as e:
+        print(f"{YELLOW}Warning: bus.db error: {e}{RESET}", file=sys.stderr)
+        return []
+
+
+def query_chatdb(sql: str, params: tuple = ()) -> list[tuple]:
+    """Query chat.db safely."""
+    try:
+        conn = sqlite3.connect(f"file:{CHAT_DB}?mode=ro", uri=True, timeout=5)
+        cursor = conn.execute(sql, params)
+        rows = cursor.fetchall()
+        conn.close()
+        return rows
+    except Exception as e:
+        print(f"{YELLOW}Warning: chat.db inaccessible: {e}{RESET}", file=sys.stderr)
+        return []
+
+
+def run_cmd(cmd: list[str], timeout: int = 10) -> str:
+    """Run a shell command, return stdout."""
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return result.stdout.strip()
+    except Exception:
+        return ""
+
+
+def extract_text_from_attributed_body(data):
+    """Extract plain text from NSAttributedString binary data."""
+    if not data:
+        return None
+    try:
+        parts = data.split(b"NSString")
+        if len(parts) < 2:
+            return None
+        content = parts[1][5:]
+        if content[0] == 0x81:
+            length = int.from_bytes(content[1:3], "little")
+            text_start = 3
+        else:
+            length = content[0]
+            text_start = 1
+        text_bytes = content[text_start:text_start + length]
+        return text_bytes.decode("utf-8", errors="ignore")
+    except Exception:
+        return None
+
+
+def format_elapsed(seconds: float) -> str:
+    """Format seconds to human-readable elapsed time."""
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+    if seconds < 3600:
+        return f"{seconds / 60:.0f}m"
+    if seconds < 86400:
+        return f"{seconds / 3600:.1f}h"
+    return f"{seconds / 86400:.1f}d"
+
+
+# ── Subcommands ────────────────────────────────────────────────────
+
+def cmd_status(args):
+    """System dashboard."""
+    result = {}
+    human = not args.json
+
+    # ── Daemon ──
+    if human:
+        print(f"{BOLD}{CYAN}=== Daemon ==={RESET}")
+    pid = None
+    try:
+        pid = int(Path(DAEMON_PID).read_text().strip())
+    except Exception:
+        pass
+
+    if pid:
+        # Check if process is alive
+        try:
+            os.kill(pid, 0)
+            # The PID from daemon.pid may be the uv wrapper; find the actual manager child
+            child_out = run_cmd(["pgrep", "-P", str(pid)])
+            if child_out.strip():
+                actual_pid = int(child_out.strip().split('\n')[0])
+                # Verify child is alive and use it for stats
+                try:
+                    os.kill(actual_pid, 0)
+                    pid = actual_pid
+                except ProcessLookupError:
+                    pass  # Stick with original PID
+            ps_out = run_cmd(["ps", "-p", str(pid), "-o", "etime=,rss=,vsz="])
+            parts = ps_out.split()
+            etime = parts[0] if parts else "?"
+            rss_kb = int(parts[1]) if len(parts) > 1 else 0
+            rss_mb = rss_kb / 1024
+            if human:
+                print(f"  PID: {GREEN}{pid}{RESET}  Uptime: {etime}  Memory: {rss_mb:.0f}MB (RSS)")
+            result["daemon"] = {"pid": pid, "uptime": etime, "rss_mb": round(rss_mb, 1), "alive": True}
+        except ProcessLookupError:
+            if human:
+                print(f"  PID: {RED}{pid} (dead){RESET}")
+            result["daemon"] = {"pid": pid, "alive": False}
+    else:
+        if human:
+            print(f"  {RED}No daemon.pid found{RESET}")
+        result["daemon"] = {"pid": None, "alive": False}
+
+    # ── Watchdog ──
+    if human:
+        print(f"\n{BOLD}{CYAN}=== Watchdog ==={RESET}")
+    wd_out = run_cmd(["launchctl", "list"])
+    wd_loaded = "dispatch-watchdog" in wd_out or "dispatch.watchdog" in wd_out
+    if human:
+        if wd_loaded:
+            print(f"  LaunchAgent: {GREEN}loaded{RESET}")
+        else:
+            print(f"  LaunchAgent: {RED}not loaded{RESET}")
+
+    wd_log = LOGS / "watchdog.log"
+    if wd_log.exists():
+        try:
+            lines = wd_log.read_text().splitlines()
+            if lines and human:
+                print(f"  Last check: {DIM}{lines[-1]}{RESET}")
+        except Exception:
+            pass
+    result["watchdog"] = {"loaded": wd_loaded}
+
+    # ── Signal ──
+    if human:
+        print(f"\n{BOLD}{CYAN}=== Signal ==={RESET}")
+    signal_running = bool(run_cmd(["pgrep", "-f", "signal-cli"]))
+    socket_exists = Path("/tmp/signal-cli.sock").exists()
+    if human:
+        sig_status = f"Process: {'running' if signal_running else 'stopped'}"
+        sig_color = GREEN if signal_running else RED
+        print(f"  {sig_color}{sig_status}{RESET}  Socket: {'exists' if socket_exists else 'missing'}")
+    result["signal"] = {"running": signal_running, "socket": socket_exists}
+
+    # ── Sessions ──
+    if human:
+        print(f"\n{BOLD}{CYAN}=== Sessions ==={RESET}")
+    sessions = load_sessions()
+    if sessions:
+        # Get latest heartbeats from bus
+        heartbeats = {}
+        hb_rows = query_bus(
+            "SELECT key, MAX(timestamp) FROM records WHERE type='session.heartbeat' GROUP BY key"
+        )
+        for key, ts in hb_rows:
+            heartbeats[key] = ts
+
+        if human:
+            print(f"  {'CHAT_ID':<36} {'NAME':<20} {'TIER':<10} {'LAST ACTIVE':<20}")
+            print(f"  {'-'*36} {'-'*20} {'-'*10} {'-'*20}")
+        session_list = []
+        for cid, s in sessions.items():
+            raw_name = s.get("contact_name") or s.get("display_name") or ""
+            name = (raw_name[:24] + "\u2026") if len(raw_name) > 25 else raw_name
+            tier = (s.get("tier") or "-")[:10]
+            sname = s.get("session_name", "")
+            # Try heartbeat first, then last_message_time
+            last_active = "-"
+            hb_ts = heartbeats.get(sname)
+            if hb_ts:
+                last_active = ts_ms_to_str(hb_ts)
+            elif s.get("last_message_time"):
+                last_active = s["last_message_time"][:19]
+            if human:
+                print(f"  {cid:<36} {name:<20} {tier:<10} {last_active:<20}")
+            session_list.append({"chat_id": cid, "name": name, "tier": tier, "last_active": last_active})
+        result["sessions"] = session_list
+    else:
+        if human:
+            print(f"  {DIM}No sessions{RESET}")
+
+    # ── Bus ──
+    if human:
+        print(f"\n{BOLD}{CYAN}=== Bus ==={RESET}")
+    topic_rows = query_bus("SELECT topic, COUNT(*) FROM records GROUP BY topic ORDER BY topic")
+    total = 0
+    bus_stats = {}
+    for topic, count in topic_rows:
+        if human:
+            print(f"  {topic:<25} {count:>8} records")
+        total += count
+        bus_stats[topic] = count
+    if BUS_DB.exists():
+        db_size_mb = BUS_DB.stat().st_size / (1024 * 1024)
+        if human:
+            print(f"  {'TOTAL':<25} {total:>8} records  ({db_size_mb:.1f}MB)")
+        bus_stats["_total"] = total
+        bus_stats["_size_mb"] = round(db_size_mb, 1)
+    result["bus"] = bus_stats
+
+    # ── Resources ──
+    if pid:
+        if human:
+            print(f"\n{BOLD}{CYAN}=== Resources ==={RESET}")
+        try:
+            # Count FDs for daemon PID via lsof, minus the header line
+            lsof_out = run_cmd(["lsof", "-p", str(pid)], timeout=15)
+            lsof_lines = lsof_out.strip().split('\n') if lsof_out.strip() else []
+            fd_count = max(0, len(lsof_lines) - 1)  # Subtract header line
+            if human:
+                print(f"  Open FDs (daemon): {fd_count}")
+            result["resources"] = {"open_fds": fd_count}
+        except Exception as e:
+            if human:
+                print(f"  {YELLOW}Could not count FDs: {e}{RESET}")
+
+    if args.json:
+        print(json.dumps(result, indent=2, default=str))
+
+
+def cmd_trace(args):
+    """End-to-end message trace."""
+    chat_id = args.chat_id
+    since = parse_duration(args.since)
+    window_ms = args.window * 1000  # Convert seconds to ms
+    cutoff_ms = now_ms() - int(since.total_seconds() * 1000)
+
+    sessions = load_sessions()
+    cid, session = find_session(chat_id, sessions)
+    if not cid:
+        # Try using chat_id directly as the key for bus queries
+        cid = chat_id
+    session_name = session.get("session_name", "") if session else ""
+    contact_name = ""
+    if session:
+        contact_name = session.get("contact_name") or session.get("display_name") or ""
+
+    human = not args.json
+
+    if human:
+        print(f"{BOLD}{CYAN}=== Message Trace: {contact_name or cid} ==={RESET}")
+        print(f"{DIM}Since: {since} ago | Window: {args.window}s | Chat ID: {cid}{RESET}\n")
+
+    result = {"chat_id": cid, "contact_name": contact_name, "events": []}
+
+    # ── Step 1: chat.db messages ──
+    chatdb_events = []
+    if CHAT_DB.exists() and not cid.startswith("signal:"):
+        # Determine chat_identifier for chat.db lookup
+        # For phone numbers, chat.db uses the raw number
+        chat_identifier = cid
+        if chat_identifier.startswith("+"):
+            pass  # phone numbers work as-is
+        # For group chats, chat_identifier is the hex UUID
+
+        chatdb_cutoff = unix_ms_to_chatdb(cutoff_ms)
+        chatdb_sql = """
+            SELECT m.ROWID, m.date, COALESCE(h.id, 'me') as phone,
+                   m.is_from_me, m.text, m.attributedBody
+            FROM message m
+            JOIN chat_message_join cmj ON m.ROWID = cmj.message_id
+            JOIN chat c ON cmj.chat_id = c.ROWID
+            LEFT JOIN handle h ON m.handle_id = h.ROWID
+            WHERE c.chat_identifier = ? AND m.date >= ?
+            ORDER BY m.date ASC
+        """
+        if args.verbose and human:
+            print(f"{DIM}[SQL] chat.db query: {chatdb_sql.strip()}{RESET}")
+            print(f"{DIM}[SQL] params: ({chat_identifier!r}, {chatdb_cutoff}){RESET}\n")
+        rows = query_chatdb(chatdb_sql, (chat_identifier, chatdb_cutoff))
+
+        for rowid, date, phone, is_from_me, text, attributed_body in rows:
+            if not text and attributed_body:
+                text = extract_text_from_attributed_body(attributed_body)
+            unix_ms = chatdb_to_unix_ms(date)
+            direction = "OUT" if is_from_me else "IN"
+            text_preview = (text or "")[:80]
+            chatdb_events.append({
+                "ts_ms": unix_ms,
+                "source": "chat.db",
+                "type": f"message.{direction.lower()}",
+                "detail": f"[{direction}] {phone}: {text_preview}",
+            })
+
+    # ── Step 2: Bus events for this chat_id ──
+    bus_events = []
+
+    # messages topic
+    bus_sql = "SELECT timestamp, type, source, payload FROM records WHERE key = ? AND timestamp >= ? ORDER BY timestamp ASC"
+    if args.verbose and human:
+        print(f"{DIM}[SQL] bus query: {bus_sql}{RESET}")
+        print(f"{DIM}[SQL] params: ({cid!r}, {cutoff_ms}){RESET}\n")
+    msg_rows = query_bus(bus_sql, (cid, cutoff_ms))
+    for ts, typ, source, payload_json in msg_rows:
+        try:
+            payload = json.loads(payload_json)
+        except Exception:
+            payload = {}
+        text_preview = (payload.get("text") or "")[:60]
+        detail = f"{typ} ({source})"
+        if text_preview:
+            detail += f": {text_preview}"
+        evt_data = {
+            "ts_ms": ts,
+            "source": "bus",
+            "type": typ,
+            "detail": detail,
+        }
+        if args.verbose:
+            evt_data["raw_payload"] = payload
+        bus_events.append(evt_data)
+
+    # system topic events for this session
+    if session_name:
+        sys_rows = query_bus(
+            "SELECT timestamp, type, source, payload FROM records WHERE key = ? AND timestamp >= ? ORDER BY timestamp ASC",
+            (session_name, cutoff_ms)
+        )
+        for ts, typ, source, payload_json in sys_rows:
+            try:
+                payload = json.loads(payload_json)
+            except Exception:
+                payload = {}
+            detail = f"{typ} ({source})"
+            if typ == "sdk.turn_complete":
+                dur = payload.get("duration_ms", "?")
+                turns = payload.get("num_turns", "?")
+                is_err = payload.get("is_error", False)
+                detail += f" duration={dur}ms turns={turns}"
+                if is_err:
+                    detail += f" {RED}ERROR{RESET}"
+            elif typ == "session.heartbeat":
+                qd = payload.get("queue_depth", 0)
+                pq = payload.get("pending_queries", 0)
+                detail += f" queue={qd} pending={pq}"
+            evt_data = {
+                "ts_ms": ts,
+                "source": "bus/system",
+                "type": typ,
+                "detail": detail,
+            }
+            if args.verbose:
+                evt_data["raw_payload"] = payload
+            bus_events.append(evt_data)
+
+    # ── Step 3: Merge and display timeline ──
+    all_events = chatdb_events + bus_events
+    all_events.sort(key=lambda e: e["ts_ms"])
+
+    if not all_events:
+        if human:
+            print(f"{YELLOW}No events found in the given time window.{RESET}")
+        if args.json:
+            print(json.dumps(result, indent=2))
+        return
+
+    prev_ts = None
+    for evt in all_events:
+        ts_str = ts_ms_to_str(evt["ts_ms"])
+        if human:
+            source_color = BLUE if evt["source"] == "chat.db" else GREEN if "system" in evt["source"] else CYAN
+            gap_str = ""
+            if prev_ts is not None:
+                gap_ms = evt["ts_ms"] - prev_ts
+                gap_s = gap_ms / 1000
+                if gap_s > 60:
+                    gap_str = f" {YELLOW}(+{format_elapsed(gap_s)}){RESET}"
+                elif gap_s > 5:
+                    gap_str = f" {DIM}(+{format_elapsed(gap_s)}){RESET}"
+
+            print(f"  {ts_str}  {source_color}[{evt['source']:<12}]{RESET}  {evt['detail']}{gap_str}")
+            if args.verbose and "raw_payload" in evt:
+                print(f"    {DIM}{json.dumps(evt['raw_payload'], default=str)}{RESET}")
+        prev_ts = evt["ts_ms"]
+        result["events"].append({
+            "timestamp": ts_str, "source": evt["source"],
+            "type": evt["type"], "detail": evt["detail"],
+        })
+
+    # ── Step 4: Match inbound messages to responses ──
+    inbound = [e for e in all_events if e["type"] == "message.received" and e["source"] == "bus"]
+    sent = [e for e in all_events if e["type"] == "message.sent"]
+    injected = [e for e in all_events if e["type"] == "session.injected"]
+    completed = [e for e in all_events if e["type"] == "sdk.turn_complete"]
+
+    if human:
+        print(f"\n{BOLD}--- Latency Analysis ---{RESET}")
+        for msg in inbound:
+            ts = msg["ts_ms"]
+            # Find matching inject
+            inj = next((e for e in injected if abs(e["ts_ms"] - ts) < window_ms and e["ts_ms"] >= ts), None)
+            # Find matching turn_complete
+            tc = next((e for e in completed if e["ts_ms"] > ts and e["ts_ms"] - ts < window_ms * 5), None)
+            # Find matching sent
+            snt = next((e for e in sent if e["ts_ms"] > ts and e["ts_ms"] - ts < window_ms * 10), None)
+
+            parts = []
+            if inj:
+                parts.append(f"inject: +{(inj['ts_ms'] - ts)/1000:.1f}s")
+            else:
+                parts.append(f"inject: {YELLOW}missing{RESET}")
+            if tc:
+                ref = inj["ts_ms"] if inj else ts
+                parts.append(f"complete: +{(tc['ts_ms'] - ref)/1000:.1f}s")
+            if snt:
+                parts.append(f"sent: +{(snt['ts_ms'] - ts)/1000:.1f}s total")
+
+            ts_str = ts_ms_to_str(ts)
+            print(f"  {ts_str} received -> {' | '.join(parts)}")
+
+    if args.json:
+        print(json.dumps(result, indent=2))
+
+
+def cmd_session(args):
+    """Session deep-dive."""
+    sessions = load_sessions()
+    cid, session = find_session(args.identifier, sessions)
+
+    human = not args.json
+
+    if not session:
+        print(f"{RED}Session not found: {args.identifier}{RESET}")
+        print(f"Available sessions: {', '.join(s.get('session_name', k) for k, s in sessions.items())}")
+        return
+
+    session_name = session.get("session_name", "")
+    contact_name = session.get("contact_name") or session.get("display_name") or ""
+    result = {"session": session}
+
+    if human:
+        print(f"{BOLD}{CYAN}=== Session: {contact_name} ==={RESET}")
+        print(f"  Chat ID:      {cid}")
+        print(f"  Session Name: {session_name}")
+        print(f"  Type:         {session.get('type', '?')}")
+        print(f"  Tier:         {session.get('tier', '?')}")
+        print(f"  Source:        {session.get('source', '?')}")
+        print(f"  Model:        {session.get('model', '?')}")
+        print(f"  Created:      {session.get('created_at', '?')}")
+        print(f"  Updated:      {session.get('updated_at', '?')}")
+        if session.get("participants"):
+            print(f"  Participants: {', '.join(session['participants'])}")
+
+    # ── Recent bus events ──
+    if human:
+        print(f"\n{BOLD}--- Recent Bus Events ---{RESET}")
+    cutoff = now_ms() - 3600_000  # Last hour
+    events = query_bus(
+        "SELECT timestamp, type, source, payload FROM records WHERE key = ? AND timestamp >= ? ORDER BY timestamp DESC LIMIT 20",
+        (cid, cutoff)
+    )
+    # Also check system topic by session_name
+    sys_events = query_bus(
+        "SELECT timestamp, type, source, payload FROM records WHERE key = ? AND timestamp >= ? ORDER BY timestamp DESC LIMIT 20",
+        (session_name, cutoff)
+    )
+    all_events = events + sys_events
+    all_events.sort(key=lambda e: e[0], reverse=True)
+
+    event_list = []
+    for ts, typ, source, payload_json in all_events[:30]:
+        ts_str = ts_ms_to_str(ts)
+        if human:
+            print(f"  {ts_str}  {typ:<30} {DIM}({source}){RESET}")
+            if args.verbose and payload_json:
+                try:
+                    payload_data = json.loads(payload_json)
+                    print(f"    {DIM}{json.dumps(payload_data, default=str)}{RESET}")
+                except Exception:
+                    print(f"    {DIM}{payload_json[:200]}{RESET}")
+        event_list.append({"timestamp": ts_str, "type": typ, "source": source})
+    if not all_events and human:
+        print(f"  {DIM}No recent events{RESET}")
+    result["recent_events"] = event_list
+
+    # ── Recent SDK events ──
+    if human:
+        print(f"\n{BOLD}--- Recent SDK Events ---{RESET}")
+    sdk_rows = query_bus(
+        "SELECT timestamp, event_type, tool_name, duration_ms, is_error FROM sdk_events WHERE session_name = ? ORDER BY timestamp DESC LIMIT 20",
+        (session_name,)
+    )
+    sdk_list = []
+    for ts, etype, tool, dur, is_err in sdk_rows:
+        ts_str = ts_ms_to_str(ts)
+        if human:
+            dur_str = f" {dur:.0f}ms" if dur else ""
+            err_str = f" {RED}ERROR{RESET}" if is_err else ""
+            tool_str = f" {tool}" if tool else ""
+            print(f"  {ts_str}  {etype:<15}{tool_str}{dur_str}{err_str}")
+        sdk_list.append({"timestamp": ts_str, "event_type": etype, "tool": tool, "duration_ms": dur, "is_error": bool(is_err)})
+    if not sdk_rows and human:
+        print(f"  {DIM}No recent SDK events{RESET}")
+    result["sdk_events"] = sdk_list
+
+    # ── Session log tail ──
+    if human:
+        print(f"\n{BOLD}--- Session Log (last 30 lines) ---{RESET}")
+        log_name = session_name.replace("/", "-")
+        log_path = SESSION_LOGS / f"{log_name}.log"
+        if log_path.exists():
+            try:
+                lines = log_path.read_text().splitlines()
+                for line in lines[-30:]:
+                    print(f"  {DIM}{line}{RESET}")
+            except Exception as e:
+                print(f"  {YELLOW}Error reading log: {e}{RESET}")
+        else:
+            print(f"  {DIM}No log file at {log_path}{RESET}")
+
+    # ── Compaction info ──
+    comp_events = query_bus(
+        "SELECT timestamp, payload FROM records WHERE type='compaction.triggered' AND key = ? ORDER BY timestamp DESC LIMIT 5",
+        (session_name,)
+    )
+    if comp_events and human:
+        print(f"\n{BOLD}--- Compaction History ---{RESET}")
+        for ts, payload_json in comp_events:
+            try:
+                payload = json.loads(payload_json)
+            except Exception:
+                payload = {}
+            ts_str = ts_ms_to_str(ts)
+            turns = payload.get("turn_count", "?")
+            print(f"  {ts_str}  turn_count={turns}")
+
+    if args.json:
+        print(json.dumps(result, indent=2, default=str))
+
+
+def cmd_incident(args):
+    """Auto-scan for anomalies."""
+    since = parse_duration(args.since)
+    cutoff = now_ms() - int(since.total_seconds() * 1000)
+
+    human = not args.json
+
+    if human:
+        print(f"{BOLD}{CYAN}=== Incident Scan (since {args.since} ago) ==={RESET}\n")
+
+    incidents = []
+
+    # ── Failed messages ──
+    failed = query_bus(
+        "SELECT timestamp, key, payload FROM records WHERE type IN ('message.failed', 'message.processing_failed') AND timestamp >= ? ORDER BY timestamp DESC",
+        (cutoff,)
+    )
+    for ts, key, payload_json in failed:
+        try:
+            payload = json.loads(payload_json)
+        except Exception:
+            payload = {}
+        ts_str = ts_ms_to_str(ts)
+        error = payload.get("error", payload.get("text", ""))[:100]
+        incidents.append(("critical", ts, f"message.failed | {key} | {error}"))
+
+    # ── Crashed sessions ──
+    crashed = query_bus(
+        "SELECT timestamp, key, payload FROM records WHERE type = 'session.crashed' AND timestamp >= ? ORDER BY timestamp DESC",
+        (cutoff,)
+    )
+    for ts, key, payload_json in crashed:
+        try:
+            payload = json.loads(payload_json)
+        except Exception:
+            payload = {}
+        reason = payload.get("reason", "")[:100]
+        contact = payload.get("contact_name", key)
+        incidents.append(("critical", ts, f"Session crashed | {contact} | {reason}"))
+
+    # ── Killed sessions (intentional, normal operation) ──
+    killed = query_bus(
+        "SELECT timestamp, key, payload FROM records WHERE type = 'session.killed' AND timestamp >= ? ORDER BY timestamp DESC",
+        (cutoff,)
+    )
+    for ts, key, payload_json in killed:
+        try:
+            payload = json.loads(payload_json)
+        except Exception:
+            payload = {}
+        reason = payload.get("reason", "")[:100]
+        contact = payload.get("contact_name", key)
+        incidents.append(("info", ts, f"Session killed | {contact} | {reason}"))
+
+    # ── Receive errors ──
+    recv_errors = query_bus(
+        "SELECT timestamp, key, payload FROM records WHERE type='session.receive_error' AND timestamp >= ? ORDER BY timestamp DESC",
+        (cutoff,)
+    )
+    for ts, key, payload_json in recv_errors:
+        try:
+            payload = json.loads(payload_json)
+        except Exception:
+            payload = {}
+        error = payload.get("error", "")[:100]
+        is_fatal = payload.get("is_fatal", False)
+        severity = "critical" if is_fatal else "warning"
+        incidents.append((severity, ts, f"receive_error | {key} | fatal={is_fatal} | {error}"))
+
+    # ── Heartbeat gaps ──
+    heartbeat_rows = query_bus(
+        "SELECT key, timestamp FROM records WHERE type='session.heartbeat' AND timestamp >= ? ORDER BY key, timestamp",
+        (cutoff,)
+    )
+    # Group by session
+    hb_by_session: dict[str, list[int]] = {}
+    for key, ts in heartbeat_rows:
+        hb_by_session.setdefault(key, []).append(ts)
+
+    for sname, timestamps in hb_by_session.items():
+        for i in range(1, len(timestamps)):
+            gap_ms = timestamps[i] - timestamps[i - 1]
+            if gap_ms > 300_000:  # > 5 min gap
+                gap_str = format_elapsed(gap_ms / 1000)
+                ts_str = ts_ms_to_str(timestamps[i - 1])
+                incidents.append(("warning", timestamps[i - 1], f"heartbeat gap {gap_str} | {sname} | at {ts_str}"))
+
+    # ── Restart loops ──
+    created = query_bus(
+        "SELECT key, timestamp FROM records WHERE type='session.created' AND timestamp >= ? ORDER BY key, timestamp",
+        (cutoff,)
+    )
+    created_by_session: dict[str, list[int]] = {}
+    for key, ts in created:
+        created_by_session.setdefault(key, []).append(ts)
+
+    for sname, timestamps in created_by_session.items():
+        # Look for 3+ creates within 5 min windows
+        for i in range(len(timestamps)):
+            count = 1
+            for j in range(i + 1, len(timestamps)):
+                if timestamps[j] - timestamps[i] <= 300_000:
+                    count += 1
+                else:
+                    break
+            if count >= 3:
+                ts_str = ts_ms_to_str(timestamps[i])
+                incidents.append(("critical", timestamps[i], f"restart loop ({count}x in 5min) | {sname} | started {ts_str}"))
+                break  # Only report once per session
+
+    # ── SDK errors ──
+    sdk_errors = query_bus(
+        "SELECT timestamp, session_name, event_type, payload FROM sdk_events WHERE is_error = 1 AND timestamp >= ? ORDER BY timestamp DESC",
+        (cutoff,)
+    )
+    for ts, sname, etype, payload in sdk_errors:
+        error_text = (payload or "")[:100]
+        incidents.append(("warning", ts, f"sdk error | {sname} | {etype} | {error_text}"))
+
+    # ── Permission denials ──
+    denials = query_bus(
+        "SELECT timestamp, key, payload FROM records WHERE type='permission.denied' AND timestamp >= ? ORDER BY timestamp DESC",
+        (cutoff,)
+    )
+    for ts, key, payload_json in denials:
+        try:
+            payload = json.loads(payload_json)
+        except Exception:
+            payload = {}
+        tool = payload.get("tool_name", "?")
+        reason = payload.get("reason", "")[:60]
+        incidents.append(("info", ts, f"permission denied | {key} | {tool} | {reason}"))
+
+    # ── Display ──
+    if not incidents:
+        if human:
+            print(f"  {GREEN}No incidents found.{RESET}")
+        if args.json:
+            print(json.dumps([], indent=2))
+        return
+
+    # Sort by timestamp descending
+    incidents.sort(key=lambda x: x[1], reverse=True)
+
+    severity_icons = {
+        "critical": f"{RED}CRIT{RESET}",
+        "warning": f"{YELLOW}WARN{RESET}",
+        "info": f"{BLUE}INFO{RESET}",
+    }
+
+    json_incidents = []
+    for severity, ts, detail in incidents:
+        ts_str = ts_ms_to_str(ts)
+        if human:
+            icon = severity_icons.get(severity, severity)
+            print(f"  {icon}  {ts_str}  {detail}")
+        json_incidents.append({"severity": severity, "timestamp": ts_str, "detail": detail})
+
+    if human:
+        print(f"\n  {BOLD}Summary: {len([i for i in incidents if i[0]=='critical'])} critical, "
+              f"{len([i for i in incidents if i[0]=='warning'])} warning, "
+              f"{len([i for i in incidents if i[0]=='info'])} info{RESET}")
+
+    if args.json:
+        print(json.dumps(json_incidents, indent=2))
+
+
+def cmd_routing(args):
+    """Contact routing info."""
+    chat_id = args.chat_id
+    sessions = load_sessions()
+    cid, session = find_session(chat_id, sessions)
+
+    result = {"query": chat_id}
+    human = not args.json
+
+    if human:
+        print(f"{BOLD}{CYAN}=== Routing: {chat_id} ==={RESET}\n")
+
+    if session:
+        contact_name = session.get("contact_name") or session.get("display_name") or "?"
+        tier = session.get("tier", "?")
+        session_name = session.get("session_name", "?")
+        source = session.get("source", "?")
+        transcript_dir = session.get("transcript_dir", "?")
+        model = session.get("model", "?")
+        stype = session.get("type", "?")
+
+        if human:
+            tier_color = GREEN if tier in ("admin", "partner") else YELLOW if tier == "family" else CYAN
+            print(f"  Contact:        {contact_name}")
+            print(f"  Chat ID:        {cid}")
+            print(f"  Tier:           {tier_color}{tier}{RESET}")
+            print(f"  Session Name:   {session_name}")
+            print(f"  Type:           {stype}")
+            print(f"  Backend:        {source}")
+            print(f"  Model:          {model}")
+            print(f"  Transcript Dir: {transcript_dir}")
+
+            # Check if transcript dir exists
+            if transcript_dir and transcript_dir != "?":
+                td = Path(transcript_dir)
+                if td.exists():
+                    print(f"  Dir Exists:     {GREEN}yes{RESET}")
+                else:
+                    print(f"  Dir Exists:     {RED}no{RESET}")
+
+            # Participants for groups
+            if session.get("participants"):
+                print(f"  Participants:   {', '.join(session['participants'])}")
+
+        result.update({
+            "contact_name": contact_name, "chat_id": cid, "tier": tier,
+            "session_name": session_name, "type": stype, "source": source,
+            "model": model, "transcript_dir": transcript_dir,
+        })
+    else:
+        if human:
+            print(f"  {YELLOW}Not found in sessions.json{RESET}")
+            print(f"  This contact may be in the 'unknown' tier (no session created).")
+        result["found"] = False
+
+    if args.json:
+        print(json.dumps(result, indent=2, default=str))
+
+
+# ── Main ───────────────────────────────────────────────────────────
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog="debug",
+        description="Diagnose and troubleshoot the Dispatch personal assistant system",
+    )
+    parser.add_argument("--json", action="store_true", help="JSON output")
+    parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
+    parser.add_argument("--quiet", "-q", action="store_true", help="Terse output")
+
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    # Common flags added to each subparser so they work after the subcommand too.
+    # Using SUPPRESS default so subparser defaults don't override parent parser values.
+    common_flags = lambda p: (
+        p.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="JSON output"),
+        p.add_argument("--verbose", "-v", action="store_true", default=argparse.SUPPRESS, help="Verbose output"),
+        p.add_argument("--quiet", "-q", action="store_true", default=argparse.SUPPRESS, help="Terse output"),
+    )
+
+    # status
+    p = subparsers.add_parser("status", help="System dashboard")
+    common_flags(p)
+
+    # trace
+    p = subparsers.add_parser("trace", help="End-to-end message trace")
+    p.add_argument("chat_id", help="Chat ID, phone number, or contact name")
+    p.add_argument("--since", default="1h", help="Time window (e.g. 1h, 30m, 2d)")
+    p.add_argument("--window", type=int, default=60, help="Fuzzy match window in seconds (default: 60)")
+    common_flags(p)
+
+    # session
+    p = subparsers.add_parser("session", help="Session deep-dive")
+    p.add_argument("identifier", help="Session name, chat_id, or contact name")
+    common_flags(p)
+
+    # incident
+    p = subparsers.add_parser("incident", help="Auto-scan for anomalies")
+    p.add_argument("--since", default="1h", help="Time window (e.g. 1h, 30m, 2d)")
+    common_flags(p)
+
+    # routing
+    p = subparsers.add_parser("routing", help="Contact routing info")
+    p.add_argument("chat_id", help="Chat ID, phone number, or contact name")
+    common_flags(p)
+
+    args = parser.parse_args()
+
+    if args.json:
+        _no_color()
+
+    commands = {
+        "status": cmd_status,
+        "trace": cmd_trace,
+        "session": cmd_session,
+        "incident": cmd_incident,
+        "routing": cmd_routing,
+    }
+    try:
+        commands[args.command](args)
+    except KeyboardInterrupt:
+        pass
+    except Exception as e:
+        print(f"{RED}Error: {e}{RESET}", file=sys.stderr)
+        if args.verbose:
+            import traceback
+            traceback.print_exc()
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
