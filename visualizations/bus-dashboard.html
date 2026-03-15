@@ -1,0 +1,783 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dispatch Bus — 6 Hour Window</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #1a1816;
+    --ink-secondary: #5c5650;
+    --ink-tertiary: #8a8279;
+    --ink-muted: #b5ada5;
+    --surface-0: #f7f5f2;
+    --surface-1: #edeae6;
+    --surface-2: #e3e0db;
+    --surface-3: #d9d5cf;
+    --border: rgba(26, 24, 22, 0.08);
+    --border-emphasis: rgba(26, 24, 22, 0.15);
+    --signal-orange: #c2410c;
+    --signal-orange-soft: rgba(194, 65, 12, 0.08);
+    --signal-orange-mid: rgba(194, 65, 12, 0.15);
+    --signal-green: #15803d;
+    --signal-green-soft: rgba(21, 128, 61, 0.08);
+    --signal-red: #b91c1c;
+    --signal-red-soft: rgba(185, 28, 28, 0.08);
+    --signal-blue: #1d4ed8;
+    --signal-blue-soft: rgba(29, 78, 216, 0.06);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Space Grotesk', sans-serif;
+    background: var(--surface-0);
+    color: var(--ink);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 48px 32px 64px;
+  }
+
+  /* Header */
+  .header {
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+    margin-bottom: 8px;
+  }
+
+  .header h1 {
+    font-size: 28px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+    color: var(--ink);
+  }
+
+  .header .window {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    color: var(--ink-tertiary);
+    letter-spacing: -0.2px;
+  }
+
+  .subtitle {
+    font-size: 14px;
+    color: var(--ink-secondary);
+    margin-bottom: 48px;
+    line-height: 1.5;
+  }
+
+  .subtitle strong {
+    color: var(--ink);
+    font-weight: 600;
+  }
+
+  /* Pulse indicator */
+  .pulse-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 48px;
+  }
+
+  .pulse-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--signal-green);
+    animation: pulse 2s ease-in-out infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
+  .pulse-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: var(--signal-green);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+
+  /* Stats strip */
+  .stats-strip {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 1px;
+    background: var(--border);
+    margin-bottom: 56px;
+  }
+
+  .stat {
+    background: var(--surface-0);
+    padding: 24px 20px;
+  }
+
+  .stat:first-child { padding-left: 0; }
+
+  .stat-value {
+    font-size: 36px;
+    font-weight: 700;
+    letter-spacing: -1.5px;
+    line-height: 1;
+    margin-bottom: 6px;
+  }
+
+  .stat-value.orange { color: var(--signal-orange); }
+
+  .stat-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    color: var(--ink-tertiary);
+    font-weight: 500;
+  }
+
+  /* Section headers */
+  .section-title {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--ink-muted);
+    font-weight: 600;
+    margin-bottom: 20px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  /* Timeline heatmap */
+  .timeline-section {
+    margin-bottom: 56px;
+  }
+
+  .timeline-grid {
+    display: flex;
+    gap: 2px;
+    align-items: flex-end;
+    height: 160px;
+    padding-bottom: 28px;
+    position: relative;
+  }
+
+  .timeline-bar-group {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    height: 100%;
+    justify-content: flex-end;
+    position: relative;
+  }
+
+  .timeline-bar {
+    width: 100%;
+    min-height: 2px;
+    background: var(--signal-orange);
+    opacity: 0.7;
+    transition: opacity 0.15s ease;
+    position: relative;
+  }
+
+  .timeline-bar:hover {
+    opacity: 1;
+  }
+
+  .timeline-bar.spike {
+    background: var(--signal-orange);
+    opacity: 0.9;
+  }
+
+  .timeline-label {
+    position: absolute;
+    bottom: -24px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: var(--ink-muted);
+    white-space: nowrap;
+  }
+
+  .timeline-tooltip {
+    position: absolute;
+    top: -28px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--ink-secondary);
+    opacity: 0;
+    transition: opacity 0.15s ease;
+    pointer-events: none;
+  }
+
+  .timeline-bar-group:hover .timeline-tooltip {
+    opacity: 1;
+  }
+
+  /* Two column layout */
+  .two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 48px;
+    margin-bottom: 56px;
+  }
+
+  /* Contact activity */
+  .contact-row {
+    display: grid;
+    grid-template-columns: 1fr 60px 100px;
+    align-items: center;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--border);
+    gap: 12px;
+  }
+
+  .contact-row:last-child { border-bottom: none; }
+
+  .contact-name {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--ink);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .contact-count {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    color: var(--ink-secondary);
+    text-align: right;
+  }
+
+  .contact-bar-wrap {
+    height: 6px;
+    background: var(--surface-2);
+    overflow: hidden;
+  }
+
+  .contact-bar {
+    height: 100%;
+    background: var(--signal-orange);
+    opacity: 0.6;
+  }
+
+  /* Event type breakdown */
+  .event-row {
+    display: grid;
+    grid-template-columns: 1fr 48px;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .event-row:last-child { border-bottom: none; }
+
+  .event-type {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: var(--ink-secondary);
+  }
+
+  .event-count {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: var(--ink-tertiary);
+    text-align: right;
+  }
+
+  .event-type .dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    margin-right: 8px;
+    vertical-align: middle;
+  }
+
+  .dot-msg { background: var(--signal-orange); }
+  .dot-session { background: var(--signal-blue); }
+  .dot-system { background: var(--signal-green); }
+
+  /* Lifecycle timeline */
+  .lifecycle-section {
+    margin-bottom: 56px;
+  }
+
+  .lifecycle-track {
+    position: relative;
+    height: 56px;
+    background: var(--surface-1);
+    overflow: hidden;
+  }
+
+  .lifecycle-line {
+    position: absolute;
+    top: 50%;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: var(--border-emphasis);
+  }
+
+  .lifecycle-event {
+    position: absolute;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    cursor: default;
+  }
+
+  .lifecycle-event.started {
+    background: var(--signal-green);
+    box-shadow: 0 0 0 3px var(--signal-green-soft);
+  }
+
+  .lifecycle-event.stopped {
+    background: var(--signal-red);
+    box-shadow: 0 0 0 3px var(--signal-red-soft);
+  }
+
+  .lifecycle-event.healme {
+    background: var(--signal-orange);
+    box-shadow: 0 0 0 3px var(--signal-orange-soft);
+    width: 12px;
+    height: 12px;
+  }
+
+  .lifecycle-event.compaction {
+    background: var(--signal-blue);
+    box-shadow: 0 0 0 3px var(--signal-blue-soft);
+  }
+
+  .lifecycle-labels {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 8px;
+  }
+
+  .lifecycle-labels span {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: var(--ink-muted);
+  }
+
+  .lifecycle-legend {
+    display: flex;
+    gap: 20px;
+    margin-top: 12px;
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--ink-tertiary);
+  }
+
+  .legend-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+  }
+
+  /* Response time section */
+  .response-section {
+    margin-bottom: 56px;
+  }
+
+  .response-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 1px;
+    background: var(--border);
+  }
+
+  .response-card {
+    background: var(--surface-0);
+    padding: 20px 16px;
+  }
+
+  .response-name {
+    font-size: 12px;
+    color: var(--ink-tertiary);
+    margin-bottom: 8px;
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .response-time {
+    font-size: 24px;
+    font-weight: 700;
+    letter-spacing: -0.8px;
+    color: var(--ink);
+    line-height: 1;
+    margin-bottom: 4px;
+  }
+
+  .response-unit {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--ink-tertiary);
+  }
+
+  .response-meta {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--ink-muted);
+  }
+
+  /* 16:30 spike callout */
+  .callout {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 16px 20px;
+    background: var(--signal-orange-soft);
+    border-left: 2px solid var(--signal-orange);
+    margin-bottom: 56px;
+    font-size: 13px;
+    color: var(--ink-secondary);
+    line-height: 1.5;
+  }
+
+  .callout strong {
+    color: var(--ink);
+  }
+
+  .callout-icon {
+    font-size: 16px;
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+
+  /* Footer */
+  .footer {
+    padding-top: 24px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .footer-left {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--ink-muted);
+  }
+
+  .footer-right {
+    font-size: 12px;
+    color: var(--ink-muted);
+  }
+
+  /* Entry animations */
+  @keyframes fadeSlideUp {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .animate-in {
+    animation: fadeSlideUp 0.4s ease-out both;
+  }
+
+  .delay-1 { animation-delay: 0.1s; }
+  .delay-2 { animation-delay: 0.2s; }
+  .delay-3 { animation-delay: 0.3s; }
+  .delay-4 { animation-delay: 0.4s; }
+  .delay-5 { animation-delay: 0.5s; }
+  .delay-6 { animation-delay: 0.6s; }
+  .delay-7 { animation-delay: 0.7s; }
+
+  /* Responsive */
+  @media (max-width: 768px) {
+    .page { padding: 32px 20px 48px; }
+    .header { flex-direction: column; gap: 4px; }
+    .header h1 { font-size: 24px; }
+    .two-col { grid-template-columns: 1fr; gap: 40px; }
+    .stat-value { font-size: 28px; }
+    .contact-row { grid-template-columns: 1fr 48px; }
+    .contact-bar-wrap { display: none; }
+    .response-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+    .lifecycle-legend { flex-wrap: wrap; }
+    .footer { flex-direction: column; gap: 8px; align-items: flex-start; }
+  }
+
+  /* Hover states */
+  .contact-row:hover { background: var(--surface-1); margin: 0 -8px; padding-left: 8px; padding-right: 8px; }
+  .event-row:hover { background: var(--surface-1); margin: 0 -8px; padding-left: 8px; padding-right: 8px; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- Header -->
+  <div class="header animate-in">
+    <h1>Dispatch Bus</h1>
+    <span class="window">12:00 → 18:00 EDT · Mar 14, 2026</span>
+  </div>
+  <p class="subtitle animate-in delay-1">
+    <strong>3,603 events</strong> across 3 topics, 8 sessions, 12 contacts.
+    First full afternoon on the bus architecture.
+  </p>
+
+  <!-- Snapshot indicator -->
+  <div class="pulse-row animate-in delay-1">
+    <div class="pulse-dot" style="animation:none;opacity:0.5"></div>
+    <span class="pulse-label" style="color:var(--ink-tertiary)">Snapshot · 18:01 EDT</span>
+  </div>
+
+  <!-- Stats strip -->
+  <div class="stats-strip animate-in delay-2">
+    <div class="stat">
+      <div class="stat-value">235</div>
+      <div class="stat-label">Messages In</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value">427</div>
+      <div class="stat-label">Injections</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value">262</div>
+      <div class="stat-label">Turns Complete</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value orange">46s</div>
+      <div class="stat-label">Avg Response</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value">16</div>
+      <div class="stat-label">Daemon Starts</div>
+    </div>
+  </div>
+
+  <!-- 16:30 spike callout -->
+  <div class="callout animate-in delay-3">
+    <span class="callout-icon">⚡</span>
+    <div>
+      <strong>16:30 — 340 events in 15 minutes.</strong>
+      Daemon restart storm: 7 rapid starts, a healme trigger, and session recreation cascade.
+      This was the bus consumer wiring going live — expected turbulence during the cutover.
+    </div>
+  </div>
+
+  <!-- Timeline heatmap -->
+  <div class="timeline-section animate-in delay-3">
+    <div class="section-title">Event Volume · 15-min buckets</div>
+    <div class="timeline-grid" id="timeline"></div>
+  </div>
+
+  <!-- Two column: contacts + event types -->
+  <div class="two-col animate-in delay-4">
+    <div>
+      <div class="section-title">Message Volume by Source</div>
+      <div id="contacts"></div>
+    </div>
+    <div>
+      <div class="section-title">Event Types</div>
+      <div id="events"></div>
+    </div>
+  </div>
+
+  <!-- Response times -->
+  <div class="response-section animate-in delay-5">
+    <div class="section-title">Avg Response Time by Session</div>
+    <div class="response-grid" id="responses"></div>
+  </div>
+
+  <!-- Daemon lifecycle -->
+  <div class="lifecycle-section animate-in delay-6">
+    <div class="section-title">Daemon Lifecycle</div>
+    <div class="lifecycle-track" id="lifecycle-track">
+      <div class="lifecycle-line"></div>
+    </div>
+    <div class="lifecycle-labels">
+      <span>12:00</span>
+      <span>13:00</span>
+      <span>14:00</span>
+      <span>15:00</span>
+      <span>16:00</span>
+      <span>17:00</span>
+      <span>18:00</span>
+    </div>
+    <div class="lifecycle-legend">
+      <div class="legend-item"><div class="legend-dot" style="background:var(--signal-green)"></div>started</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--signal-red)"></div>stopped</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--signal-orange)"></div>healme</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--signal-blue)"></div>compaction</div>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <div class="footer animate-in delay-7">
+    <span class="footer-left">dispatch/state/bus.db · 3 topics · sqlite</span>
+    <span class="footer-right">Generated by Sven · Mar 14, 2026 6:04 PM</span>
+  </div>
+
+</div>
+
+<script>
+// Timeline data
+const timeline = [
+  { t: "12:00", v: 30 }, { t: "12:15", v: 39 }, { t: "12:30", v: 53 }, { t: "12:45", v: 71 },
+  { t: "13:00", v: 54 }, { t: "13:15", v: 67 }, { t: "13:30", v: 44 }, { t: "13:45", v: 66 },
+  { t: "14:00", v: 45 }, { t: "14:15", v: 61 }, { t: "14:30", v: 74 }, { t: "14:45", v: 57 },
+  { t: "15:00", v: 99 }, { t: "15:15", v: 107 }, { t: "15:30", v: 66 }, { t: "15:45", v: 47 },
+  { t: "16:00", v: 50 }, { t: "16:15", v: 33 }, { t: "16:30", v: 340 }, { t: "16:45", v: 45 },
+  { t: "17:00", v: 58 }, { t: "17:15", v: 59 }, { t: "17:30", v: 79 }, { t: "17:45", v: 63 },
+  { t: "18:00", v: 17 }
+];
+
+const maxV = Math.max(...timeline.map(d => d.v));
+const el = document.getElementById("timeline");
+timeline.forEach((d, i) => {
+  const group = document.createElement("div");
+  group.className = "timeline-bar-group";
+  const h = Math.max(2, (d.v / maxV) * 130);
+  const isSpike = d.v > 200;
+  const isPartial = i === timeline.length - 1;
+  group.innerHTML = `
+    <div class="timeline-tooltip">${d.v}${isPartial ? ' (partial)' : ''}</div>
+    <div class="timeline-bar${isSpike ? ' spike' : ''}" style="height:${h}px;${isPartial ? 'opacity:0.35;' : ''}"></div>
+    ${i % 4 === 0 ? `<span class="timeline-label">${d.t}</span>` : ''}
+  `;
+  el.appendChild(group);
+});
+
+// Contacts
+const contacts = [
+  { name: "Josiah + Pang", count: 100 },
+  { name: "User-A (DM)", count: 87 },
+  { name: "User-A + Pang + Ryan", count: 33 },
+  { name: "User-A + Sam", count: 10 },
+  { name: "Sven Test", count: 3 },
+  { name: "User-A + User-B", count: 3 }
+];
+
+const maxMsg = contacts[0].count;
+const contactsEl = document.getElementById("contacts");
+contacts.forEach(c => {
+  const row = document.createElement("div");
+  row.className = "contact-row";
+  row.innerHTML = `
+    <span class="contact-name">${c.name}</span>
+    <span class="contact-count">${c.count}</span>
+    <div class="contact-bar-wrap"><div class="contact-bar" style="width:${(c.count/maxMsg)*100}%"></div></div>
+  `;
+  contactsEl.appendChild(row);
+});
+
+// Event types
+const events = [
+  { type: "session.injected", count: 427, topic: "session" },
+  { type: "health.fast_check", count: 349, topic: "system" },
+  { type: "sdk.turn_complete", count: 262, topic: "system" },
+  { type: "message.received", count: 235, topic: "msg" },
+  { type: "session.created", count: 99, topic: "session" },
+  { type: "health.service_spawned", count: 97, topic: "system" },
+  { type: "health.check_completed", count: 65, topic: "system" },
+  { type: "health.deep_check", count: 65, topic: "system" },
+  { type: "health.service_restarted", count: 65, topic: "system" },
+  { type: "vision.analyzed", count: 17, topic: "system" },
+  { type: "daemon.started", count: 16, topic: "system" },
+  { type: "vision.failed", count: 9, topic: "system" },
+  { type: "session.receive_error", count: 6, topic: "session" },
+  { type: "daemon.stopped", count: 5, topic: "system" },
+  { type: "session.restarted", count: 2, topic: "session" },
+  { type: "session.killed", count: 1, topic: "session" },
+  { type: "compaction.triggered", count: 1, topic: "system" },
+  { type: "healme.triggered", count: 1, topic: "system" }
+];
+
+const eventsEl = document.getElementById("events");
+events.forEach(e => {
+  const dotClass = e.topic === "msg" ? "dot-msg" : e.topic === "session" ? "dot-session" : "dot-system";
+  const row = document.createElement("div");
+  row.className = "event-row";
+  row.innerHTML = `
+    <span class="event-type"><span class="dot ${dotClass}"></span>${e.type}</span>
+    <span class="event-count">${e.count}</span>
+  `;
+  eventsEl.appendChild(row);
+});
+
+// Response times
+const responses = [
+  { name: "Josiah + Pang", avg: 8.5, unit: "s", count: 108 },
+  { name: "User-A + User-B", avg: 9.2, unit: "s", count: 6 },
+  { name: "User-A + Pang + Ryan", avg: 12.7, unit: "s", count: 39 },
+  { name: "User-A + Sam", avg: 13.5, unit: "s", count: 21 },
+  { name: "Sven Test", avg: 39.4, unit: "s", count: 16 },
+  { name: "User-A DM ⚠️", avg: 167.1, unit: "s", count: 57, note: "long tool calls" }
+];
+
+const responsesEl = document.getElementById("responses");
+responses.forEach(r => {
+  const card = document.createElement("div");
+  card.className = "response-card";
+  card.innerHTML = `
+    <div class="response-name">${r.name}</div>
+    <div class="response-time">${r.avg}<span class="response-unit">${r.unit}</span></div>
+    <div class="response-meta">${r.count} turns${r.note ? ' · ' + r.note : ''}</div>
+  `;
+  responsesEl.appendChild(card);
+});
+
+// Lifecycle events
+const lifecycleEvents = [
+  { time: "12:20:09", type: "started" },
+  { time: "12:43:38", type: "started" },
+  { time: "13:12:00", type: "started" },
+  { time: "13:15:47", type: "stopped" },
+  { time: "13:15:51", type: "started" },
+  { time: "13:29:33", type: "started" },
+  { time: "13:29:35", type: "stopped" },
+  { time: "13:47:39", type: "stopped" },
+  { time: "13:47:42", type: "started" },
+  { time: "14:04:56", type: "stopped" },
+  { time: "14:04:58", type: "started" },
+  { time: "15:06:21", type: "stopped" },
+  { time: "15:06:24", type: "started" },
+  { time: "15:06:58", type: "started" },
+  { time: "16:36:36", type: "started" },
+  { time: "16:36:48", type: "healme" },
+  { time: "16:37:06", type: "started" },
+  { time: "16:37:38", type: "started" },
+  { time: "16:38:05", type: "started" },
+  { time: "16:38:33", type: "started" },
+  { time: "16:38:59", type: "started" },
+  { time: "16:39:26", type: "started" },
+  { time: "17:54:18", type: "compaction" },
+  { time: "17:54:18", type: "stopped" },
+  { time: "17:54:19", type: "started" },
+  { time: "17:54:19", type: "started" }
+];
+
+const track = document.getElementById("lifecycle-track");
+const startMin = 12 * 60; // 12:00
+const endMin = 18 * 60;   // 18:00
+const rangeMin = endMin - startMin;
+
+lifecycleEvents.forEach(e => {
+  const parts = e.time.split(":");
+  const mins = parseInt(parts[0]) * 60 + parseInt(parts[1]) + parseInt(parts[2]) / 60;
+  const pct = ((mins - startMin) / rangeMin) * 100;
+  const dot = document.createElement("div");
+  dot.className = `lifecycle-event ${e.type}`;
+  dot.style.left = `${pct}%`;
+  dot.title = `${e.time} — ${e.type}`;
+  track.appendChild(dot);
+});
+</script>
+</body>
+</html>
