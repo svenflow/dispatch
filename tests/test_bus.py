@@ -848,6 +848,78 @@ class TestRetention:
         assert bus.topic_info("short-lived")["total_records"] == 0
         assert bus.topic_info("long-lived")["total_records"] == 1
 
+    def test_prune_cleans_stale_consumer_groups(self, bus):
+        """Prune should remove consumer members with expired heartbeats and orphan groups."""
+        bus.create_topic("test")
+
+        # Manually insert a stale consumer group and member (simulates a dead CLI consumer)
+        old_hb = int(time.time() * 1000) - (2 * 60 * 60 * 1000)  # 2 hours ago
+        bus._conn.execute(
+            "INSERT INTO consumer_groups (group_id, generation) VALUES (?, ?)",
+            ("stale-group", 1),
+        )
+        bus._conn.execute(
+            "INSERT INTO consumer_members "
+            "(group_id, consumer_id, generation, assigned_partitions, last_heartbeat) "
+            "VALUES (?, ?, ?, '[]', ?)",
+            ("stale-group", "stale-c1", 1, old_hb),
+        )
+
+        # Add a committed offset for this group
+        bus._conn.execute(
+            "INSERT OR REPLACE INTO consumer_offsets "
+            "(group_id, topic, partition, committed_offset, generation, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            ("stale-group", "test", 0, 5, 1, old_hb),
+        )
+
+        # Verify the stale data exists
+        members = bus._conn.execute(
+            "SELECT COUNT(*) FROM consumer_members WHERE group_id = ?", ("stale-group",)
+        ).fetchone()[0]
+        assert members == 1
+
+        # Prune should clean up
+        bus.prune()
+
+        # Stale member should be gone
+        members_after = bus._conn.execute(
+            "SELECT COUNT(*) FROM consumer_members WHERE group_id = ?", ("stale-group",)
+        ).fetchone()[0]
+        assert members_after == 0
+
+        # Orphan group and its offsets should be gone
+        groups_after = bus._conn.execute(
+            "SELECT COUNT(*) FROM consumer_groups WHERE group_id = ?", ("stale-group",)
+        ).fetchone()[0]
+        assert groups_after == 0
+
+        offsets_after = bus._conn.execute(
+            "SELECT COUNT(*) FROM consumer_offsets WHERE group_id = ?", ("stale-group",)
+        ).fetchone()[0]
+        assert offsets_after == 0
+
+    def test_prune_keeps_active_consumer_groups(self, bus):
+        """Prune should NOT remove consumer groups with live members."""
+        bus.create_topic("test")
+
+        c1 = bus.consumer(group_id="active-group", topics=["test"], consumer_id="active-c1")
+
+        # Prune should not affect active consumer
+        bus.prune()
+
+        members = bus._conn.execute(
+            "SELECT COUNT(*) FROM consumer_members WHERE group_id = ?", ("active-group",)
+        ).fetchone()[0]
+        assert members == 1
+
+        groups = bus._conn.execute(
+            "SELECT COUNT(*) FROM consumer_groups WHERE group_id = ?", ("active-group",)
+        ).fetchone()[0]
+        assert groups == 1
+
+        c1.close()
+
 
 # ─── update_offset (for CLI seek) ────────────────────────────
 
@@ -1113,8 +1185,8 @@ class TestHeartbeat:
 
         c1 = bus.consumer(group_id="g1", topics=["test"], consumer_id="alive")
 
-        # Manually insert a dead consumer with old heartbeat
-        old_heartbeat = int(time.time() * 1000) - 60_000  # 60 seconds ago
+        # Manually insert a dead consumer with old heartbeat (past HEARTBEAT_TIMEOUT_MS=300s)
+        old_heartbeat = int(time.time() * 1000) - 600_000  # 10 minutes ago
         bus._conn.execute(
             "INSERT OR REPLACE INTO consumer_members "
             "(group_id, consumer_id, generation, assigned_partitions, last_heartbeat) "

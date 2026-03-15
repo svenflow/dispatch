@@ -740,3 +740,119 @@ class TestIntegration:
         consumer.close()
         runner.stop()
         producer.close()
+
+
+# ─── ConsumerRunner: Deferred Commits ────────────────────────
+
+
+class TestConsumerRunnerDeferredCommits:
+    """Tests for commit_interval_s: batching offset commits to reduce write lock contention."""
+
+    def test_commit_deferred_with_interval(self, bus_with_topic):
+        """With commit_interval_s > 0, commits should be deferred."""
+        producer = bus_with_topic.producer()
+        producer.send("test", value={"n": 1})
+        producer.flush()
+
+        processed = []
+        runner = ConsumerRunner(bus_with_topic, [
+            ConsumerConfig(
+                topic="test",
+                group="deferred-g1",
+                action=actions.call_function(lambda rs: processed.extend(rs)),
+                commit_interval_s=10,  # 10 second commit interval
+            ),
+        ])
+
+        runner.run_once()
+        assert len(processed) == 1
+
+        # Offset should NOT be committed yet (interval hasn't elapsed)
+        assert "deferred-g1" in runner._pending_commit
+
+        runner.stop()
+        producer.close()
+
+    def test_commit_immediate_without_interval(self, bus_with_topic):
+        """With commit_interval_s=0, commits should happen every poll (legacy behavior)."""
+        producer = bus_with_topic.producer()
+        producer.send("test", value={"n": 1})
+        producer.flush()
+
+        processed = []
+        runner = ConsumerRunner(bus_with_topic, [
+            ConsumerConfig(
+                topic="test",
+                group="immediate-g1",
+                action=actions.call_function(lambda rs: processed.extend(rs)),
+                commit_interval_s=0,
+            ),
+        ])
+
+        runner.run_once()
+        assert len(processed) == 1
+        # No pending commits — committed immediately
+        assert "immediate-g1" not in runner._pending_commit
+
+        runner.stop()
+        producer.close()
+
+    def test_deferred_commits_flushed_on_stop(self, bus_with_topic):
+        """Deferred commits should be flushed when the runner stops."""
+        producer = bus_with_topic.producer()
+        producer.send("test", value={"n": 1})
+        producer.flush()
+
+        processed = []
+        runner = ConsumerRunner(bus_with_topic, [
+            ConsumerConfig(
+                topic="test",
+                group="flush-g1",
+                action=actions.call_function(lambda rs: processed.extend(rs)),
+                commit_interval_s=60,  # very long interval
+            ),
+        ])
+
+        runner.run_once()
+        assert len(processed) == 1
+        assert "flush-g1" in runner._pending_commit
+
+        # Stop should flush pending commits
+        runner.stop()
+        assert "flush-g1" not in runner._pending_commit
+
+        # Verify offset was actually committed by creating a new consumer
+        consumer = bus_with_topic.consumer(group_id="flush-g1", topics=["test"])
+        records = consumer.poll(timeout_ms=0)
+        assert len(records) == 0  # no new records = offset was committed
+        consumer.close()
+        producer.close()
+
+    def test_deferred_commit_fires_after_interval(self, bus_with_topic):
+        """After the interval elapses, the next poll should commit."""
+        producer = bus_with_topic.producer()
+        producer.send("test", value={"n": 1})
+        producer.flush()
+
+        processed = []
+        runner = ConsumerRunner(bus_with_topic, [
+            ConsumerConfig(
+                topic="test",
+                group="timed-g1",
+                action=actions.call_function(lambda rs: processed.extend(rs)),
+                commit_interval_s=0.01,  # 10ms interval (will elapse quickly)
+            ),
+        ])
+
+        runner.run_once()
+        assert len(processed) == 1
+
+        # Wait for interval to elapse
+        time.sleep(0.02)
+
+        # Next run_once should commit (even with no new records)
+        runner.run_once()
+        assert "timed-g1" not in runner._pending_commit
+
+        runner.stop()
+        producer.close()

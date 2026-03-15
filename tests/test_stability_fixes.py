@@ -144,7 +144,7 @@ class TestOffsetCaching:
 # ──────────────────────────────────────────────────────────────
 
 class TestConsumerHeartbeatThrottle:
-    """P2: Consumer heartbeats should be throttled to every 10s, not every poll."""
+    """P2: Consumer heartbeats should be throttled to every 60s, not every poll."""
 
     def test_consumer_has_heartbeat_throttle_attrs(self, tmp_path):
         from bus.bus import Bus
@@ -155,7 +155,7 @@ class TestConsumerHeartbeatThrottle:
         # Consumer should have heartbeat throttling attributes
         assert hasattr(consumer, "_last_heartbeat")
         assert hasattr(consumer, "_heartbeat_interval_ms")
-        assert consumer._heartbeat_interval_ms == 10_000  # 10 seconds
+        assert consumer._heartbeat_interval_ms == 60_000  # 60 seconds (reduced write pressure)
 
         consumer.close()
         bus.close()

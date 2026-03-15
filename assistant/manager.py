@@ -1606,6 +1606,7 @@ class Manager:
                         + ("..." if len(records) > 5 else "")
                     )
                 ),
+                commit_interval_s=10,  # Batch commits to reduce write lock contention
             ),
             # Audit consumer for sessions topic — tracks session lifecycle
             ConsumerConfig(
@@ -1618,6 +1619,7 @@ class Manager:
                         + ("..." if len(records) > 5 else "")
                     )
                 ),
+                commit_interval_s=10,  # Batch commits to reduce write lock contention
             ),
             # Audit consumer for system topic — tracks health, consolidation, vision, etc.
             ConsumerConfig(
@@ -1630,6 +1632,7 @@ class Manager:
                         + ("..." if len(records) > 5 else "")
                     )
                 ),
+                commit_interval_s=10,  # Batch commits to reduce write lock contention
             ),
         ]
         return ConsumerRunner(self._bus, configs)

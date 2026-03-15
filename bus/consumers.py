@@ -227,6 +227,7 @@ class ConsumerConfig:
     batch: BatchConfig | None = None
     max_retries: int = 0
     error_action: Action | None = None
+    commit_interval_s: float = 0  # 0 = commit every poll. >0 = batch commits (reduces write lock contention)
 
 
 # ─── Consumer Runner ──────────────────────────────────────────
@@ -261,16 +262,22 @@ class ConsumerRunner:
         self.configs = configs
         self._consumers: dict[str, Any] = {}  # group -> Consumer
         self._batch_states: dict[str, _BatchState] = {}  # group -> batch state
+        self._last_commit: dict[str, float] = {}  # group -> monotonic time of last commit
+        self._pending_commit: set[str] = set()  # groups with uncommitted offsets
         self._running = False
         self._init_consumers()
 
     def _init_consumers(self):
+        now = time.monotonic()
         for config in self.configs:
             consumer = self.bus.consumer(
                 group_id=config.group,
                 topics=[config.topic],
             )
             self._consumers[config.group] = consumer
+            # Initialize last commit time so first commit respects the interval
+            if config.commit_interval_s > 0:
+                self._last_commit[config.group] = now
 
             if config.batch:
                 self._batch_states[config.group] = _BatchState()
@@ -306,21 +313,45 @@ class ConsumerRunner:
     def stop(self):
         """Stop the runner and close all consumers."""
         self._running = False
-        # Flush any pending batches
+        # Flush any pending batches and deferred commits
         for config in self.configs:
+            consumer = self._consumers.get(config.group)
+            if not consumer:
+                continue
             if config.batch and config.group in self._batch_states:
                 state = self._batch_states[config.group]
                 if state.records:
                     self._dispatch(config, state.records)
-                    consumer = self._consumers[config.group]
                     consumer.commit()
                     state.reset()
+            # Flush any deferred commits on shutdown
+            if config.group in self._pending_commit:
+                try:
+                    consumer.commit()
+                except Exception:
+                    pass  # best-effort on shutdown
+                self._pending_commit.discard(config.group)
 
         for consumer in self._consumers.values():
             consumer.close()
         self._consumers.clear()
         self._batch_states.clear()
+        self._pending_commit.clear()
         logger.info("ConsumerRunner stopped")
+
+    def _should_commit(self, config: ConsumerConfig) -> bool:
+        """Check if this consumer should commit now based on commit_interval_s."""
+        if config.commit_interval_s <= 0:
+            return True  # commit every poll (legacy behavior)
+        now = time.monotonic()
+        last = self._last_commit.get(config.group, 0)
+        return (now - last) >= config.commit_interval_s
+
+    def _do_commit(self, config: ConsumerConfig, consumer: Any):
+        """Commit offsets and update tracking."""
+        consumer.commit()
+        self._last_commit[config.group] = time.monotonic()
+        self._pending_commit.discard(config.group)
 
     def _process_consumer(self, config: ConsumerConfig) -> int:
         """Process one consumer. Returns number of records dispatched."""
@@ -333,6 +364,9 @@ class ConsumerRunner:
             # Check if batch window expired even without new records
             if config.batch and config.group in self._batch_states:
                 self._check_batch_flush(config)
+            # Flush pending commits on interval even when idle
+            if config.group in self._pending_commit and self._should_commit(config):
+                self._do_commit(config, consumer)
             return 0
 
         # Apply filter
@@ -342,22 +376,28 @@ class ConsumerRunner:
             filtered = records
 
         if not filtered:
-            # Even if all filtered out, commit the offsets
-            consumer.commit()
+            # Even if all filtered out, commit the offsets (maybe deferred)
+            self._pending_commit.add(config.group)
+            if self._should_commit(config):
+                self._do_commit(config, consumer)
             return 0
 
         # Batching mode
         if config.batch:
             state = self._batch_states[config.group]
             state.records.extend(filtered)
-            consumer.commit()  # commit offsets as we accumulate
+            self._pending_commit.add(config.group)
+            if self._should_commit(config):
+                self._do_commit(config, consumer)
 
             dispatched = self._check_batch_flush(config)
             return dispatched
 
         # Non-batching: dispatch immediately
         self._dispatch(config, filtered)
-        consumer.commit()
+        self._pending_commit.add(config.group)
+        if self._should_commit(config):
+            self._do_commit(config, consumer)
         return len(filtered)
 
     def _check_batch_flush(self, config: ConsumerConfig) -> int:

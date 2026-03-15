@@ -53,7 +53,7 @@ DEFAULT_DB_PATH = Path.home() / "dispatch" / "state" / "bus.db"
 DEFAULT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000  # 7 days
 DEFAULT_POLL_TIMEOUT_MS = 100
 DEFAULT_MAX_POLL_RECORDS = 500
-HEARTBEAT_TIMEOUT_MS = 30_000  # 30 seconds
+HEARTBEAT_TIMEOUT_MS = 300_000  # 5 minutes (all consumers are in-process, heartbeats are mainly for stale cleanup)
 AUTO_PRUNE_INTERVAL = 1000  # prune every N produces
 
 
@@ -117,7 +117,7 @@ class Bus:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA busy_timeout=5000")
-        conn.execute("PRAGMA cache_size=-64000")  # 64MB cache
+        conn.execute("PRAGMA cache_size=-2000")  # 2MB cache (DB is ~2MB, 64MB was 218x overkill)
         conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
         return conn
 
@@ -445,7 +445,32 @@ class Bus:
         sdk_deleted = result.rowcount
         total_deleted += sdk_deleted
 
-        if total_deleted > 0:
+        # Prune stale consumer groups: members with no heartbeat for >1 hour
+        # and groups with zero live members. Prevents unbounded metadata growth
+        # from CLI peek/debug/tail commands that create one-shot consumers.
+        stale_cutoff = now - (60 * 60 * 1000)  # 1 hour
+        stale_members = self._conn.execute(
+            "DELETE FROM consumer_members WHERE last_heartbeat < ?",
+            (stale_cutoff,),
+        )
+        stale_member_count = stale_members.rowcount
+
+        # Find groups with no remaining members and clean up their offsets
+        orphan_groups = self._conn.execute(
+            "SELECT group_id FROM consumer_groups "
+            "WHERE group_id NOT IN (SELECT DISTINCT group_id FROM consumer_members)"
+        ).fetchall()
+        orphan_count = 0
+        for (group_id,) in orphan_groups:
+            self._conn.execute("DELETE FROM consumer_offsets WHERE group_id = ?", (group_id,))
+            self._conn.execute("DELETE FROM consumer_groups WHERE group_id = ?", (group_id,))
+            orphan_count += 1
+
+        if stale_member_count > 0 or orphan_count > 0:
+            logger.info("Pruned %d stale consumer member(s), %d orphan group(s)",
+                        stale_member_count, orphan_count)
+
+        if total_deleted > 0 or orphan_count > 0:
             self._conn.execute("PRAGMA incremental_vacuum")
             self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             logger.info("Pruned %d record(s) (incl. %d sdk_events), checkpointed WAL",
@@ -944,7 +969,7 @@ class Consumer:
         self._pending_offsets: dict[tuple[str, int], int] = {}
         # Throttle heartbeats: send at most every 10s (HEARTBEAT_TIMEOUT is 30s)
         self._last_heartbeat: int = 0
-        self._heartbeat_interval_ms: int = 10_000
+        self._heartbeat_interval_ms: int = 60_000  # 60s (reduced write pressure, all consumers in-process)
         self._join_group()
 
     def _join_group(self):
