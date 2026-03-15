@@ -1914,57 +1914,65 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
         else:
             history_note = f"({backend.label} session - no message history command available yet)"
 
-        # Restart notification behavior depends on how this session was created
-        # Only the session that initiated the restart sends a back-online message.
-        # All other sessions stay silent — users shouldn't notice restarts.
+        # Build the action instructions based on whether this is a resumed or fresh session.
+        # When restart_role is set, this session was recreated after a daemon restart.
+        # The Previous Session Context and Current Conversation Context above contain
+        # everything the session needs — it should NOT re-read SMS history and re-execute
+        # old instructions. New messages will be injected by the daemon's polling loop.
         if restart_role == "initiator":
             # This session triggered the restart — let the user know we're back
-            restart_instruction = (
-                "IMPORTANT: You asked for a daemon restart and it completed successfully. "
-                "Send a brief back-online message to let the user know you're back. "
-                "Keep it short and casual (e.g. 'back online 👍'). "
-                "Do this BEFORE resuming any work."
+            action_block = (
+                f"**You are being RESUMED after a daemon restart that you initiated.**\n\n"
+                f"Your previous incarnation already handled all messages up to this point. "
+                f"The 'Previous Session Context' and 'Current Conversation Context' above describe what you were doing.\n\n"
+                f"IMPORTANT: Send a brief back-online message to let the user know you're back. "
+                f"Keep it short and casual (e.g. 'back online 👍'). "
+                f"Do this BEFORE resuming any work.\n\n"
+                f"Then WAIT for new messages — they will be injected by the daemon automatically. "
+                f"Do NOT read SMS history. Do NOT re-execute tasks from your previous session. "
+                f"Everything before this point is HISTORICAL and already handled.\n\n"
+                f"If the Previous Session Context mentions incomplete work, you may continue it "
+                f"ONLY if no user action is needed first."
             )
         elif restart_role == "passive":
             # Restarted by something else — stay silent, user shouldn't notice
-            restart_instruction = (
-                "CRITICAL: Do NOT send any restart notification, 'back online' message, or any greeting. "
-                "Users should NOT notice session restarts. Just silently resume — read history and act on it "
-                "without announcing yourself.\n\n"
-                "EXCEPTION: If the last IN message from the user explicitly asked for a restart/deploy "
-                "(e.g. 'restart', 'deploy', 'yes restart'), send a brief back-online confirmation "
-                "(e.g. 'back online 👍'). The user asked for this and is waiting to know it worked."
+            action_block = (
+                f"**You are being RESUMED after a daemon restart.**\n\n"
+                f"Your previous incarnation already handled all messages up to this point. "
+                f"The 'Previous Session Context' and 'Current Conversation Context' above describe what you were doing.\n\n"
+                f"CRITICAL: Do NOT send any restart notification, 'back online' message, or any greeting. "
+                f"Users should NOT notice session restarts.\n\n"
+                f"WAIT for new messages — they will be injected by the daemon automatically. "
+                f"Do NOT read SMS history. Do NOT re-execute tasks from your previous session. "
+                f"Everything before this point is HISTORICAL and already handled.\n\n"
+                f"If the Previous Session Context mentions incomplete work that doesn't require user input, "
+                f"you may silently continue it."
             )
         else:
-            # Fresh session creation (not a restart) — no notification needed
-            restart_instruction = (
-                "CRITICAL: Do NOT send any restart notification, 'back online' message, or any greeting. "
-                "Users should NOT notice session restarts. Just silently resume — read history and act on it "
-                "without announcing yourself.\n\n"
-                "EXCEPTION: If the last IN message from the user explicitly asked for a restart/deploy "
-                "(e.g. 'restart', 'deploy', 'yes restart'), send a brief back-online confirmation "
-                "(e.g. 'back online 👍'). The user asked for this and is waiting to know it worked."
+            # Fresh session creation (not a restart) — read history to bootstrap context
+            action_block = (
+                f"{history_note}\n\n"
+                f"After reading, act based on what you see:\n\n"
+                f"1. **Task was in progress** (last OUT messages show active work):\n"
+                f"   - Pick up EXACTLY where you left off\n"
+                f"   - Do NOT announce restart or say \"catching up\"\n"
+                f"   - If user asked \"how's it going?\" = you went offline during work, so continue silently\n\n"
+                f"2. **Unanswered message** (last IN message has no response):\n"
+                f"   - Respond to it naturally\n\n"
+                f"3. **Conversation was idle** (no pending work or questions):\n"
+                f"   - Wait silently for new messages\n\n"
+                f"CRITICAL: Do NOT send any restart notification, 'back online' message, or any greeting. "
+                f"Users should NOT notice session restarts. Just silently resume — read history and act on it "
+                f"without announcing yourself.\n\n"
+                f"EXCEPTION: If the last IN message from the user explicitly asked for a restart/deploy "
+                f"(e.g. 'restart', 'deploy', 'yes restart'), send a brief back-online confirmation "
+                f"(e.g. 'back online 👍'). The user asked for this and is waiting to know it worked."
             )
 
         return f"""SESSION START - INDIVIDUAL {backend.label} CHAT: {contact_name} ({tier} tier)
 Chat ID: {chat_id}
 {soul_section}{notes_section}{memory_section}{context_section}{summary_section}
-{history_note}
-
-After reading, act based on what you see:
-
-1. **Task was in progress** (last OUT messages show active work):
-   - Pick up EXACTLY where you left off
-   - Do NOT announce restart or say "catching up"
-   - If user asked "how's it going?" = you went offline during work, so continue silently
-
-2. **Unanswered message** (last IN message has no response):
-   - Respond to it naturally
-
-3. **Conversation was idle** (no pending work or questions):
-   - Wait silently for new messages
-
-{restart_instruction}
+{action_block}
 
 **If you need more context** about what you were doing before restart:
 uv run ~/.claude/skills/sms-assistant/scripts/read_transcript.py --session {session_name}
@@ -2052,6 +2060,37 @@ Quick reference:
         else:
             history_cmd = f"uv run ~/.claude/skills/sms-assistant/scripts/read_transcript.py --session {session_name}"
 
+        # Build action instructions based on restart state (same logic as individual)
+        if restart_role in ("initiator", "passive"):
+            if restart_role == "initiator":
+                notify = (
+                    "Send a brief back-online message to let the group know you're back. "
+                    "Keep it short and casual (e.g. 'back online 👍'). Do this BEFORE resuming any work."
+                )
+            else:
+                notify = (
+                    "CRITICAL: Do NOT send any restart notification, 'back online' message, or any greeting. "
+                    "Users should NOT notice session restarts."
+                )
+            action_block = (
+                f"**You are being RESUMED after a daemon restart.**\n\n"
+                f"Your previous incarnation already handled all messages up to this point. "
+                f"The context sections above describe what you were doing.\n\n"
+                f"{notify}\n\n"
+                f"WAIT for new messages — they will be injected by the daemon automatically. "
+                f"Do NOT read message history. Do NOT re-execute tasks from your previous session. "
+                f"Everything before this point is HISTORICAL and already handled."
+            )
+        else:
+            action_block = (
+                f"**FIRST**: Check conversation history: {history_cmd}\n\n"
+                f"After reading, act based on what you see - respond to unanswered messages, "
+                f"continue work in progress, or wait silently.\n\n"
+                f"CRITICAL: Do NOT send any restart notification, 'back online' message, or any greeting. "
+                f"Users should NOT notice session restarts. Just silently resume — read history and act on it "
+                f"without announcing yourself."
+            )
+
         return f"""SESSION START - GROUP CHAT: {shown_name}
 Chat ID: {chat_id}
 
@@ -2059,11 +2098,7 @@ Participants:
 {participants_section}
 {soul_section}
 {participant_context_section}{chat_context_section}{summary_section}
-**FIRST**: Check conversation history: {history_cmd}
-
-After reading, act based on what you see - respond to unanswered messages, continue work in progress, or wait silently.
-
-{"CRITICAL: Do NOT send any restart notification, 'back online' message, or any greeting. Users should NOT notice session restarts. Just silently resume — read history and act on it without announcing yourself."}
+{action_block}
 
 **To send a message to this group using heredoc (no temp files - avoids race conditions between sessions):**
 {send_cmd} "$(cat <<'ENDMSG'
