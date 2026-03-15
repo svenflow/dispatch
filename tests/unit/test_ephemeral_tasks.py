@@ -141,6 +141,7 @@ class TestHandleTaskRequested:
         m.sessions = FakeBackend()
         m._producer = MagicMock()
         m._ephemeral_tasks = {}
+        m._running_script_tasks = {}
         m._shutdown_flag = False
         # Bind the real method
         m._handle_task_requested = Manager._handle_task_requested.__get__(m, Manager)
@@ -252,9 +253,11 @@ class TestHandleTaskRequested:
 
         await m._handle_task_requested(payload, {})
 
-        # Should delegate to _run_script_task, NOT create ephemeral session
-        m._run_script_task.assert_awaited_once()
+        # Should track script task for dedup and NOT create ephemeral session
+        assert "task-script" in m._running_script_tasks
         m.sessions.create_ephemeral_session.assert_not_awaited()
+        # Let the task run
+        await asyncio.sleep(0)  # Yield to let create_task execute
 
     @pytest.mark.asyncio
     async def test_execution_prompt_fallback(self):

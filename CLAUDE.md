@@ -120,6 +120,114 @@ All persistent resources (file handles, SQLite connections, subprocesses) are ma
 - **FD leak detection**: Calibrates `/dev/fd/` baseline at startup, checks delta every 5 minutes during health checks.
 - **Safe cleanup**: All cleanup callbacks wrapped in `_safe_cleanup()` to handle double-close errors (sqlite3.ProgrammingError), subprocess ProcessLookupError, etc.
 
+### Ephemeral Tasks (Scheduled Agents)
+
+The system supports **ephemeral tasks** — short-lived Claude agents or scripts that execute autonomously and auto-terminate. They're triggered by cron reminders that fire `task.requested` events to the bus.
+
+**Two execution modes:**
+- **Script mode**: Runs a shell command as a subprocess. No Claude session needed. Good for deterministic work (consolidation scripts, data exports, cleanup).
+- **Agent mode**: Spins up a full SDK session (same `SDKSession` as chat sessions) with admin tier and all skills. Good for LLM-powered work (skillify analysis, research, summarization).
+
+**Task lifecycle:**
+```
+Reminder fires → task.requested event on "tasks" topic
+  → Task consumer picks it up
+  → Dedup check (both agent + script tasks tracked)
+  → Script: spawns subprocess | Agent: creates ephemeral SDKSession
+  → task.started event + optional notification to requester
+  → Runs to completion or timeout
+  → task.completed/failed/timeout event + optional notification
+  → Agent: session auto-killed | Script: process group cleaned up
+```
+
+**Full audit trail**: Ephemeral sessions produce all standard bus events (sdk.turn_complete, session.created, etc.) plus task-specific events. Query with: `bus tail --topic tasks`
+
+**Adding a new scheduled task:**
+
+1. For script-mode: create a shell script in `~/dispatch/scripts/`
+2. Add it to `scripts/setup-nightly-tasks.py` following the existing pattern:
+```python
+def _build_my_task_reminder(admin_phone: str) -> dict:
+    return {
+        "title": "My nightly task",
+        "schedule_type": "cron",
+        "schedule_value": "0 3 * * *",  # 3am daily
+        "tz_name": "America/New_York",
+        "event": {
+            "topic": "tasks",
+            "type": "task.requested",
+            "key": admin_phone,
+            "payload": {
+                "task_id": "my-task-id",          # Stable ID for dedup
+                "title": "My nightly task",
+                "requested_by": admin_phone,
+                "instructions": "What to do",
+                "notify": True,                    # Text requester on start/done
+                "timeout_minutes": 30,
+                "execution": {
+                    "mode": "script",              # or "agent"
+                    "command": ["bash", "-c", "$HOME/dispatch/scripts/my-task.sh"],
+                    # For agent mode, use "prompt" instead of "command":
+                    # "prompt": "Run /some-skill and send results via SMS",
+                },
+            },
+        },
+    }
+```
+3. Run `uv run python scripts/setup-nightly-tasks.py --remove && uv run python scripts/setup-nightly-tasks.py` to recreate reminders
+4. Add tests in `tests/unit/test_nightly_tasks.py`
+
+**Or create a one-off task via the reminder CLI:**
+```bash
+claude-assistant remind add "Check something" --in 10m \
+  --event '{"topic":"tasks","type":"task.requested","key":"+1...","payload":{...}}'
+```
+
+**Current scheduled tasks:**
+- `nightly-consolidation` (2:00am ET, script) — person-facts + chat-context consolidation
+- `nightly-skillify` (2:30am ET, agent) — skill opportunity analysis
+
+**Key files:**
+- `assistant/manager.py` — `_run_task_consumer()`, `_handle_task_requested()`, `_run_script_task()`, `_supervise_ephemeral_tasks()`
+- `assistant/sdk_backend.py` — `create_ephemeral_session()`, `kill_ephemeral_session()`
+- `assistant/reminders.py` — `create_reminder()` with event templates, `validate_event_template()`
+- `scripts/setup-nightly-tasks.py` — creates/manages nightly cron reminders
+- `scripts/nightly-consolidation.sh` — wrapper for consolidation scripts
+- `plans/ephemeral-tasks-and-scheduler.md` — full design doc
+
+### Reminders System
+
+Reminders are a **generalized scheduling system** — "cron for the bus." A reminder can:
+- **Legacy mode**: Inject a message into a chat session at a scheduled time (contact + target)
+- **Generalized mode**: Produce ANY bus event at a scheduled time (event template)
+
+**How it works:**
+```
+ReminderPoller (every 5s) → checks next_fire times
+  → Due? → Legacy: inject into session directly
+          → Generalized: produce event to bus (any topic, any type)
+  → Advance next_fire (cron) or delete (once)
+  → Save state to reminders.json
+```
+
+**Creating reminders:**
+```bash
+# One-off: remind in 10 minutes
+claude-assistant remind add "Check the deploy" --contact "+1..." --in 10m
+
+# Recurring: every day at 9am
+claude-assistant remind add "Morning check-in" --contact "+1..." --cron "0 9 * * *"
+
+# Generalized: fire any bus event on schedule
+claude-assistant remind add "Nightly task" --cron "0 2 * * *" \
+  --event '{"topic":"tasks","type":"task.requested","key":"+1...","payload":{...}}'
+```
+
+**Key files:**
+- `assistant/reminders.py` — Core module (create, validate, fire, schedule)
+- `~/.claude/skills/reminders/SKILL.md` — User-facing docs
+- `state/reminders.json` — Persistent state (reminders + config)
+
 ### Key design: no auto-send
 
 SDK sessions do NOT auto-send text output as SMS. Claude calls `send-sms` explicitly via Bash tool when it wants to message the user — same as the old tmux setup. The SDK just manages the Claude process lifecycle.

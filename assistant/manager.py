@@ -1581,6 +1581,7 @@ class Manager:
         self._task_consumer_executor = ThreadPoolExecutor(1, thread_name_prefix="task-consumer")
         self._task_consumer_task: asyncio.Task | None = None
         self._ephemeral_tasks: Dict[str, dict] = {}  # task_id -> tracking info
+        self._running_script_tasks: Dict[str, asyncio.Task] = {}  # task_id -> asyncio.Task
 
         # Initialize bus consumers
         self._consumer_runner = self._init_consumers()
@@ -1897,9 +1898,13 @@ class Manager:
             log.error(f"task.requested {task_id} missing instructions, skipping")
             return
 
-        # Dedup: skip if already running
+        # Dedup: skip if already running (covers both agent and script tasks)
         session_key = f"ephemeral-{task_id}"
-        if session_key in self.sessions.sessions and self.sessions.sessions[session_key].is_alive():
+        agent_running = (session_key in self.sessions.sessions
+                         and self.sessions.sessions[session_key].is_alive())
+        script_running = (task_id in self._running_script_tasks
+                          and not self._running_script_tasks[task_id].done())
+        if agent_running or script_running:
             log.warning(f"Task {task_id} already running, skipping duplicate")
             produce_event(self._producer, "tasks", "task.skipped",
                 task_skipped_payload(task_id, "already_running"),
@@ -1911,7 +1916,15 @@ class Manager:
 
         if mode == "script":
             # Script tasks: run as subprocess, no Claude session needed
-            await self._run_script_task(payload, headers)
+            # Track in _running_script_tasks for dedup (cleared in finally)
+            task = asyncio.create_task(
+                self._run_script_task(payload, headers),
+                name=f"script-task-{task_id}",
+            )
+            self._running_script_tasks[task_id] = task
+            task.add_done_callback(
+                lambda _t, _tid=task_id: self._running_script_tasks.pop(_tid, None)
+            )
             return
 
         # Agent tasks: create ephemeral Claude session
@@ -2001,7 +2014,8 @@ class Manager:
             if proc.returncode == 0:
                 produce_event(self._producer, "tasks", "task.completed",
                     task_completed_payload(task_id, title, requested_by, duration,
-                        stdout=stdout.decode()[-2000:] if stdout else "",
+                        stdout=stdout.decode() if stdout else "",
+                        stderr=stderr.decode() if stderr else "",
                     ),
                     key=requested_by, source="task-runner", headers=headers)
                 log.info(f"SCRIPT_TASK_DONE | task_id={task_id} | duration={duration:.1f}s")
@@ -2012,7 +2026,7 @@ class Manager:
                         name=f"task-notify-done-{task_id}",
                     )
             else:
-                error_msg = (stderr.decode()[-500:] if stderr else f"exit code {proc.returncode}")
+                error_msg = (stderr.decode() if stderr else f"exit code {proc.returncode}")
                 produce_event(self._producer, "tasks", "task.failed",
                     task_failed_payload(task_id, title, requested_by, error_msg),
                     key=requested_by, source="task-runner", headers=headers)
@@ -3191,6 +3205,37 @@ You have 15 minutes. Work efficiently.
         log.info("DAEMON | SHUTDOWN | COMPLETE (registry cleanup follows)")
         lifecycle_log.info("DAEMON | SHUTDOWN | COMPLETE")
 
+    def _check_nightly_tasks_configured(self):
+        """Warn at startup if nightly task reminders are missing.
+
+        Called during daemon startup to catch the case where the code was
+        deployed but setup-nightly-tasks.py was never run.
+        """
+        try:
+            from assistant.reminders import load_reminders, reminders_lock
+            with reminders_lock():
+                data = load_reminders()
+            task_ids = set()
+            for r in data.get("reminders", []):
+                event = r.get("event", {})
+                payload = event.get("payload", {})
+                tid = payload.get("task_id")
+                if tid:
+                    task_ids.add(tid)
+            expected = {"nightly-consolidation", "nightly-skillify"}
+            missing = expected - task_ids
+            if missing:
+                log.warning(
+                    f"STARTUP_CHECK | Missing nightly task reminders: {missing}. "
+                    f"Run 'uv run python scripts/setup-nightly-tasks.py' to configure."
+                )
+            else:
+                log.info("STARTUP_CHECK | Nightly task reminders verified ✓")
+        except Exception as e:
+            log.warning(f"STARTUP_CHECK | Could not verify nightly reminders: {e}")
+
+    # ── Legacy consolidation methods (kept for reference, no longer called) ──
+
     async def _run_nightly_consolidation(self):
         """Run memory consolidation at 2am:
         1. Person-facts → Contacts.app notes (consolidate_3pass.py)
@@ -3501,16 +3546,10 @@ Keep the text concise - this is a nightly check-in, not a full report.
         last_reminder_check = time.time()
         REMINDER_CHECK_INTERVAL = 5  # Check reminders every 5 seconds
 
-        # Track last consolidation run (nightly memory processing)
-        # Persist to file so daemon restarts don't cause double-runs
-        last_consolidation_date = None
-        if CONSOLIDATION_STATE_FILE.exists():
-            try:
-                date_str = CONSOLIDATION_STATE_FILE.read_text().strip()
-                last_consolidation_date = datetime.strptime(date_str, "%Y-%m-%d").date()
-            except (ValueError, OSError):
-                pass  # Invalid file, will run consolidation
-        CONSOLIDATION_HOUR = 2  # Run at 2am
+        # Nightly consolidation is now handled by cron reminders firing
+        # task.requested events. See scripts/setup-nightly-tasks.py.
+        # Verify nightly task reminders exist at startup
+        self._check_nightly_tasks_configured()
 
         self._shutdown_flag = False
         spurious_cancel_count = 0
@@ -3676,19 +3715,12 @@ Keep the text concise - this is a nightly check-in, not a full report.
                         log.error(f"Error during idle session check: {e}")
                     last_idle_check = time.time()
 
-                # Nightly memory consolidation at 2am
-                now = datetime.now()
-                today = now.date()
-                if now.hour == CONSOLIDATION_HOUR and last_consolidation_date != today:
-                    log.info("Starting nightly memory consolidation...")
-                    lifecycle_log.info(f"CONSOLIDATION | START | date={today}")
-                    produce_event(self._producer, "system", "consolidation.started",
-                        consolidation_payload("nightly"), source="consolidation")
-                    await self._run_nightly_consolidation()
-                    last_consolidation_date = today
-                    # Persist to file so daemon restarts don't cause double-runs
-                    CONSOLIDATION_STATE_FILE.write_text(today.strftime("%Y-%m-%d"))
-                    lifecycle_log.info(f"CONSOLIDATION | COMPLETE | date={today}")
+                # Nightly memory consolidation — MIGRATED to ephemeral tasks
+                # Consolidation and skillify now run via cron reminders that fire
+                # task.requested events to the bus. See scripts/setup-nightly-tasks.py.
+                # The old hardcoded 2am trigger is disabled.
+                # Legacy methods (_run_nightly_consolidation, _run_nightly_skillify,
+                # _inject_consolidation_summary) are kept for reference but unused.
 
                 await asyncio.sleep(POLL_INTERVAL)
                 last_iteration_end = time.time()  # Update for next poll_gap measurement

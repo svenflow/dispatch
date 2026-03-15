@@ -86,7 +86,11 @@ def read_recent_messages(session_name: str, limit: int = MAX_MESSAGES) -> str:
         log.error(f"Invalid session_name format: {session_name}")
         return ""
 
-    backend, chat_id = parts
+    backend, raw_id = parts
+
+    # Convert sanitized chat_id back to original format
+    # Session names use _ prefix (e.g., _16175969496) but CLIs expect + prefix (+16175969496)
+    chat_id = raw_id.replace("_", "+", 1) if raw_id.startswith("_") else raw_id
 
     # Determine which CLI to use
     if backend == "imessage":
