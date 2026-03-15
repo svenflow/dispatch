@@ -8,6 +8,7 @@ Topic/type taxonomy (v6):
     messages  — message.received, message.sent, message.failed,
                 message.produce_failed, message.processing_failed,
                 message.ignored,
+                message.queued, message.delivered, message.replay_failed,
                 reaction.received, reaction.ignored (keyed by chat_id)
     sessions  — session.created/restarted/killed/compacted/crashed/injected,
                 session.idle_killed, session.prewarmed, session.tier_mismatch,
@@ -524,3 +525,55 @@ def produce_scan_event(producer, scanner: str, event_type: str, payload: dict):
     run_id = payload.get("run_id", "unknown")
     produce_event(producer, "system", event_type, payload,
                   key=f"scan-{scanner}-{run_id}", source=scanner)
+
+
+def query_undelivered_messages(db_path: str, chat_id: str, max_age_hours: int = 24) -> list[dict]:
+    """Query bus for messages that were queued but never delivered.
+
+    Uses a SEPARATE read-only SQLite connection (not the Producer's connection)
+    to avoid contention with the background writer thread.
+
+    Performance: Uses json_extract which is O(N*M). The records table has indexes
+    on (topic, type) and (topic, key), so the WHERE clause filters efficiently.
+    Acceptable at <1000 msgs/day/chat.
+
+    Returns [{message_id, text, source, timestamp}], oldest first.
+    """
+    import sqlite3
+    import time
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    try:
+        cutoff = int((time.time() - max_age_hours * 3600) * 1000)
+        rows = conn.execute("""
+            SELECT r1.payload as queued_payload, r1.timestamp as queued_ts
+            FROM records r1
+            WHERE r1.topic = 'messages'
+              AND r1.type = 'message.queued'
+              AND r1.key = ?
+              AND r1.timestamp > ?
+              AND NOT EXISTS (
+                  SELECT 1 FROM records r2
+                  WHERE r2.topic = 'messages'
+                    AND r2.type = 'message.delivered'
+                    AND json_extract(r2.payload, '$.message_id') = json_extract(r1.payload, '$.message_id')
+              )
+            ORDER BY r1.timestamp ASC
+        """, (chat_id, cutoff)).fetchall()
+
+        results = []
+        for row in rows:
+            payload = json.loads(row["queued_payload"])
+            text = payload.get("text", "")
+            # Filter sentinels/control messages (belt-and-suspenders)
+            if text.startswith("__") and text.endswith("__"):
+                continue
+            results.append({
+                "message_id": payload["message_id"],
+                "text": text,
+                "source": payload.get("source", "unknown"),
+                "timestamp": row["queued_ts"],
+            })
+        return results
+    finally:
+        conn.close()

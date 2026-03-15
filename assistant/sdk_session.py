@@ -16,6 +16,7 @@ import subprocess
 import time
 import uuid
 from datetime import datetime
+from uuid import uuid4
 from pathlib import Path
 from typing import Any, Optional
 
@@ -78,6 +79,18 @@ if TYPE_CHECKING:
 from assistant.common import SKILLS_DIR, UV
 from assistant import perf
 from assistant.bus_helpers import produce_event, produce_session_event, compaction_triggered_payload
+
+# Script path fragments that indicate a message send
+_SEND_SCRIPT_PATTERNS = (
+    "/scripts/send-sms",
+    "/scripts/send-signal",
+    "/scripts/send-signal-group",
+    "/scripts/reply",
+)
+
+def _is_send_command(cmd: str) -> bool:
+    """Check if a Bash command is a message send."""
+    return any(pattern in cmd for pattern in _SEND_SCRIPT_PATTERNS)
 
 log = logging.getLogger(__name__)
 
@@ -146,7 +159,7 @@ class SDKSession:
         self.resume_id = resume_id
 
         self._client: Optional[ClaudeSDKClient] = None
-        self._message_queue: asyncio.Queue[str] = asyncio.Queue()
+        self._message_queue: asyncio.Queue[tuple[str | None, str]] = asyncio.Queue()
         self._task: Optional[asyncio.Task] = None
         self._pending_queries = 0  # Tracks in-flight queries; reset to 0 on ResultMessage
         self.running = False
@@ -245,12 +258,31 @@ class SDKSession:
 
     async def inject(self, text: str):
         """Queue a message for delivery to the Claude session."""
+        # Sentinel passes through without WAL
+        if text == "__SHUTDOWN__":
+            await self._message_queue.put((None, "__SHUTDOWN__"))
+            return
+
+        # Write-ahead: persist to bus BEFORE memory queue
+        # Bus failure is non-fatal — degrade to memory-only (pre-fix behavior)
+        message_id = str(uuid4())
+        if self._producer:
+            try:
+                produce_event(self._producer, "messages", "message.queued", {
+                    "message_id": message_id,
+                    "chat_id": self.chat_id,
+                    "text": text,
+                    "source": self.source,
+                }, key=self.chat_id, source="sdk_session")
+            except Exception as e:
+                self._log.warning(f"WAL_WRITE_FAILED | msg_id={message_id[:8]} | {e}")
+
         queue_depth = self._message_queue.qsize()
-        await self._message_queue.put(text)
+        await self._message_queue.put((message_id, text))
+
         self.last_inject_at = datetime.now()
-        # Log queue depth - if consistently >0, messages are backing up
         perf.gauge("sdk_queue_depth", queue_depth + 1, component="session", contact=self.contact_name)
-        self._log.info(f"QUEUED | len={len(text)} | queue_depth={queue_depth + 1}")
+        self._log.info(f"QUEUED | msg_id={message_id[:8]} | len={len(text)} | queue_depth={queue_depth + 1}")
 
     @property
     def is_busy(self) -> bool:
@@ -310,7 +342,7 @@ class SDKSession:
                     break
 
                 try:
-                    msg = await asyncio.wait_for(
+                    message_id, msg = await asyncio.wait_for(
                         self._message_queue.get(), timeout=30
                     )
                 except asyncio.TimeoutError:
@@ -346,6 +378,15 @@ class SDKSession:
                     # Log wake latency - time from queue get to query completion
                     wake_ms = (time.time() - wake_start) * 1000
                     perf.timing("session_wake_latency_ms", wake_ms, component="session", contact=self.contact_name)
+                    # Mark as delivered — message_id came WITH the message from queue
+                    if message_id and self._producer:
+                        try:
+                            produce_event(self._producer, "messages", "message.delivered", {
+                                "message_id": message_id,
+                                "chat_id": self.chat_id,
+                            }, key=self.chat_id, source="sdk_session")
+                        except Exception:
+                            pass  # Non-fatal: message was delivered to Claude regardless
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:
@@ -416,14 +457,14 @@ class SDKSession:
                 self.running = False
                 # Wake _run_loop immediately instead of waiting for 30s timeout
                 try:
-                    self._message_queue.put_nowait("__SHUTDOWN__")
+                    self._message_queue.put_nowait((None, "__SHUTDOWN__"))
                 except Exception:
                     pass
             elif self._error_count >= 3:
                 self._log.error("RECEIVER_DEAD | Stopping session")
                 self.running = False
                 try:
-                    self._message_queue.put_nowait("__SHUTDOWN__")
+                    self._message_queue.put_nowait((None, "__SHUTDOWN__"))
                 except Exception:
                     pass
 
@@ -746,6 +787,17 @@ class SDKSession:
                                 duration_ms=duration_ms,
                                 is_error=block.is_error or False,
                             )
+                        # Detect outbound message sends for e2e latency measurement
+                        if tool_name == "Bash" and tool_input and not (block.is_error or False):
+                            cmd = tool_input.get("command", "")
+                            if _is_send_command(cmd):
+                                if self._producer:
+                                    produce_event(self._producer, "messages", "message.sent", {
+                                        "chat_id": self.chat_id,
+                                        "command": cmd,
+                                        "tool_use_id": tool_use_id,
+                                        "duration_ms": duration_ms,
+                                    }, key=self.chat_id, source="sdk_session")
                     else:
                         self._log.warning(f"TOOL_RESULT_ORPHAN | tool_use_id={tool_use_id}")
 
