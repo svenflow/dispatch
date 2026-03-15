@@ -356,19 +356,6 @@ cp config.example.yaml config.local.yaml
     margin-bottom: var(--space-8);
   }
 
-  .text-link {
-    background: none;
-    border: none;
-    padding: 0;
-    color: var(--accent);
-    font: inherit;
-    cursor: pointer;
-  }
-
-  .text-link:hover {
-    color: var(--accent-hover);
-  }
-
   @media (max-width: 768px) {
     .concept-grid {
       grid-template-columns: 1fr;
