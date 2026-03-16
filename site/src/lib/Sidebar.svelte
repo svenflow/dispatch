@@ -61,7 +61,7 @@
 <aside class="sidebar" class:mobile-open={mobileMenuOpen}>
   <div class="sidebar-header">
     <span class="logo">Dispatch</span>
-    <span class="version">v2.7</span>
+    <span class="version">v2.8</span>
   </div>
 
   <nav class="nav">
@@ -96,9 +96,7 @@
 
 <!-- Mobile overlay -->
 {#if mobileMenuOpen}
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <div class="mobile-overlay" on:click={() => mobileMenuOpen = false} role="presentation"></div>
+  <button class="mobile-overlay" on:click={() => mobileMenuOpen = false} aria-label="Close menu"></button>
 {/if}
 
 <style>
@@ -147,6 +145,9 @@
     inset: 0;
     background: rgba(0, 0, 0, 0.3);
     z-index: 99;
+    border: none;
+    padding: 0;
+    cursor: pointer;
   }
 
   /* Sidebar */
@@ -190,7 +191,6 @@
     flex: 1;
     overflow-y: auto;
     padding: var(--space-4) 0;
-    -webkit-overflow-scrolling: touch;
   }
 
   .nav-section {

@@ -49,7 +49,7 @@
     </div>
 
     <div class="diagram-container">
-      <svg viewBox="0 0 500 950" class="architecture-svg" role="img" aria-label="Architecture diagram showing the message flow through Dispatch: messages arrive via iMessage and Signal, flow through the Manager Daemon for contact lookup and tier checking, fan out to individual Claude SDK sessions, get processed with inject-prompt, and responses are sent back via send-sms.">
+      <svg viewBox="0 0 500 840" class="architecture-svg" role="img" aria-label="Architecture diagram showing the message flow through Dispatch: messages arrive via iMessage and Signal, flow through the Manager Daemon for contact lookup and tier checking, fan out to individual Claude SDK sessions, get processed with inject-prompt, and responses are sent back via send-sms.">
         <defs>
           <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
             <feGaussianBlur stdDeviation="4" result="blur"/>
@@ -869,7 +869,7 @@
   .explain-note code {
     background: #e7e5e4;
     padding: 2px 6px;
-    border-radius: 4px;
+    border-radius: 0;
     font-size: 12px;
   }
 

@@ -66,30 +66,30 @@
   <section>
     <h2>What It Does</h2>
     <div class="feature-grid">
-      <div class="feature clickable" on:click={() => navigateTo('messaging')} on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') navigateTo('messaging') }} role="button" tabindex="0">
+      <button class="feature clickable" on:click={() => navigateTo('messaging')}>
         <div class="feature-title">Messaging</div>
         <div class="feature-desc">iMessage + Signal with real-time polling and group chat support</div>
-      </div>
-      <div class="feature clickable" on:click={() => navigateTo('tiers')} on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') navigateTo('tiers') }} role="button" tabindex="0">
+      </button>
+      <button class="feature clickable" on:click={() => navigateTo('tiers')}>
         <div class="feature-title">Tiered Access</div>
         <div class="feature-desc">Admin, Partner, Family, Favorite tiers with scoped permissions</div>
-      </div>
-      <div class="feature clickable" on:click={() => navigateTo('skills')} on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') navigateTo('skills') }} role="button" tabindex="0">
+      </button>
+      <button class="feature clickable" on:click={() => navigateTo('skills')}>
         <div class="feature-title">73+ Skills</div>
         <div class="feature-desc">Browser automation, smart home, iOS dev, payments, and more</div>
-      </div>
-      <div class="feature clickable" on:click={() => navigateTo('memory')} on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') navigateTo('memory') }} role="button" tabindex="0">
+      </button>
+      <button class="feature clickable" on:click={() => navigateTo('memory')}>
         <div class="feature-title">Persistent Memory</div>
         <div class="feature-desc">Remembers conversations, preferences, and context across sessions</div>
-      </div>
-      <div class="feature clickable" on:click={() => navigateTo('message-bus')} on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') navigateTo('message-bus') }} role="button" tabindex="0">
+      </button>
+      <button class="feature clickable" on:click={() => navigateTo('message-bus')}>
         <div class="feature-title">Event Bus</div>
         <div class="feature-desc">Kafka-on-SQLite audit trail with fire-and-forget writes</div>
-      </div>
-      <div class="feature clickable" on:click={() => navigateTo('health')} on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') navigateTo('health') }} role="button" tabindex="0">
+      </button>
+      <button class="feature clickable" on:click={() => navigateTo('health')}>
         <div class="feature-title">Health & Healing</div>
         <div class="feature-desc">Multi-tier monitoring with automatic recovery and watchdog</div>
-      </div>
+      </button>
     </div>
   </section>
 
@@ -246,6 +246,10 @@ cp config.example.yaml config.local.yaml
   .feature {
     padding: var(--space-4);
     background: var(--bg-elevated);
+    border: none;
+    text-align: left;
+    font-family: inherit;
+    width: 100%;
   }
 
   .feature.clickable {

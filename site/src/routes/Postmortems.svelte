@@ -194,7 +194,7 @@
   /* Callout card for example incident */
   .callout-incident {
     border: 1px solid var(--border-default);
-    border-radius: 8px;
+    border-radius: 0;
     overflow: hidden;
     margin: var(--space-4) 0;
     background: var(--bg-elevated);

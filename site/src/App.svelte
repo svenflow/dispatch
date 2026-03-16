@@ -62,7 +62,7 @@
   let currentPage = 'home'
 
   function getPageFromHash() {
-    const hash = window.location.hash.replace('#', '').replace('/', '')
+    const hash = window.location.hash.replace('#', '').split('/')[0]
     // Handle redirects
     if (redirects[hash]) {
       window.location.hash = redirects[hash]
@@ -73,7 +73,11 @@
 
   function navigateTo(page) {
     currentPage = page
-    window.location.hash = page === 'home' ? '' : page
+    if (page === 'home') {
+      history.replaceState(null, '', window.location.pathname)
+    } else {
+      window.location.hash = page
+    }
     window.scrollTo({ top: 0, behavior: 'instant' })
   }
 

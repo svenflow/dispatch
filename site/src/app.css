@@ -58,9 +58,6 @@
   --font-sans: 'Manrope', -apple-system, BlinkMacSystemFont, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
 
-  /* Radius - Sharp, technical */
-  --radius-0: 0;
-
   /* Transitions */
   --transition-fast: 0.15s ease;
   --transition-smooth: 0.25s cubic-bezier(0.16, 1, 0.3, 1);
@@ -84,7 +81,7 @@ body {
   color: var(--text-primary);
   line-height: 1.7;
   min-height: 100vh;
-  min-height: -webkit-fill-available;
+  min-height: 100dvh;
   overflow-x: hidden;
   word-wrap: break-word;
   overflow-wrap: break-word;
@@ -145,7 +142,7 @@ code {
   background: var(--bg-inset);
   border: 1px solid var(--border-default);
   padding: 2px 6px;
-  border-radius: var(--radius-0);
+  border-radius: 0;
 }
 
 /* Code blocks */
@@ -158,9 +155,8 @@ pre {
   padding: var(--space-4);
   margin: var(--space-4) 0;
   overflow-x: auto;
-  border-radius: var(--radius-0);
+  border-radius: 0;
   border: 1px solid var(--code-border);
-  -webkit-overflow-scrolling: touch;
   max-width: 100%;
 }
 
@@ -276,7 +272,6 @@ hr {
   table {
     display: block;
     overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
   }
 
   code {
