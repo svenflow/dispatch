@@ -12,8 +12,11 @@ from __future__ import annotations
 import json
 import logging
 import os
+import plistlib
 import re
 import shutil
+import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -390,18 +393,60 @@ def _find_transcript(session_cwd: str, session_id: Optional[str]) -> Optional[Pa
 _last_disk_alert_time: float = 0.0
 
 
+def _get_apfs_container_space() -> tuple[int, int] | None:
+    """Get APFS container total and free bytes via diskutil.
+
+    On macOS with APFS, the container free space includes purgeable space
+    (caches, snapshots, etc. that macOS can reclaim on demand). This matches
+    what macOS Settings shows as "Available" and avoids false disk warnings.
+
+    Returns (total_bytes, free_bytes) or None if not available.
+    """
+    if sys.platform != "darwin":
+        return None
+    try:
+        result = subprocess.run(
+            ["diskutil", "info", "-plist", "/"],
+            capture_output=True, timeout=5,
+        )
+        if result.returncode != 0:
+            return None
+        plist = plistlib.loads(result.stdout)
+        container_size = plist.get("APFSContainerSize")
+        container_free = plist.get("APFSContainerFree")
+        if container_size and container_free:
+            return (container_size, container_free)
+    except Exception as e:
+        log.debug(f"APFS container query failed: {e}")
+    return None
+
+
 def check_disk_space(warn_pct: float = 90.0, critical_pct: float = 95.0) -> dict[str, Any]:
     """Check disk space on the root volume.
+
+    On macOS with APFS, uses container-level free space which includes
+    purgeable space (what macOS Settings shows as "Available"). Falls back
+    to shutil.disk_usage on non-APFS or non-macOS systems.
 
     Returns dict with:
         total_gb, used_gb, free_gb, used_pct,
         warning (bool), critical (bool), message (str or None)
     """
-    usage = shutil.disk_usage("/")
-    total_gb = usage.total / (1024 ** 3)
-    used_gb = usage.used / (1024 ** 3)
-    free_gb = usage.free / (1024 ** 3)
-    used_pct = (usage.used / usage.total) * 100
+    # Try APFS container space first (includes purgeable)
+    apfs = _get_apfs_container_space()
+    if apfs:
+        total_bytes, free_bytes = apfs
+        used_bytes = total_bytes - free_bytes
+    else:
+        usage = shutil.disk_usage("/")
+        total_bytes = usage.total
+        used_bytes = usage.used
+        free_bytes = usage.free
+
+    total_gb = total_bytes / (1024 ** 3)
+    used_gb = used_bytes / (1024 ** 3)
+    free_gb = free_bytes / (1024 ** 3)
+    used_pct = (used_bytes / total_bytes) * 100
 
     result: dict[str, Any] = {
         "total_gb": round(total_gb, 1),
