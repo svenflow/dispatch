@@ -322,6 +322,9 @@ async function handleCommand(message) {
     case 'eval_all_frames':
       return await executeScriptAllFrames(params.tabId, params.code || params.text);
 
+    case 'get_cookies':
+      return await getCookies(params.domain || params.url);
+
     // Window management
     case 'resize_window':
       return await resizeWindow(params.tabId, params.width, params.height);
@@ -484,6 +487,21 @@ async function executeScriptAllFrames(tabId, code) {
     world: 'MAIN'
   });
   return results?.map(r => r.result).filter(r => r !== undefined && r !== null);
+}
+
+// Get all cookies for a domain (including HttpOnly)
+async function getCookies(domain) {
+  const cookies = await chrome.cookies.getAll({ domain: domain });
+  return cookies.map(c => ({
+    name: c.name,
+    value: c.value,
+    domain: c.domain,
+    path: c.path,
+    httpOnly: c.httpOnly,
+    secure: c.secure,
+    sameSite: c.sameSite,
+    expirationDate: c.expirationDate
+  }));
 }
 
 // Click by element ref
@@ -883,11 +901,12 @@ async function iframeClick(tabId, selector) {
 
     const frameTree = await chrome.debugger.sendCommand({ tabId }, 'Page.getFrameTree');
 
-    // Find Apple auth iframe
+    // Find target iframe (Apple auth, Amazon payment, or any child frame)
     let targetFrameId = null;
     const findFrame = (frame) => {
       const url = frame.frame?.url || '';
-      if (url.includes('idmsa.apple.com') || url.includes('signin.apple.com')) {
+      if (url.includes('idmsa.apple.com') || url.includes('signin.apple.com') ||
+          url.includes('apx-security') || url.includes('payments.amazon')) {
         targetFrameId = frame.frame?.id;
         return true;
       }
@@ -899,6 +918,10 @@ async function iframeClick(tabId, selector) {
       return false;
     };
     findFrame(frameTree.frameTree);
+    // If no known iframe found, use the first child iframe
+    if (!targetFrameId && frameTree.frameTree.childFrames?.length > 0) {
+      targetFrameId = frameTree.frameTree.childFrames[0].frame?.id;
+    }
 
     // Use iframe if found, otherwise fall back to main frame (for CSP-protected pages like Google Cloud Console)
     const useFrameId = targetFrameId || frameTree.frameTree.frame.id;

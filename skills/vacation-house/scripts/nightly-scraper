@@ -144,24 +144,44 @@ def enrich_ski_distances(listings: list[dict]) -> list[dict]:
                 capture_output=True, text=True, timeout=5
             )
             api_key = api_key_result.stdout.strip() if api_key_result.returncode == 0 else ""
-        except:
+        except Exception as e:
+            log(f"    Keychain access failed: {e}")
             api_key = ""
 
-        env = {**os.environ, "GOOGLE_PLACES_API_KEY": api_key} if api_key else os.environ
+        if not api_key:
+            log(f"    No API key available, skipping ski enrichment for {address}")
+            listing["ski_driving"] = [{"name": "Killington Resort", "drive_minutes": -1, "drive_miles": -1}]
+            continue
 
-        # Use goplaces directions for driving distances to ski mountains
+        # Smoke test on first listing: verify goplaces works
+        if listing is listings[0] or not any(l.get("ski_driving") and len(l["ski_driving"]) >= 2 for l in listings[:listings.index(listing)]):
+            test = subprocess.run(
+                ["goplaces", "directions", "--api-key", api_key,
+                 "--from", "Stowe, VT", "--to", "Killington, VT",
+                 "--mode", "drive", "--json"],
+                capture_output=True, text=True, timeout=15
+            )
+            if test.returncode != 0:
+                log(f"    SKI ENRICHMENT SMOKE TEST FAILED: {test.stderr[:200]}")
+                log("    Skipping all ski distance calculations")
+                for l in listings:
+                    if not l.get("ski_driving") or len(l["ski_driving"]) < 2:
+                        l["ski_driving"] = [{"name": "Killington Resort", "drive_minutes": -1, "drive_miles": -1}]
+                return listings
+
+        # Use goplaces directions with --api-key flag (bypasses env var issues in LaunchAgent)
         for mountain_addr in VT_SKI_MOUNTAINS:
             mountain_name = mountain_addr.split(",")[0].strip()
             try:
                 result = subprocess.run(
                     ["goplaces", "directions",
+                     "--api-key", api_key,
                      "--from", address,
                      "--to", mountain_addr,
                      "--mode", "drive",
                      "--units", "imperial",
                      "--json"],
-                    capture_output=True, text=True, timeout=15,
-                    env=env
+                    capture_output=True, text=True, timeout=15
                 )
                 if result.returncode == 0:
                     data = json.loads(result.stdout)
@@ -174,6 +194,8 @@ def enrich_ski_distances(listings: list[dict]) -> list[dict]:
                         "drive_minutes": int(drive_mins),
                         "drive_miles": round(drive_miles, 1),
                     })
+                else:
+                    log(f"    goplaces failed for {mountain_name}: exit={result.returncode} stderr={result.stderr[:100]}")
             except Exception as e:
                 log(f"    Failed distance to {mountain_name}: {e}")
                 continue
@@ -733,14 +755,22 @@ Respond in this exact JSON format ONLY (no markdown, no code blocks, no extra te
 
     fallback = {
         "address": address, "price": price, "beds": beds, "baths": baths,
-        "acres": acres, "url": url, "image_url": image_url,
+        "sqft": listing.get("sqft"), "acres": acres, "url": url, "image_url": image_url,
         "score": 5, "summary": "Could not evaluate", "vibe_match": "unknown",
         "flags": ["AI evaluation failed"], "good_to_know": good_to_know,
         "why": "Scoring failed, manual review needed",
         "ski_driving": ski_info, "drive_from_home": drive_home,
         "construction_style": construction_style, "water_features": water_features,
         "description_summary": description_summary,
+        "year_built": year_built, "heating": listing.get("heating"),
+        "lat": listing.get("lat"), "lon": listing.get("lon") or listing.get("lng"),
     }
+    # Carry VCGI parcel data into fallback too
+    for vcgi_key in ["vcgi_span", "vcgi_owner", "vcgi_acres", "vcgi_land_value",
+                     "vcgi_improvement_value", "vcgi_total_value", "vcgi_town",
+                     "vcgi_property_type", "vcgi_geometry"]:
+        if listing.get(vcgi_key) is not None:
+            fallback[vcgi_key] = listing[vcgi_key]
 
     try:
         result = subprocess.run(
@@ -764,6 +794,7 @@ Respond in this exact JSON format ONLY (no markdown, no code blocks, no extra te
         scored["price"] = price
         scored["beds"] = beds
         scored["baths"] = baths
+        scored["sqft"] = listing.get("sqft")
         scored["acres"] = acres
         scored["url"] = url
         scored["image_url"] = image_url
@@ -772,6 +803,16 @@ Respond in this exact JSON format ONLY (no markdown, no code blocks, no extra te
         scored["construction_style"] = construction_style
         scored["water_features"] = water_features
         scored["description_summary"] = description_summary
+        scored["year_built"] = year_built
+        scored["heating"] = listing.get("heating")
+        scored["lat"] = listing.get("lat")
+        scored["lon"] = listing.get("lon") or listing.get("lng")
+        # Carry over VCGI parcel data
+        for vcgi_key in ["vcgi_span", "vcgi_owner", "vcgi_acres", "vcgi_land_value",
+                         "vcgi_improvement_value", "vcgi_total_value", "vcgi_town",
+                         "vcgi_property_type", "vcgi_geometry"]:
+            if listing.get(vcgi_key) is not None:
+                scored[vcgi_key] = listing[vcgi_key]
         # Merge good_to_know from enrichment and AI response
         ai_gtk = scored.get("good_to_know", [])
         if isinstance(ai_gtk, list) and good_to_know:

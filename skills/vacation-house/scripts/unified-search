@@ -788,6 +788,8 @@ def cmd_search(args):
                 'nearest_ski': l.get('nearest_ski'),
                 'drive_from_home': l.get('drive_from_home'),
                 'ski_driving': l.get('ski_driving'),
+                'lat': l.get('lat'),
+                'lon': l.get('lon'),
             })
         print(json.dumps(output, indent=2))
         return 0

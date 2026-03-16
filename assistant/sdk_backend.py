@@ -1690,19 +1690,29 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
             # Restart dead sessions (buffer overflow, receiver crash, etc.)
             if not session.is_alive():
                 session_name = get_session_name(session.chat_id, session.source)
+
+                # Check transcript for context-size errors before deciding clean flag
+                since = self._last_fast_check.get(chat_id, session.created_at)
+                dead_entries = get_transcript_entries_since(session.cwd, session.session_id, since)
+                CONTEXT_SIZE_ERRORS = {"prompt_too_long", "context_too_long", "content_too_large", "buffer_overflow"}
+                dead_fatal = check_fatal_regex(dead_entries) if dead_entries else None
+                needs_clean = dead_fatal in CONTEXT_SIZE_ERRORS if dead_fatal else False
+
                 lifecycle_log.info(
-                    f"FAST_HEAL | {session_name} | DEAD_SESSION | Restarting"
+                    f"FAST_HEAL | {session_name} | DEAD_SESSION"
+                    f"{f' ({dead_fatal})' if dead_fatal else ''}"
+                    f" | Restarting (clean={needs_clean})"
                 )
                 self._recently_healed[chat_id] = now
 
-                async def _isolated_restart(cid: str):
+                async def _isolated_restart(cid: str, clean: bool = False):
                     try:
-                        await self.restart_session(cid)
+                        await self.restart_session(cid, clean=clean)
                     except Exception as e:
                         log.error(f"Fast heal restart failed for {cid}: {e}")
 
                 _fire_and_forget(
-                    _isolated_restart(chat_id),
+                    _isolated_restart(chat_id, clean=needs_clean),
                     name=f"fast-heal-dead-{chat_id}",
                 )
                 restarted.append(chat_id)
@@ -1736,16 +1746,25 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
                         self._last_auth_error_notification = now
                         self._send_auth_error_notification()
 
+                # Use clean restart for context/prompt size errors — resuming
+                # the same session will never fix these, causing a restart loop.
+                CONTEXT_SIZE_ERRORS = {"prompt_too_long", "context_too_long", "content_too_large", "buffer_overflow"}
+                needs_clean = fatal_label in CONTEXT_SIZE_ERRORS
+                if needs_clean:
+                    lifecycle_log.info(
+                        f"FAST_HEAL | {session_name} | {fatal_label} | Using clean=True (context size error)"
+                    )
+
                 self._recently_healed[chat_id] = now
 
-                async def _isolated_restart(cid: str):
+                async def _isolated_restart(cid: str, clean: bool = False):
                     try:
-                        await self.restart_session(cid)
+                        await self.restart_session(cid, clean=clean)
                     except Exception as e:
                         log.error(f"Fast heal restart failed for {cid}: {e}")
 
                 _fire_and_forget(
-                    _isolated_restart(chat_id),
+                    _isolated_restart(chat_id, clean=needs_clean),
                     name=f"fast-heal-{chat_id}",
                 )
                 restarted.append(chat_id)

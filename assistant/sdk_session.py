@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import subprocess
 import time
 import uuid
@@ -608,6 +609,14 @@ class SDKSession:
                         "contact_name": self.contact_name,
                     }, source="sdk")
                     return PermissionResultDeny(message="Only osascript allowed for favorites tier")
+                # Block osascript commands that attempt shell escape via "do shell script"
+                if re.search(r'do\s+shell\s+script', cmd, re.IGNORECASE):
+                    produce_session_event(self._producer, self.chat_id, "permission.denied", {
+                        "tool_name": tool_name, "tier": self.tier,
+                        "reason": "osascript 'do shell script' blocked for favorites tier",
+                        "contact_name": self.contact_name,
+                    }, source="sdk")
+                    return PermissionResultDeny(message="osascript 'do shell script' blocked for favorites tier")
             # Block sensitive file reads
             if tool_name == "Read":
                 path = tool_input.get("file_path", "")

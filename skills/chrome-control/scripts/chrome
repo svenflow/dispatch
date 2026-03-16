@@ -396,6 +396,22 @@ def cmd_iframe_type(client, args):
     print(f"Typed: {result}")
 
 
+def cmd_iframe_eval(client, args):
+    """Execute JS inside a cross-origin iframe via Chrome debugger Target API."""
+    if len(args) < 3:
+        print("Usage: chrome iframe-eval <tab_id> <url_pattern> <code>", file=sys.stderr)
+        sys.exit(1)
+    tab_id = int(args[0])
+    url_pattern = args[1]
+    code = " ".join(args[2:])
+    result = get_result(client.send("iframe_target_eval", tabId=tab_id, urlPattern=url_pattern, code=code))
+    if result is not None:
+        if isinstance(result, (dict, list)):
+            print(json.dumps(result, indent=2))
+        else:
+            print(result)
+
+
 def cmd_scroll(client, args):
     """Scroll the page."""
     if len(args) < 2:
@@ -502,6 +518,23 @@ def cmd_js_all_frames(client, args):
             print(result)
 
 
+def cmd_cookies(client, args):
+    """Get all cookies for a domain (including HttpOnly)."""
+    if len(args) < 1:
+        print("Usage: chrome cookies <domain>", file=sys.stderr)
+        sys.exit(1)
+    domain = args[0]
+    # Ensure domain starts with .
+    if not domain.startswith("."):
+        domain = "." + domain
+    result = get_result(client.send("get_cookies", domain=domain))
+    if result is not None:
+        if isinstance(result, (dict, list)):
+            print(json.dumps(result, indent=2))
+        else:
+            print(result)
+
+
 def cmd_console(client, args):
     """Read console messages."""
     if len(args) < 1:
@@ -586,12 +619,14 @@ COMMANDS = {
     "insert-text": cmd_insert_text,
     "iframe-click": cmd_iframe_click,
     "iframe-type": cmd_iframe_type,
+    "iframe-eval": cmd_iframe_eval,
     "scroll": cmd_scroll,
     "hover": cmd_hover,
     "screenshot": cmd_screenshot,
     "shot": cmd_screenshot,
     "js": cmd_js,
     "js-all-frames": cmd_js_all_frames,
+    "cookies": cmd_cookies,
     "console": cmd_console,
     "network": cmd_network,
     "ping": cmd_ping,

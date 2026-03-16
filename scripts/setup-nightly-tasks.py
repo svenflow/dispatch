@@ -2,10 +2,11 @@
 """
 Set up nightly ephemeral tasks via the reminder/scheduler system.
 
-Creates three cron reminders that fire task.requested events:
+Creates four cron reminders that fire task.requested events:
 1. Memory consolidation (script mode, 2:00am) - runs consolidate_3pass + consolidate_chat
-2. Skillify analysis (agent mode, 2:00am) - runs /skillify --nightly
-3. Bug finder scan (agent mode, 2:00am) - runs /bug-finder --nightly
+2. Skillify analysis (agent mode, 2:10am) - runs /skillify --nightly
+3. Bug finder scan (agent mode, 2:20am) - runs /bug-finder --nightly
+4. Latency finder scan (agent mode, 2:30am) - runs /latency-finder --nightly
 
 These replace the hardcoded 2am consolidation in manager.py.
 
@@ -40,8 +41,9 @@ def _get_admin_phone() -> str:
 CONSOLIDATION_TASK_ID = "nightly-consolidation"
 SKILLIFY_TASK_ID = "nightly-skillify"
 BUGFINDER_TASK_ID = "nightly-bugfinder"
+LATENCYFINDER_TASK_ID = "nightly-latencyfinder"
 
-NIGHTLY_TASK_IDS = {CONSOLIDATION_TASK_ID, SKILLIFY_TASK_ID, BUGFINDER_TASK_ID}
+NIGHTLY_TASK_IDS = {CONSOLIDATION_TASK_ID, SKILLIFY_TASK_ID, BUGFINDER_TASK_ID, LATENCYFINDER_TASK_ID}
 
 # Bug finder prompt
 BUGFINDER_PROMPT = (
@@ -52,6 +54,15 @@ BUGFINDER_PROMPT = (
     "All subagents must use opus. "
     "Send the bug report to admin via SMS only if there are ACCEPT or REFINE verdicts. "
     "If clean scan, log silently."
+)
+
+LATENCYFINDER_PROMPT = (
+    "Run /latency-finder --nightly to scan for performance bottlenecks. "
+    "Analyze perf JSONL, bus.db sdk_events, bus.db records, and system resources "
+    "for slow queries, tool executions, and processing delays. "
+    "Use the full discovery→refinement pipeline with opus subagents. "
+    "Send the report to admin via SMS only if there are ACCEPT or REFINE verdicts. "
+    "If clean scan (all metrics within baselines), log silently."
 )
 
 # Skillify prompt (single source of truth, used in both instructions and execution.prompt)
@@ -99,7 +110,7 @@ def _build_skillify_reminder(admin_phone: str) -> dict:
     return {
         "title": "Nightly skillify analysis",
         "schedule_type": "cron",
-        "schedule_value": "0 2 * * *",  # 2am daily (parallel with consolidation)
+        "schedule_value": "10 2 * * *",  # 2:10am daily (staggered)
         "tz_name": "America/New_York",
         "event": {
             "topic": "tasks",
@@ -126,7 +137,7 @@ def _build_bugfinder_reminder(admin_phone: str) -> dict:
     return {
         "title": "Nightly bug finder scan",
         "schedule_type": "cron",
-        "schedule_value": "0 2 * * *",  # 2am daily (parallel with others)
+        "schedule_value": "20 2 * * *",  # 2:20am daily (staggered)
         "tz_name": "America/New_York",
         "event": {
             "topic": "tasks",
@@ -142,6 +153,33 @@ def _build_bugfinder_reminder(admin_phone: str) -> dict:
                 "execution": {
                     "mode": "agent",
                     "prompt": BUGFINDER_PROMPT,
+                },
+            },
+        },
+    }
+
+
+def _build_latencyfinder_reminder(admin_phone: str) -> dict:
+    """Build the latency finder reminder config."""
+    return {
+        "title": "Nightly latency finder scan",
+        "schedule_type": "cron",
+        "schedule_value": "30 2 * * *",  # 2:30am daily (staggered)
+        "tz_name": "America/New_York",
+        "event": {
+            "topic": "tasks",
+            "type": "task.requested",
+            "key": admin_phone,
+            "payload": {
+                "task_id": LATENCYFINDER_TASK_ID,
+                "title": "Nightly latency finder scan",
+                "requested_by": admin_phone,
+                "instructions": LATENCYFINDER_PROMPT,
+                "notify": True,
+                "timeout_minutes": 90,
+                "execution": {
+                    "mode": "agent",
+                    "prompt": LATENCYFINDER_PROMPT,
                 },
             },
         },
@@ -214,14 +252,20 @@ def cmd_add():
         # Create bug finder reminder
         r3 = create_reminder(**_build_bugfinder_reminder(admin_phone))
         data["reminders"].append(r3)
-        print(f"  Added: {r3['title']} (id={r3['id']}, cron=0 2 * * *, mode=agent)")
+        print(f"  Added: {r3['title']} (id={r3['id']}, cron=20 2 * * *, mode=agent)")
+
+        # Create latency finder reminder
+        r4 = create_reminder(**_build_latencyfinder_reminder(admin_phone))
+        data["reminders"].append(r4)
+        print(f"  Added: {r4['title']} (id={r4['id']}, cron=30 2 * * *, mode=agent)")
 
         save_reminders(data)
 
-    print("\n✅ All nightly tasks scheduled at 2:00am ET (parallel):")
-    print("  Memory consolidation (60min timeout, script mode)")
-    print("  Skillify analysis (90min timeout, agent mode)")
-    print("  Bug finder scan (90min timeout, agent mode)")
+    print("\n✅ All nightly tasks scheduled (staggered, ET):")
+    print("  2:00am - Memory consolidation (60min timeout, script mode)")
+    print("  2:10am - Skillify analysis (90min timeout, agent mode)")
+    print("  2:20am - Bug finder scan (90min timeout, agent mode)")
+    print("  2:30am - Latency finder scan (90min timeout, agent mode)")
 
 
 def main():

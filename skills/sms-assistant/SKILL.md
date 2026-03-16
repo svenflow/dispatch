@@ -381,13 +381,24 @@ Human texts: "hey can you check if my meeting tomorrow is still on?"
 
 When someone sends an image/file, you'll see the path. To view:
 
+**Preferred: Use the `view-attachment` script** which handles HEIC conversion, oversized image resizing, and format detection automatically:
+```bash
+~/.claude/skills/sms-assistant/scripts/view-attachment "/path/to/attachment"
+```
+
+**Manual fallback:**
+
 1. **HEIC files** (iPhone photos):
    ```bash
    sips -s format jpeg "/path/to/image.heic" --out /tmp/image.jpg
    ```
    Then Read tool on `/tmp/image.jpg`
 
-2. **JPEG/PNG** - Read directly with Read tool
+2. **JPEG/PNG** - Read directly with Read tool. If the image is >2000px and gets denied by the resize hook, resize first:
+   ```bash
+   sips -Z 2000 "/path/to/image.png" --out /tmp/resized.png
+   ```
+   Then Read tool on `/tmp/resized.png`
 
 ---
 

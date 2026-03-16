@@ -2671,7 +2671,7 @@ class Manager:
         """
         try:
             result = subprocess.run(
-                [str(HOME / "code/sms-cli/send-sms"), phone, message],
+                [str(HOME / ".claude/skills/sms-assistant/scripts/send-sms"), phone, message],
                 capture_output=True,
                 text=True,
                 timeout=30
@@ -2698,7 +2698,7 @@ class Manager:
         Returns True on success, False on failure.
         """
         try:
-            cmd = [str(HOME / "code/sms-cli/send-sms"), phone]
+            cmd = [str(HOME / ".claude/skills/sms-assistant/scripts/send-sms"), phone]
             if caption:
                 cmd.append(caption)
             cmd.extend(["--image", image_path])
@@ -3281,7 +3281,7 @@ You have 15 minutes. Work efficiently.
                 tid = payload.get("task_id")
                 if tid:
                     task_ids.add(tid)
-            expected = {"nightly-consolidation", "nightly-skillify", "nightly-bugfinder"}
+            expected = {"nightly-consolidation", "nightly-skillify", "nightly-bugfinder", "nightly-latencyfinder"}
             missing = expected - task_ids
             if missing:
                 log.warning(

@@ -28,6 +28,21 @@ This skill manages contacts using the native macOS Contacts.app. Tiers are imple
 - Tiers are determined by group membership
 - Phone numbers are the primary identifier for incoming messages
 
+## Quick Reference
+
+| Subcommand | Accepts | Description |
+|------------|---------|-------------|
+| `list` | `--tier <tier>` (optional) | List all contacts, optionally filtered by tier |
+| `lookup` | Phone number or email | Look up contact by phone/email |
+| `add` | First, Last, Phone, `--tier` | Add a new contact |
+| `tier` | "First Last", tier (optional) | Get or set contact tier |
+| `notes` | "First Last", notes (optional) | Get or set contact notes |
+
+**Search by name**: The CLI doesn't have a name search subcommand. Use:
+```bash
+~/.claude/skills/contacts/scripts/contacts list | grep -i "name"
+```
+
 ## Commands
 
 ### List All Contacts
@@ -40,11 +55,14 @@ This skill manages contacts using the native macOS Contacts.app. Tiers are imple
 ~/.claude/skills/contacts/scripts/contacts list --tier admin
 ```
 
-### Lookup Contact by Phone Number
+### Lookup Contact by Phone Number or Email
 ```bash
 ~/.claude/skills/contacts/scripts/contacts lookup +16175551234
+~/.claude/skills/contacts/scripts/contacts lookup someone@example.com
 ```
 Returns: `Name | Phone | Tier`
+
+**Note:** `lookup` only accepts phone numbers or emails, NOT names. To find by name, use `list | grep -i "name"`.
 
 ### Add New Contact
 ```bash

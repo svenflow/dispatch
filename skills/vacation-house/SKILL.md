@@ -98,7 +98,7 @@ These are the gold standard - match this energy:
 8. Burke Mountain
 9. Mad River Glen
 
-**Ski distances must NEVER be "unknown".** The `enrich_ski_distances()` function uses `goplaces distance` CLI as a fallback when the main enrichment pipeline doesn't produce ski data.
+**Ski distances must NEVER be "unknown".** The `enrich_ski_distances()` function uses `goplaces directions --from "addr1" --to "addr2" --mode drive --json` as a fallback when the main enrichment pipeline doesn't produce ski data. Requires `GOOGLE_PLACES_API_KEY` env var (read from keychain: `security find-generic-password -s google-api-key -w`).
 
 ## Properties of Interest
 
@@ -400,6 +400,7 @@ Runs as a **2am ET reminder** via the dispatch daemon's reminder system (NOT a L
 3. **ENRICHMENT**: Scrapling (webfetch) scrapes each listing page for detailed property info (acres, construction style, water features, year built, heating). Google Places API checks nearby POIs (fire stations, airports). **Use scrapling for all scraping — never claude CLI web search.**
 3b. **PARCEL ENRICHMENT**: For each listing with lat/lon, fetch VCGI parcel data from `vcgi-cache-proxy.nicklaudethorat.workers.dev/parcel?lat=X&lng=Y`. Stores parcel geometry (GeoJSON polygon), assessed values (land + improvement), official acreage, SPAN, owner, town. Used for map overlays in the HTML report.
 4. **REFINEMENT**: Each new listing scored 1-10 by Claude Opus (via `claude -p --model opus`) against:
+   - **CRITICAL**: The refinement step reconstructs the listing dict from the AI response. ALL original fields (lat, lon, sqft, year_built, heating, VCGI parcel data) MUST be explicitly carried over — they are NOT automatically preserved.
    - Hard requirements (beds, baths, acres, ski proximity)
    - Caroline's vibe criteria (log cabin, rustic, water, views, character)
    - Similarity to the 2 favorite properties
@@ -427,7 +428,8 @@ Use the **bus dashboard design pattern** — the same warm papery aesthetic from
 - **Section titles**: 11px uppercase, `letter-spacing: 1.5px`, muted color with bottom border
 - **Callout boxes**: Left-border accent + soft background tint
 - **Staggered entry animations**: `fadeSlideUp` with delay classes
-- **Mobile-responsive**: Breakpoint at 768px
+- **Mobile-responsive**: Breakpoints at 768px and 400px. Must include `<meta name="viewport" content="width=device-width, initial-scale=1.0">`. Stack maps vertically on mobile, smaller fonts, tighter padding.
+- **Coordinates**: Pipeline outputs `lat` and `lon` (NOT `lng`). HTML JS should check `l.lat && (l.lon || l.lng)` and use `l.lon || l.lng` for MapLibre longitude.
 
 **Report must include:**
 1. Header with title + date window (JetBrains Mono)
@@ -445,10 +447,11 @@ Use the **bus dashboard design pattern** — the same warm papery aesthetic from
    - **Parcel & Terrain Maps** (two side-by-side MapLibre GL maps per listing):
      - **Satellite + Parcel Overlay**: ESRI satellite imagery with VCGI parcel boundary polygon in blue
      - **Terrain Map**: AWS Terrarium terrain tiles with parcel boundary
-     - Both auto-center on listing lat/lon, zoom to fit parcel
-     - Parcel geometry from VCGI via `vcgi-cache-proxy.nicklaudethorat.workers.dev`
-     - Tiles via `sven-plot-proxy.nicklaudethorat.workers.dev` (satellite, terrain, OSM)
-     - MapLibre GL JS v4 embedded in HTML report
+     - **Use static tile images, NOT interactive MapLibre maps.** WebGL context limit (~16) is exceeded when rendering 40+ maps on one page. Static `<img>` tiles work everywhere including mobile.
+     - Satellite tiles: `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}` (direct, not via proxy — proxy returns HTML without `/tile/` prefix)
+     - OSM tiles: `https://tile.openstreetmap.org/{z}/{x}/{y}.png`
+     - Parcel data from VCGI via `vcgi-cache-proxy.nicklaudethorat.workers.dev`
+     - Use `tileXY(lat, lon, zoom)` to convert coordinates to tile indices
    - **VCGI Parcel Info Row**: Assessed value (land + improvement), official acreage, SPAN, owner
    - Description paragraph
    - Good to Know (max 3 items)

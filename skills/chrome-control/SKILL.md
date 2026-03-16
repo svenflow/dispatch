@@ -399,3 +399,80 @@ echo '{"command": "_reload_extension"}' | nc -U /tmp/chrome_control_*.sock
 - Element refs (ref_1, ref_2, etc.) are shown by `chrome read`
 - Screenshots are saved to `~/Pictures/chrome-screenshots/` with timestamps
 - The extension must be loaded in Chrome for commands to work
+
+## Secure Payment Iframes (e.g., Amazon Checkout)
+
+Some sites (Amazon, banks, payment processors) use cross-origin secure iframes (like Amazon's `apx-secure-iframe`) that block all standard automation: JS injection, CDP mouse events, `chrome click`, `iframe-click`, and `cliclick`. These require a combination of tools to interact with.
+
+### axctl for Secure Iframe Text Fields
+
+Use the accessibility automation tool `axctl` to type into text fields inside cross-origin secure iframes where all other methods fail:
+
+```bash
+~/.claude/skills/axctl/scripts/axctl type "Google Chrome" --title "Field Name" "value"
+```
+
+Example for Amazon payment fields:
+```bash
+axctl type "Google Chrome" --title "Card number" "4111111111111111"
+axctl type "Google Chrome" --title "Expiration date" "12/28"
+```
+
+Regular JS, Chrome `key` commands, `insert-text`, and `cliclick` all fail because the secure iframe blocks them. `axctl` works because it operates at the macOS accessibility layer, bypassing browser security entirely.
+
+### cliclick for Native `<select>` Dropdowns
+
+Secure iframes often render native `<select>` dropdowns that can't be changed via JS. Use `axctl` to find the dropdown's screen position, then `cliclick` to interact:
+
+```bash
+# Get the dropdown's position via accessibility
+axctl get "Google Chrome" --title "Dropdown Label" AXPosition
+
+# Click to open the native popup
+cliclick c:<x>,<y>
+
+# Click on the desired option at calculated coordinates
+cliclick c:<x>,<option_y>
+```
+
+**Coordinate mapping from Chrome screenshot pixels to screen points:**
+```
+x_screen = x_screenshot * 1.2
+y_screen = y_screenshot * 1.2 + 139
+```
+The `+ 139` offset accounts for Chrome's toolbar height (title bar + tab bar + address bar). Adjust if your toolbar configuration differs.
+
+### Tab + Space for Iframe Buttons
+
+When buttons inside secure iframes can't be clicked by any method (JS, CDP mouse events, `axctl` AXPress, `cliclick`), use keyboard navigation via CDP:
+
+```bash
+# Tab repeatedly to move focus into the iframe and onto the target button
+chrome key <tab_id> "Tab"
+chrome key <tab_id> "Tab"
+chrome key <tab_id> "Tab"
+# ... keep tabbing until the button is focused
+
+# Activate the focused button
+chrome key <tab_id> "Space"
+```
+
+**Why this works:** CDP `Input.dispatchKeyEvent` for Tab and Space crosses iframe boundaries, unlike mouse events which get blocked by cross-origin restrictions. Take screenshots between tabs to verify focus position.
+
+### chrome click-at Uses CSS Viewport Coordinates
+
+The `chrome click-at` command dispatches CDP `Input.dispatchMouseEvent`, which takes **CSS pixel viewport coordinates** (not screenshot pixels):
+
+```bash
+# Get actual viewport dimensions
+chrome js <tab_id> "JSON.stringify({w: window.innerWidth, h: window.innerHeight})"
+
+# click-at uses these CSS viewport coordinates
+chrome click-at <tab_id> <css_x> <css_y>
+```
+
+**Important:** Screenshot resolution often differs from viewport dimensions (e.g., a 1600px-wide screenshot may represent a 1920px-wide viewport on Retina displays). Always check `window.innerWidth`/`innerHeight` to understand the coordinate space.
+
+### iframe-click Amazon Payment Iframe Fallback
+
+The `iframe-click` command has been updated to detect Amazon payment iframes (`apx-secure-iframe`) and fall back to the first child frame if no known iframe pattern matches. This means `iframe-click` may work for some elements in payment iframes, but for text input and dropdowns, use `axctl` and `cliclick` as described above.

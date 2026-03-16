@@ -27,14 +27,16 @@ lifecycle_log = logging.getLogger("lifecycle")
 
 # Pattern: (regex, label) — matched against assistant message text
 FATAL_PATTERNS: list[tuple[str, str]] = [
-    (r"API Error: 400.*invalid_request_error", "invalid_request_400"),
-    (r"image dimensions exceed max allowed size", "image_too_large"),
-    (r"context_length_exceeded", "context_too_long"),
+    # Context-size patterns MUST come before generic invalid_request_400 catch-all
+    # so check_fatal_regex (first-match) returns the specific label, enabling clean restart.
     (r"prompt is too long", "prompt_too_long"),
-    (r"\"authentication_\w+\"", "auth_error"),
-    (r"\"billing_error\"", "billing_error"),
+    (r"context_length_exceeded", "context_too_long"),
     (r"content size exceeds", "content_too_large"),
     (r"JSON message exceeded maximum buffer size", "buffer_overflow"),
+    (r"API Error: 400.*invalid_request_error", "invalid_request_400"),
+    (r"image dimensions exceed max allowed size", "image_too_large"),
+    (r"\"authentication_\w+\"", "auth_error"),
+    (r"\"billing_error\"", "billing_error"),
 ]
 
 # Compiled for performance (called every 60s across all sessions)

@@ -693,7 +693,7 @@ if __name__ == "__main__":
         sock.set_inheritable(True)
 
         # Pass pre-bound socket to uvicorn
-        config.loaded = True  # Skip uvicorn's own bind
+        config.load()  # Initialize lifespan_class and other internals
         server.servers = []  # Will be populated by serve()
 
         import asyncio
