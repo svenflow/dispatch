@@ -75,7 +75,7 @@
         <div class="feature-desc">Admin, Partner, Family, Favorite tiers with scoped permissions</div>
       </div>
       <div class="feature clickable" on:click={() => navigateTo('skills')} on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') navigateTo('skills') }} role="button" tabindex="0">
-        <div class="feature-title">67+ Skills</div>
+        <div class="feature-title">73+ Skills</div>
         <div class="feature-desc">Browser automation, smart home, iOS dev, payments, and more</div>
       </div>
       <div class="feature clickable" on:click={() => navigateTo('memory')} on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') navigateTo('memory') }} role="button" tabindex="0">

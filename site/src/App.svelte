@@ -36,6 +36,24 @@
     'scheduling': Scheduling,
   }
 
+  const pageTitles = {
+    'home': 'Dispatch',
+    'philosophy': 'Dispatch — Philosophy',
+    'setup': 'Dispatch — Setup Guide',
+    'tiers': 'Dispatch — Tiers & Permissions',
+    'skills': 'Dispatch — Skills',
+    'cli': 'Dispatch — CLI Reference',
+    'architecture': 'Dispatch — Architecture',
+    'configuration': 'Dispatch — Configuration',
+    'messaging': 'Dispatch — Messaging',
+    'message-bus': 'Dispatch — Message Bus',
+    'memory': 'Dispatch — Memory',
+    'health': 'Dispatch — Health & Healing',
+    'analytics': 'Dispatch — Analytics',
+    'postmortems': 'Dispatch — Postmortems',
+    'scheduling': 'Dispatch — Scheduling & Tasks',
+  }
+
   // Redirects for old routes
   const redirects = {
     'getting-started': 'setup',
@@ -71,6 +89,7 @@
   })
 
   $: pageComponent = pages[currentPage]
+  $: document.title = pageTitles[currentPage] || 'Dispatch'
 </script>
 
 <div class="layout">

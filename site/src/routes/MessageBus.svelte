@@ -43,15 +43,15 @@
       <tbody>
         <tr>
           <td><code>messages</code></td>
-          <td><code>message.received</code>, <code>message.sent</code>, <code>message.failed</code>, <code>message.queued</code>, <code>message.delivered</code>, <code>reaction.received</code></td>
+          <td><code>message.received</code>, <code>message.sent</code>, <code>message.failed</code>, <code>message.queued</code>, <code>message.delivered</code>, <code>message.ignored</code>, <code>reaction.received</code>, <code>reaction.ignored</code></td>
         </tr>
         <tr>
           <td><code>sessions</code></td>
-          <td><code>session.created</code>, <code>session.restarted</code>, <code>session.killed</code>, <code>session.compacted</code>, <code>session.crashed</code>, <code>session.injected</code>, <code>session.idle_killed</code>, <code>permission.denied</code></td>
+          <td><code>session.created</code>, <code>session.restarted</code>, <code>session.killed</code>, <code>session.compacted</code>, <code>session.crashed</code>, <code>session.injected</code>, <code>session.idle_killed</code>, <code>session.prewarmed</code>, <code>session.tier_mismatch</code>, <code>permission.denied</code></td>
         </tr>
         <tr>
           <td><code>system</code></td>
-          <td><code>daemon.started</code>, <code>daemon.stopped</code>, <code>daemon.crashed</code>, <code>daemon.recovered</code>, <code>health.check_completed</code>, <code>consolidation.started</code>, <code>consolidation.completed</code>, <code>reminder.fired</code>, <code>vision.analyzed</code>, <code>sdk.turn_complete</code>, <code>session.heartbeat</code></td>
+          <td><code>daemon.started</code>, <code>daemon.stopped</code>, <code>daemon.crashed</code>, <code>daemon.recovered</code>, <code>health.check_completed</code>, <code>consolidation.started</code>, <code>consolidation.completed</code>, <code>reminder.fired</code>, <code>vision.analyzed</code>, <code>sdk.turn_complete</code>, <code>session.heartbeat</code>, <code>command.restart</code>, <code>signal.connection_state</code></td>
         </tr>
         <tr>
           <td><code>reminders</code></td>

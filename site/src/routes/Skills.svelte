@@ -154,10 +154,96 @@
           <code>podcast</code>
           <span>Podcast feed management</span>
         </div>
+        <div class="skill">
+          <code>dj-buyer</code>
+          <span>Search and buy DJ tracks</span>
+        </div>
+        <div class="skill">
+          <code>sheet-music</code>
+          <span>Find piano sheet music</span>
+        </div>
       </div>
     </div>
 
-    <p class="more">Representative selection of 67+ total skills</p>
+    <div class="category">
+      <div class="category-header">Operations</div>
+      <div class="skill-list">
+        <div class="skill">
+          <code>bug-finder</code>
+          <span>Parallel bug discovery</span>
+        </div>
+        <div class="skill">
+          <code>skillify</code>
+          <span>Mine conversations for skill ideas</span>
+        </div>
+        <div class="skill">
+          <code>latency-finder</code>
+          <span>Find performance bottlenecks</span>
+        </div>
+        <div class="skill">
+          <code>debug</code>
+          <span>Diagnose sessions and incidents</span>
+        </div>
+        <div class="skill">
+          <code>perf</code>
+          <span>Execution performance metrics</span>
+        </div>
+        <div class="skill">
+          <code>infra-self-improvement</code>
+          <span>Safely improve core system</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="category">
+      <div class="category-header">Lifestyle</div>
+      <div class="skill-list">
+        <div class="skill">
+          <code>cooking</code>
+          <span>Recipes and Instacart ordering</span>
+        </div>
+        <div class="skill">
+          <code>grubhub</code>
+          <span>Food delivery via Chrome</span>
+        </div>
+        <div class="skill">
+          <code>deals</code>
+          <span>Price comparison and tracking</span>
+        </div>
+        <div class="skill">
+          <code>vacation-house</code>
+          <span>Property search automation</span>
+        </div>
+        <div class="skill">
+          <code>flight-tracker</code>
+          <span>Flight status and tracking</span>
+        </div>
+        <div class="skill">
+          <code>places</code>
+          <span>Google Places search</span>
+        </div>
+        <div class="skill">
+          <code>airbnb</code>
+          <span>Browse Airbnb listings</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="category">
+      <div class="category-header">Payments &amp; Security</div>
+      <div class="skill-list">
+        <div class="skill">
+          <code>payments</code>
+          <span>Online purchases via Privacy.com</span>
+        </div>
+        <div class="skill">
+          <code>passwords</code>
+          <span>macOS Keychain credentials</span>
+        </div>
+      </div>
+    </div>
+
+    <p class="more">Representative selection of 73+ total skills</p>
   </section>
 
   <section>

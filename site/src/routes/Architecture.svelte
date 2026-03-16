@@ -49,7 +49,7 @@
     </div>
 
     <div class="diagram-container">
-      <svg viewBox="0 0 500 950" class="architecture-svg">
+      <svg viewBox="0 0 500 950" class="architecture-svg" role="img" aria-label="Architecture diagram showing the message flow through Dispatch: messages arrive via iMessage and Signal, flow through the Manager Daemon for contact lookup and tier checking, fan out to individual Claude SDK sessions, get processed with inject-prompt, and responses are sent back via send-sms.">
         <defs>
           <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
             <feGaussianBlur stdDeviation="4" result="blur"/>
@@ -469,7 +469,6 @@
     font-size: 13px;
     font-weight: 500;
     cursor: pointer;
-    border-radius: 8px;
     transition: all 0.15s ease;
   }
 
@@ -486,7 +485,6 @@
   .diagram-container {
     background: linear-gradient(135deg, #fafaf9 0%, #f5f5f4 100%);
     border: 1px solid #e7e5e4;
-    border-radius: 16px;
     padding: var(--space-4);
   }
 
@@ -526,18 +524,6 @@
 
   .phone-tier.admin {
     fill: #f28e2c;
-  }
-
-  .bubble-text-tiny {
-    font-family: var(--font-sans);
-    font-size: 7px;
-    fill: #292524;
-  }
-
-  .bubble-text-tiny-out {
-    font-family: var(--font-sans);
-    font-size: 7px;
-    fill: white;
   }
 
   /* DB box */
@@ -832,7 +818,6 @@
     padding: var(--space-5);
     background: #fafaf9;
     border: 1px solid #e7e5e4;
-    border-radius: 12px;
   }
 
   .explain-section h2 {
@@ -861,7 +846,6 @@
   .code-block pre {
     background: #1c1917;
     padding: var(--space-3);
-    border-radius: 8px;
     margin: 0;
     overflow-x: auto;
   }
