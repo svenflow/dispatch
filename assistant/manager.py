@@ -1796,13 +1796,8 @@ class Manager:
                         retry_key = f"{record.topic}:{record.offset}"
                         retry_count = self._dlq_retry_counts.get(retry_key, 0)
 
-                        # Classify: transient errors get retried, permanent go straight to DLQ
-                        transient_patterns = (
-                            "timeout", "timed out", "connection",
-                            "initialize", "ECONNREFUSED", "ENOTFOUND",
-                            "temporarily unavailable", "overloaded",
-                        )
-                        is_transient = any(p in error_str.lower() for p in transient_patterns)
+                        # Classify error using structured classifier
+                        is_transient = self._is_transient_error(e)
                         max_retries = 2 if is_transient else 0
 
                         if retry_count < max_retries:
