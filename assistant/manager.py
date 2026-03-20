@@ -66,7 +66,7 @@ from assistant.bus_helpers import (
     produce_event, produce_session_event,
     sanitize_msg_for_bus, sanitize_reaction_for_bus,
     health_check_payload, service_restarted_payload, service_spawned_payload,
-    consolidation_payload, reminder_payload, healme_payload,
+    reminder_payload, healme_payload,
     compaction_triggered_payload, message_sent_payload, session_injected_payload,
 )
 
@@ -93,11 +93,6 @@ def get_signal_db():
 STATE_FILE = STATE_DIR / "last_rowid.txt"
 CONSOLIDATION_STATE_FILE = STATE_DIR / "last_consolidation_date.txt"
 
-# Search daemon config - lives in dispatch/services/memory-search
-SEARCH_DAEMON_DIR = ASSISTANT_DIR / "services" / "memory-search"
-SEARCH_DAEMON_SCRIPT = SEARCH_DAEMON_DIR / "src" / "daemon.ts"
-SEARCH_DAEMON_PORT = 7890
-SEARCH_DAEMON_ENABLED = os.environ.get("DISABLE_SEARCH_DAEMON", "").lower() not in ("1", "true", "yes")
 SIGNAL_ENABLED = os.environ.get("DISABLE_SIGNAL", "").lower() not in ("1", "true", "yes")
 
 # Sven API config - lives in dispatch/services/sven-api
@@ -156,14 +151,38 @@ class ContactsManager:
         return self._lookup_email(email)
 
     def lookup_identifier(self, identifier: str) -> Optional[Dict[str, str]]:
-        """Lookup contact by phone OR email via SQLite."""
+        """Lookup contact by phone, email, OR Signal UUID via SQLite."""
         with perf.timed("contact_lookup_ms", component="daemon"):
             contact = self._lookup_phone(identifier)
             if contact:
                 return contact
             if '@' in identifier:
                 return self._lookup_email(identifier)
+            # Try resolving Signal UUID → phone number via signal-cli recipient DB
+            if len(identifier) == 36 and identifier.count('-') == 4:
+                phone = self._resolve_signal_uuid_to_phone(identifier)
+                if phone:
+                    contact = self._lookup_phone(phone)
+                    if contact:
+                        return contact
             return None
+
+    @staticmethod
+    def _resolve_signal_uuid_to_phone(uuid: str) -> Optional[str]:
+        """Resolve a Signal UUID to a phone number via signal-cli's recipient DB."""
+        import sqlite3 as _sqlite3
+        SIGNAL_DB = HOME / ".local/share/signal-cli/data/218538.d/account.db"
+        try:
+            conn = _sqlite3.connect(f"file:{SIGNAL_DB}?mode=ro", uri=True, timeout=2)
+            row = conn.execute(
+                "SELECT number FROM recipient WHERE aci = ?", (uuid,)
+            ).fetchone()
+            conn.close()
+            if row and row[0]:
+                return row[0]
+        except Exception:
+            pass
+        return None
 
     def list_blessed_contacts(self) -> list:
         """Get all contacts with blessed tiers (admin, partner, family, favorite)."""
@@ -799,6 +818,8 @@ class SignalListener(threading.Thread):
                 "audio_transcription": None,
                 "thread_originator_guid": None,
                 "source": "signal",  # Mark as Signal message
+                "sender_name": source_name,  # Signal profile name (may be None)
+                "source_uuid": envelope.get("sourceUuid"),  # Signal UUID for recipient lookup
             }
 
             log.info(f"SignalListener: queued message from {source_number}: {body[:50]}...")
@@ -1298,12 +1319,8 @@ class ReminderPoller:
         if r["schedule"]["type"] == "cron":
             msg += f"\n[Schedule: {r['schedule']['value']} in {tz}]\n"
 
-        # Different instructions based on target
         target = r.get("target", "fg")
-        if target == "bg":
-            msg += "\nEXECUTE this task silently. No need to text the user."
-        else:
-            msg += "\nACTION REQUIRED:\n1. TEXT the user: \"Reminder: [task]. Working on it now...\"\n2. EXECUTE the task\n3. TEXT the user the results when done"
+        msg += "\nACTION REQUIRED:\n1. TEXT the user: \"Reminder: [task]. Working on it now...\"\n2. EXECUTE the task\n3. TEXT the user the results when done"
 
         # Inject into session based on target
         normalized = normalize_chat_id(chat_id)
@@ -1320,22 +1337,6 @@ class ReminderPoller:
                 self._produce_session_injected(spawn_id, contact, tier, r)
             else:
                 raise RuntimeError(f"Failed to spawn session for {contact}")
-        elif target == "bg":
-            # Inject into background session
-            bg_id = f"{normalized}-bg"
-            session = self.backend.sessions.get(bg_id)
-            if session and session.is_alive():
-                await session.inject(msg)
-                self._produce_session_injected(bg_id, contact, tier, r)
-            else:
-                # Create BG session and inject
-                await self.backend.create_background_session(contact, chat_id, tier)
-                session = self.backend.sessions.get(bg_id)
-                if session:
-                    await session.inject(msg)
-                    self._produce_session_injected(bg_id, contact, tier, r)
-                else:
-                    raise RuntimeError(f"Failed to create BG session for {contact}")
         else:
             # fg (default) - inject into foreground session
             session = self.backend.sessions.get(normalized)
@@ -1481,7 +1482,6 @@ class IPCServer:
         is_sms = req.get("sms", False)
         is_admin = req.get("admin", False)
         is_sven_app = req.get("sven_app", False)
-        is_bg = req.get("bg", False)
         contact_name = req.get("contact_name")
         tier = req.get("tier")
         source = req.get("source", "imessage")
@@ -1517,9 +1517,7 @@ class IPCServer:
             message_timestamp = datetime.now()
 
         try:
-            if is_bg:
-                await self.backend.inject_consolidation(contact_name or "Unknown", chat_id)
-            elif is_group:
+            if is_group:
                 await self.backend.inject_group_message(
                     chat_id=chat_id,
                     display_name=contact_name or "Group",
@@ -1563,6 +1561,7 @@ class Manager:
         self._bus.create_topic("reminders", retention_ms=168 * 3600 * 1000)
         self._bus.create_topic("tasks", retention_ms=168 * 3600 * 1000)  # 7 days
         self._bus.create_topic("messages.dlq", retention_ms=30 * 24 * 3600 * 1000)  # 30 days
+        self._bus.create_topic("facts", retention_ms=30 * 24 * 3600 * 1000)  # 30 days
         self._producer = self._bus.producer()
         self._dlq_retry_counts: dict[str, int] = {}  # offset_key -> retry_count
 
@@ -1573,13 +1572,6 @@ class Manager:
         )
         self.reminders = ReminderPoller(self.sessions, self.contacts)
         self.ipc = IPCServer(self.sessions, self.registry, self.contacts)
-
-        # Spawn search daemon as child process (unless disabled)
-        if SEARCH_DAEMON_ENABLED:
-            self.search_daemon = self._spawn_search_daemon()
-        else:
-            log.info("Search daemon disabled via DISABLE_SEARCH_DAEMON env var")
-            self.search_daemon = None
 
         # Spawn Sven API as child process
         self.sven_api_daemon = self._spawn_sven_api_daemon()
@@ -1592,6 +1584,10 @@ class Manager:
         # Test message integration
         self.test_queue = queue.Queue()
         self.test_watcher = None
+
+        # Discord integration
+        self.discord_queue = queue.Queue()
+        self.discord_listener = None
 
         # Load last processed ROWID
         self.last_rowid = self._load_state()
@@ -1626,6 +1622,7 @@ class Manager:
         (e.g., vision indexing, reminder audit trails, consolidation coordination).
         """
         from bus.consumers import ConsumerRunner, ConsumerConfig, actions
+        from assistant.fact_reminder_consumer import handle_fact_event
 
         configs = [
             # Audit consumer for messages topic — tracks all message flow
@@ -1666,6 +1663,17 @@ class Manager:
                     )
                 ),
                 commit_interval_s=10,  # Batch commits to reduce write lock contention
+            ),
+            # Fact → Reminder consumer: watches facts topic for temporal facts,
+            # creates reminders at key moments (check-in, pre-departure, landing, daily intel)
+            ConsumerConfig(
+                topic="facts",
+                group="fact-reminder-creator",
+                filter=lambda r: r.type in ("fact.created", "fact.updated"),
+                action=actions.call_function(handle_fact_event),
+                max_retries=2,
+                error_action=actions.dead_letter(self._bus, "dead-letters"),
+                commit_interval_s=5,
             ),
         ]
         return ConsumerRunner(self._bus, configs)
@@ -1793,7 +1801,10 @@ class Manager:
                     except Exception as e:
                         failed += 1
                         error_str = str(e)
-                        retry_key = f"{record.topic}:{record.offset}"
+                        # Use event_id (or content hash) so retries track per-message,
+                        # not per-offset (offsets change when re-produced for retry)
+                        event_id = record.payload.get("_original_offset", record.offset)
+                        retry_key = f"{record.topic}:{record.key}:{event_id}"
                         retry_count = self._dlq_retry_counts.get(retry_key, 0)
 
                         # Classify error using structured classifier
@@ -2117,12 +2128,13 @@ class Manager:
             )
 
             duration = time.time() - start_time
+            from assistant.bus_helpers import redact_pii
 
             if proc.returncode == 0:
                 produce_event(self._producer, "tasks", "task.completed",
                     task_completed_payload(task_id, title, requested_by, duration,
-                        stdout=stdout.decode() if stdout else "",
-                        stderr=stderr.decode() if stderr else "",
+                        stdout=redact_pii(stdout.decode()) if stdout else "",
+                        stderr=redact_pii(stderr.decode()) if stderr else "",
                     ),
                     key=requested_by, source="task-runner", headers=headers)
                 log.info(f"SCRIPT_TASK_DONE | task_id={task_id} | duration={duration:.1f}s")
@@ -2135,7 +2147,7 @@ class Manager:
             else:
                 error_msg = (stderr.decode() if stderr else f"exit code {proc.returncode}")
                 produce_event(self._producer, "tasks", "task.failed",
-                    task_failed_payload(task_id, title, requested_by, error_msg),
+                    task_failed_payload(task_id, title, requested_by, redact_pii(error_msg)),
                     key=requested_by, source="task-runner", headers=headers)
                 log.error(f"SCRIPT_TASK_FAILED | task_id={task_id} | error={error_msg}")
 
@@ -2196,19 +2208,22 @@ class Manager:
 
         Decoupled from get_new_messages() to avoid blocking the 100ms poll
         when Messages.app holds write locks (observed up to 5.4s stalls).
-        Runs every 5 seconds in the executor.
+        Runs every 5 seconds in a dedicated executor (NOT the poll executor,
+        since checkpoint can block and would starve the poll thread).
         """
         loop = asyncio.get_event_loop()
+        wal_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="wal-checkpoint")
         while not self._shutdown_flag:
             try:
                 await asyncio.sleep(5)
                 await loop.run_in_executor(
-                    self._chat_reader._executor, self.messages.run_wal_checkpoint
+                    wal_executor, self.messages.run_wal_checkpoint
                 )
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 log.debug(f"WAL checkpoint error: {e}")
+        wal_executor.shutdown(wait=False)
 
     async def _supervise_ephemeral_tasks(self):
         """Periodic supervision of ephemeral tasks: check for timeouts and completion.
@@ -2219,7 +2234,7 @@ class Manager:
         """
         from assistant.bus_helpers import task_completed_payload, task_timeout_payload
 
-        HARD_MAX_LIFETIME = 7200  # 2 hours absolute max
+        HARD_MAX_LIFETIME = 14400  # 4 hours absolute max
 
         while not self._shutdown_flag:
             try:
@@ -2263,6 +2278,41 @@ class Manager:
                             )
                         continue
 
+                    # Check if ephemeral task is idle after completing its work.
+                    # Only clean up if the session is truly idle — not busy with
+                    # pending queries (e.g. subagent tool calls that don't update
+                    # last_activity). Use a generous threshold since agent tasks
+                    # often have gaps between tool calls.
+                    EPHEMERAL_IDLE_SECS = 120
+                    if session is not None and hasattr(session, 'last_activity'):
+                        idle_secs = (datetime.now() - session.last_activity).total_seconds()
+                        is_busy = getattr(session, 'is_busy', False)
+                        has_pending = getattr(session, '_pending_queries', 0) > 0
+                        if (idle_secs >= EPHEMERAL_IDLE_SECS
+                                and elapsed > EPHEMERAL_IDLE_SECS
+                                and not is_busy
+                                and not has_pending):
+                            log.info(f"TASK_IDLE_CLEANUP | task_id={task_id} | "
+                                     f"idle={idle_secs:.0f}s | elapsed={elapsed:.0f}s")
+
+                            produce_event(self._producer, "tasks", "task.completed",
+                                task_completed_payload(task_id, info["title"],
+                                    info["requested_by"], elapsed),
+                                key=info["requested_by"], source="task-runner")
+
+                            await self.sessions.kill_ephemeral_session(task_id)
+                            self._ephemeral_tasks.pop(task_id, None)
+
+                            if info["notify"]:
+                                _fire_and_forget(
+                                    self._notify_task_event(
+                                        info["requested_by"],
+                                        f"✅ Task completed: {info['title']}"
+                                    ),
+                                    name=f"task-notify-idle-{task_id}",
+                                )
+                            continue
+
                     # Check timeout (configured or hard max) — only for ALIVE sessions
                     if elapsed > timeout_secs or elapsed > HARD_MAX_LIFETIME:
                         log.warning(f"TASK_TIMEOUT | task_id={task_id} | "
@@ -2300,8 +2350,8 @@ class Manager:
         """Send a task notification to the requester's session.
 
         Injects the message into the requester's existing chat session
-        so they have full history context. Falls back to direct message
-        via the correct backend (iMessage or Signal).
+        so the agent has full context and can decide whether/how to
+        forward it to the user. Falls back to direct SMS if session is dead.
         """
         session = self.sessions.sessions.get(chat_id)
         if session and session.is_alive():
@@ -2312,15 +2362,12 @@ class Manager:
         else:
             # Fallback: send via the correct backend
             try:
-                # Look up backend from registry
                 reg = self.sessions.registry.get(chat_id)
                 source = reg.get("source", "imessage") if reg else "imessage"
-
                 if source == "signal":
                     send_cmd = str(SKILLS_DIR / "signal" / "scripts" / "send-signal")
                 else:
                     send_cmd = str(SKILLS_DIR / "sms-assistant" / "scripts" / "send-sms")
-
                 proc = await asyncio.create_subprocess_exec(
                     send_cmd, chat_id, message,
                     stdout=asyncio.subprocess.PIPE,
@@ -2427,51 +2474,6 @@ class Manager:
             except Exception:
                 pass
             setattr(self, attr_name, None)
-
-    def _spawn_search_daemon(self) -> Optional[subprocess.Popen]:
-        """Spawn the search daemon as a child process.
-
-        Returns the Popen object or None if spawn failed.
-        """
-        if not SEARCH_DAEMON_SCRIPT.exists():
-            log.warning(f"Search daemon script not found at {SEARCH_DAEMON_SCRIPT}")
-            return None
-
-        search_log_path = LOGS_DIR / "search-daemon.log"
-        self._close_log_fh('_search_log_fh')
-        self._search_log_fh = open(search_log_path, "a")
-
-        try:
-            proc = subprocess.Popen(
-                [str(BUN), "run", str(SEARCH_DAEMON_SCRIPT)],
-                stdout=self._search_log_fh,
-                stderr=self._search_log_fh,
-                cwd=str(SEARCH_DAEMON_DIR),
-            )
-        except Exception:
-            # Clean up the file handle if Popen failed
-            self._close_log_fh('_search_log_fh')
-            raise
-
-        try:
-            log.info(f"Spawned search daemon (PID: {proc.pid})")
-            lifecycle_log.info(f"SEARCH_DAEMON | SPAWNED | pid={proc.pid}")
-            produce_event(getattr(self, '_producer', None), "system", "health.service_spawned",
-                service_spawned_payload("search_daemon", proc.pid), source="daemon")
-            return proc
-        except Exception as e:
-            log.error(f"Failed to spawn search daemon: {e}")
-            return None
-
-    def _check_search_daemon_health(self) -> bool:
-        """Check if search daemon is responding."""
-        try:
-            import urllib.request
-            url = f"http://localhost:{SEARCH_DAEMON_PORT}/health"
-            with urllib.request.urlopen(url, timeout=2) as resp:
-                return resp.status == 200
-        except Exception:
-            return False
 
     def _spawn_sven_api_daemon(self) -> Optional[subprocess.Popen]:
         """Spawn the Sven API server as a child process.
@@ -2610,6 +2612,49 @@ class Manager:
         log.info("Started Signal listener thread")
         lifecycle_log.info("SIGNAL_LISTENER | STARTED")
 
+    def _start_discord_listener(self):
+        """Start the Discord listener thread."""
+        if self.discord_listener is not None and self.discord_listener.is_alive():
+            log.debug("Discord listener already running")
+            return
+
+        from assistant import config as app_config
+        discord_channels = app_config.get("discord.channel_ids", [])
+        if not discord_channels:
+            log.info("Discord not configured — skipping (set discord.channel_ids in config)")
+            return
+
+        # Token resolution: keychain first (matches send-discord CLI), then config
+        discord_token = None
+        import subprocess
+        try:
+            result = subprocess.run(
+                ["security", "find-generic-password", "-s", "discord_bot_token", "-w"],
+                capture_output=True, text=True
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                discord_token = result.stdout.strip()
+        except Exception:
+            pass
+
+        if not discord_token:
+            discord_token = app_config.get("discord.bot_token")
+
+        if not discord_token:
+            log.warning("Discord token not found in keychain or config — skipping")
+            return
+
+        try:
+            from assistant.discord_listener import DiscordListener
+            self.discord_listener = DiscordListener(self.discord_queue, discord_channels, discord_token)
+            self.discord_listener.start()
+            log.info(f"Started Discord listener for channels: {discord_channels}")
+            lifecycle_log.info(f"DISCORD_LISTENER | STARTED | channels={discord_channels}")
+        except ImportError as e:
+            log.warning(f"Discord not available (discord.py not installed): {e}")
+        except Exception as e:
+            log.error(f"Failed to start Discord listener: {e}")
+
     def _stop_signal(self):
         """Stop Signal daemon and listener."""
         if self.signal_listener:
@@ -2664,7 +2709,6 @@ class Manager:
         the main message processing loop. Includes:
         - Session health_check_all (liveness)
         - Tier 2 deep Haiku analysis
-        - Search daemon health
         - Signal daemon health
         - Sven API health
         """
@@ -2680,22 +2724,6 @@ class Manager:
                 await self.sessions.deep_health_check(skip_chat_ids=recently_healed)
             except Exception as e:
                 log.error(f"Deep health check failed: {e}")
-
-            # Check search daemon health
-            if self.search_daemon is not None:
-                if self.search_daemon.poll() is not None:
-                    log.warning("Search daemon died, restarting...")
-                    lifecycle_log.info(f"SEARCH_DAEMON | DIED | restarting")
-                    produce_event(self._producer, "system", "health.service_restarted",
-                        service_restarted_payload("search_daemon", "died"), source="health")
-                    self.search_daemon = self._spawn_search_daemon()
-                elif not self._check_search_daemon_health():
-                    log.warning("Search daemon not responding, restarting...")
-                    lifecycle_log.info(f"SEARCH_DAEMON | UNRESPONSIVE | restarting")
-                    produce_event(self._producer, "system", "health.service_restarted",
-                        service_restarted_payload("search_daemon", "unresponsive"), source="health")
-                    self.search_daemon.kill()
-                    self.search_daemon = self._spawn_search_daemon()
 
             # Check Signal daemon health
             if self.signal_daemon is not None:
@@ -2720,6 +2748,15 @@ class Manager:
                     self.signal_daemon = self._spawn_signal_daemon()
                     if self.signal_daemon:
                         self._start_signal_listener()
+
+            # Check Discord listener health
+            if self.discord_listener is not None:
+                if not self.discord_listener.is_alive():
+                    log.warning("Discord listener died, restarting...")
+                    lifecycle_log.info("DISCORD_LISTENER | DIED | restarting")
+                    produce_event(self._producer, "system", "health.service_restarted",
+                        service_restarted_payload("discord_listener", "died"), source="health")
+                    self._start_discord_listener()
 
             # Check Sven API health
             if self.sven_api_daemon is not None:
@@ -2789,6 +2826,30 @@ class Manager:
             log.error(f"Background health check failed: {e}")
         finally:
             self._health_check_running = False
+
+    def _resolve_signal_uuid(self, uuid: str) -> Optional[str]:
+        """Resolve a Signal UUID to a profile display name via signal-cli's recipient DB.
+
+        Returns the profile name (e.g. "Josiah Roberts") or None if not found.
+        Fast — single SQLite query against signal-cli's local data.
+        """
+        import sqlite3 as _sqlite3
+        SIGNAL_DB = HOME / ".local/share/signal-cli/data/218538.d/account.db"
+        try:
+            conn = _sqlite3.connect(f"file:{SIGNAL_DB}?mode=ro", uri=True, timeout=2)
+            row = conn.execute(
+                "SELECT profile_given_name, profile_family_name, nick_name_given_name, nick_name_family_name FROM recipient WHERE aci = ?",
+                (uuid,)
+            ).fetchone()
+            conn.close()
+            if row:
+                # Prefer nickname, fall back to profile name
+                nick = f"{row[2] or ''} {row[3] or ''}".strip()
+                profile = f"{row[0] or ''} {row[1] or ''}".strip()
+                return nick or profile or None
+        except Exception as e:
+            log.warning(f"Failed to resolve Signal UUID {uuid}: {e}")
+        return None
 
     def _send_sms(self, phone: str, message: str) -> bool:
         """Send an SMS message via the send-sms CLI.
@@ -3014,7 +3075,7 @@ You have 15 minutes. Work efficiently.
         text_preview = (text[:50] + "...") if text else "(attachment only)"
         attachment_info = f" + {len(attachments)} attachment(s)" if attachments else ""
         group_info = f" [GROUP: {group_name or chat_identifier}]" if is_group else ""
-        log.info(f"Processing message {rowid} from {phone}{group_info}: {text_preview}{attachment_info}")
+        log.info(f"Processing message {rowid}{group_info}: {text_preview}{attachment_info}")
 
         # NOTE: produce_event("message.received") is called by the poll loop,
         # not here. This method is invoked by the bus consumer after reading
@@ -3030,6 +3091,42 @@ You have 15 minutes. Work efficiently.
         else:
             sender_name = None
             sender_tier = None
+
+        # Discord users don't have phone numbers — use config-based tier lookup
+        if not contact and source == "discord":
+            from assistant import config as app_config
+            discord_users = app_config.get("discord.users", {})
+            discord_user = discord_users.get(phone)  # phone = discord user ID
+            if discord_user:
+                sender_name = discord_user.get("name", phone)
+                sender_tier = discord_user.get("tier", "unknown")
+                contact = {"name": sender_name, "tier": sender_tier}
+                log.info(f"Discord user resolved: {sender_name} (tier: {sender_tier})")
+            else:
+                # Unmapped Discord users get the default tier from config (defaults to "unknown")
+                default_tier = app_config.get("discord.default_tier", "unknown")
+                sender_name = msg.get("sender_name", phone)
+                sender_tier = default_tier
+                if default_tier != "unknown":
+                    contact = {"name": sender_name, "tier": sender_tier}
+                    log.info(f"[discord] Unmapped user: {sender_name} ({phone}) — using default tier '{default_tier}'")
+                else:
+                    log.info(f"[discord] Unmapped user: {sender_name} ({phone}) — ignoring (add to discord.users config or set discord.default_tier for access)")
+
+        # Signal UUID resolution — when contact lookup fails and phone is a UUID,
+        # resolve the display name from signal-cli's recipient database
+        if not contact and source == "signal":
+            signal_sender_name = msg.get("sender_name")  # Signal profile name from envelope
+            source_uuid = msg.get("source_uuid")
+            if signal_sender_name:
+                sender_name = signal_sender_name
+                log.info(f"[signal] Using Signal profile name for UUID sender: {sender_name} ({phone})")
+            elif source_uuid:
+                # Try resolving from signal-cli's recipient DB
+                resolved = self._resolve_signal_uuid(source_uuid)
+                if resolved:
+                    sender_name = resolved
+                    log.info(f"[signal] Resolved UUID {source_uuid} to profile name: {sender_name}")
 
         # HEALME intercept - works even if contacts lookup fails!
         # This is critical because HEALME is needed most when systems are broken.
@@ -3142,7 +3239,7 @@ You have 15 minutes. Work efficiently.
                     message_timestamp=message_timestamp,
                 )
             elif await asyncio.get_event_loop().run_in_executor(
-                None, self.messages._group_has_blessed_participant, chat_identifier, self.contacts
+                self._chat_reader._executor, self.messages._group_has_blessed_participant, chat_identifier, self.contacts
             ):
                 # Unknown sender BUT a blessed contact is in this group
                 log.info(f"Unknown sender {phone} but group has blessed participant, allowing message and creating session")
@@ -3344,14 +3441,10 @@ You have 15 minutes. Work efficiently.
             self.signal_listener.stop()
             self.signal_listener = None
 
-        # Wait for search daemon to terminate cleanly (registry will call terminate(),
-        # but we want to wait for it to actually exit)
-        if self.search_daemon:
-            try:
-                self.search_daemon.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self.search_daemon.kill()
-            log.info("Stopped search daemon")
+        # Stop Discord listener
+        if self.discord_listener:
+            self.discord_listener.stop()
+            self.discord_listener = None
 
         # Wait for sven api daemon
         if self.sven_api_daemon:
@@ -3420,162 +3513,6 @@ You have 15 minutes. Work efficiently.
         except Exception as e:
             log.warning(f"STARTUP_CHECK | Could not verify nightly reminders: {e}")
 
-    # ── Legacy consolidation methods (kept for reference, no longer called) ──
-
-    async def _run_nightly_consolidation(self):
-        """Run memory consolidation at 2am:
-        1. Person-facts → Contacts.app notes (consolidate_3pass.py)
-        2. Chat context → CONTEXT.md per chat (consolidate_chat.py)
-        3. Inject summary into admin session for review and texting
-        4. Skillify → propose new skills and improvements from today's chats
-
-        Uses asyncio subprocess to avoid blocking the event loop.
-        """
-        person_facts_script = HOME / "dispatch/prototypes/memory-consolidation/consolidate_3pass.py"
-        chat_context_script = HOME / "dispatch/prototypes/memory-consolidation/consolidate_chat.py"
-
-        # Track outputs for admin summary
-        person_facts_output = ""
-        person_facts_error = ""
-        chat_context_output = ""
-        chat_context_error = ""
-
-        # 1. Person-facts consolidation
-        log.info("Running nightly person-facts consolidation to Contacts.app...")
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "uv", "run", str(person_facts_script), "--all",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await proc.communicate()
-            person_facts_output = stdout.decode() if stdout else ""
-            person_facts_error = stderr.decode() if stderr else ""
-            log.info(f"Person-facts consolidation complete: {person_facts_output[-500:] if person_facts_output else 'no output'}")
-            if proc.returncode != 0:
-                log.error(f"Person-facts errors: {person_facts_error[-500:] if person_facts_error else 'none'}")
-        except Exception as e:
-            log.error(f"Person-facts consolidation failed: {e}")
-            person_facts_error = str(e)
-
-        # 2. Chat context consolidation
-        log.info("Running nightly chat context consolidation to CONTEXT.md...")
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "uv", "run", str(chat_context_script), "--all",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await proc.communicate()
-            chat_context_output = stdout.decode() if stdout else ""
-            chat_context_error = stderr.decode() if stderr else ""
-            log.info(f"Chat context consolidation complete: {chat_context_output[-500:] if chat_context_output else 'no output'}")
-            if proc.returncode != 0:
-                log.error(f"Chat context errors: {chat_context_error[-500:] if chat_context_error else 'none'}")
-        except Exception as e:
-            log.error(f"Chat context consolidation failed: {e}")
-            chat_context_error = str(e)
-
-        # 3. Inject summary into admin session
-        await self._inject_consolidation_summary(
-            person_facts_output, person_facts_error,
-            chat_context_output, chat_context_error
-        )
-
-        # 4. Skillify - propose new skills and improvements
-        log.info("Running nightly skillify analysis...")
-        await self._run_nightly_skillify()
-
-    async def _run_nightly_skillify(self):
-        """Run skillify analysis and inject into admin session.
-
-        Injects a prompt into the admin session telling it to run /skillify --nightly.
-        The admin session handles the actual skill analysis and sends SMS results.
-        """
-        from assistant import config
-
-        admin_phone = config.require("owner.phone")
-        admin_name = config.require("owner.name")
-
-        skillify_prompt = """<admin>
-🔧 Nightly skillify analysis time. Run /skillify --nightly to analyze today's conversations for new skill opportunities and improvements to existing skills. This runs the full discovery→refinement pipeline and sends results via SMS.
-</admin>"""
-
-        try:
-            await self.sessions.inject_message(
-                admin_name, admin_phone, skillify_prompt, "admin",
-                source="imessage"
-            )
-            log.info("Injected skillify prompt into admin session")
-            lifecycle_log.info("CONSOLIDATION | SKILLIFY_INJECTED | admin")
-            produce_event(self._producer, "system", "skillify.started",
-                consolidation_payload("skillify", success=True),
-                source="consolidation")
-        except Exception as e:
-            log.error(f"Failed to inject skillify prompt: {e}")
-            produce_event(self._producer, "system", "skillify.started",
-                consolidation_payload("skillify", success=False, error=str(e)),
-                source="consolidation")
-
-    async def _inject_consolidation_summary(
-        self,
-        person_facts_output: str,
-        person_facts_error: str,
-        chat_context_output: str,
-        chat_context_error: str,
-    ):
-        """Inject consolidation summary into admin session for review."""
-        from assistant import config
-
-        admin_phone = config.require("owner.phone")
-        admin_name = config.require("owner.name")
-
-        # Build the summary prompt
-        summary_prompt = f"""<admin>
-🌙 2am memory consolidation just completed. Here's what happened:
-
-## Person-Facts Consolidation (→ Contacts.app notes)
-```
-{person_facts_output if person_facts_output else "(no output)"}
-```
-{f"**Errors:** {person_facts_error}" if person_facts_error else ""}
-
-## Chat Context Consolidation (→ CONTEXT.md per chat)
-```
-{chat_context_output if chat_context_output else "(no output)"}
-```
-{f"**Errors:** {chat_context_error}" if chat_context_error else ""}
-
----
-
-**Your task:**
-1. Review the results above
-2. Explore anything interesting (read new facts, check CONTEXT.md files)
-3. If there were errors, investigate and note what went wrong
-4. Send me a summary text with:
-   - How many contacts/chats were processed
-   - Any notable new facts learned
-   - Any errors that need attention
-
-Keep the text concise - this is a nightly check-in, not a full report.
-</admin>"""
-
-        try:
-            # Inject into admin's foreground session
-            await self.sessions.inject_message(
-                admin_name, admin_phone, summary_prompt, "admin",
-                source="imessage"
-            )
-            log.info(f"Injected consolidation summary into admin session")
-            lifecycle_log.info("CONSOLIDATION | SUMMARY_INJECTED | admin")
-            produce_event(self._producer, "system", "consolidation.completed",
-                consolidation_payload("summary_injected", success=True),
-                source="consolidation")
-        except Exception as e:
-            log.error(f"Failed to inject consolidation summary: {e}")
-            produce_event(self._producer, "system", "consolidation.failed",
-                consolidation_payload("summary_injection", success=False, error=str(e)),
-                source="consolidation")
 
     async def run(self):
         """Main async loop."""
@@ -3604,7 +3541,6 @@ Keep the text concise - this is a nightly check-in, not a full report.
 
         # Register log file handles from subprocess spawns (created in __init__)
         for attr_name, resource_name in [
-            ('_search_log_fh', 'search_log_fh'),
             ('_sven_api_log_fh', 'sven_api_log_fh'),
         ]:
             fh = getattr(self, attr_name, None)
@@ -3612,8 +3548,6 @@ Keep the text concise - this is a nightly check-in, not a full report.
                 resource_registry.register(resource_name, fh, fh.close)
 
         # Register subprocesses
-        if self.search_daemon:
-            resource_registry.register('search_daemon', self.search_daemon, self.search_daemon.terminate)
         if self.sven_api_daemon:
             resource_registry.register('sven_api_daemon', self.sven_api_daemon, self.sven_api_daemon.terminate)
 
@@ -3719,6 +3653,9 @@ Keep the text concise - this is a nightly check-in, not a full report.
         log.info("Starting test message watcher...")
         self.test_watcher = TestMessageWatcher(self.test_queue)
         self.test_watcher.start()
+
+        # Start Discord listener (if configured)
+        self._start_discord_listener()
 
         # Track last health check time
         last_health_check = time.time()
@@ -3865,6 +3802,23 @@ Keep the text concise - this is a nightly check-in, not a full report.
                 if test_count > 0:
                     self._consumer_notify.set()
 
+                # Process Discord messages from queue → produce to bus
+                discord_count = 0
+                while not self.discord_queue.empty():
+                    try:
+                        discord_msg = self.discord_queue.get_nowait()
+                        disc_source = discord_msg.get("source", "discord")
+                        disc_raw_key = discord_msg.get("chat_identifier") or discord_msg.get("phone")
+                        produce_event(self._producer, "messages", "message.received",
+                            sanitize_msg_for_bus(discord_msg),
+                            key=f"{disc_source}/{disc_raw_key}", source=disc_source)
+                        discord_count += 1
+                    except queue.Empty:
+                        break
+                if discord_count:
+                    self._consumer_notify.set()
+                    perf.incr("messages_read", count=discord_count, component="daemon", source="discord")
+
                 # Flush rowid state to disk once per poll cycle (batched)
                 self._flush_state()
 
@@ -3910,13 +3864,6 @@ Keep the text concise - this is a nightly check-in, not a full report.
                     except Exception as e:
                         log.error(f"Error during idle session check: {e}")
                     last_idle_check = time.time()
-
-                # Nightly memory consolidation — MIGRATED to ephemeral tasks
-                # Consolidation and skillify now run via cron reminders that fire
-                # task.requested events to the bus. See scripts/setup-nightly-tasks.py.
-                # The old hardcoded 2am trigger is disabled.
-                # Legacy methods (_run_nightly_consolidation, _run_nightly_skillify,
-                # _inject_consolidation_summary) are kept for reference but unused.
 
                 await asyncio.sleep(POLL_INTERVAL)
                 last_iteration_end = time.time()  # Update for next poll_gap measurement

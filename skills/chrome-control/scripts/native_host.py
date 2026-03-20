@@ -16,6 +16,7 @@ import base64
 import tempfile
 import time
 import uuid
+import fcntl
 
 SOCKET_DIR = "/tmp"
 REGISTRY_PATH = "/tmp/chrome_control_registry.json"
@@ -29,7 +30,8 @@ def log(msg: str) -> None:
     line = f"[NativeHost] {msg}\n"
     sys.stderr.write(line)
     sys.stderr.flush()
-    with open(LOG_FILE, 'a') as f:
+    fd = os.open(LOG_FILE, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    with os.fdopen(fd, 'a') as f:
         f.write(line)
 
 
@@ -86,16 +88,16 @@ def load_registry() -> dict:
         if os.path.exists(REGISTRY_PATH):
             with open(REGISTRY_PATH, 'r') as f:
                 return json.load(f)
-    except:
+    except Exception:
         pass
     return {"profiles": {}}
 
 
 def save_registry(registry: dict) -> None:
-    """Save the profile registry."""
-    with open(REGISTRY_PATH, 'w') as f:
+    """Save the profile registry with restricted permissions."""
+    fd = os.open(REGISTRY_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, 'w') as f:
         json.dump(registry, f, indent=2)
-    os.chmod(REGISTRY_PATH, 0o666)
 
 
 def cleanup_stale_profiles(registry: dict) -> dict:
@@ -113,7 +115,7 @@ def cleanup_stale_profiles(registry: dict) -> dict:
                 # Process dead, clean up socket
                 try:
                     os.remove(socket_path)
-                except:
+                except Exception:
                     pass
     registry["profiles"] = active
     return registry
@@ -144,7 +146,7 @@ class ChromeControlHost:
         self.socket_server.bind(self.socket_path)
         self.socket_server.listen(5)
         self.socket_server.setblocking(False)
-        os.chmod(self.socket_path, 0o777)
+        os.chmod(self.socket_path, 0o700)
         log(f"Listening on {self.socket_path}")
 
     def register_profile(self, extension_id: str, profile_name: str | None = None):
@@ -172,7 +174,7 @@ class ChromeControlHost:
                     del registry["profiles"][self.profile_id]
                     save_registry(registry)
                     log(f"Unregistered profile: {self.profile_name}")
-            except:
+            except Exception:
                 pass
 
     def cleanup_client(self, client: socket.socket):
@@ -188,14 +190,14 @@ class ChromeControlHost:
                 del self.screenshot_chunks[k]
         try:
             client.close()
-        except:
+        except Exception:
             pass
 
     def is_client_valid(self, client: socket.socket) -> bool:
         """Check if client socket is still valid."""
         try:
             return client.fileno() != -1 and client in self.clients
-        except:
+        except Exception:
             return False
 
     def handle_client_message(self, client: socket.socket, data: bytes):
@@ -208,7 +210,7 @@ class ChromeControlHost:
                 send_message({'type': 'reload'})
                 try:
                     client.sendall(json.dumps({'status': 'reload_sent'}).encode() + b'\n')
-                except:
+                except Exception:
                     pass
                 return
 
@@ -224,7 +226,7 @@ class ChromeControlHost:
             log(f"Client message error: {e}")
             try:
                 client.sendall(json.dumps({'error': str(e)}).encode() + b'\n')
-            except:
+            except Exception:
                 pass
 
     def handle_extension_message(self, message: dict):
@@ -302,7 +304,7 @@ class ChromeControlHost:
                         'type': 'response', 'id': request_id,
                         'error': 'No screenshot chunks'
                     }).encode() + b'\n')
-                except:
+                except Exception:
                     pass
             return
 
@@ -317,7 +319,7 @@ class ChromeControlHost:
                         'type': 'response', 'id': request_id,
                         'error': 'Missing chunks'
                     }).encode() + b'\n')
-                except:
+                except Exception:
                     pass
             return
 
@@ -355,7 +357,7 @@ class ChromeControlHost:
                         'type': 'response', 'id': request_id,
                         'error': str(e)
                     }).encode() + b'\n')
-                except:
+                except Exception:
                     pass
 
     def run(self):
@@ -363,7 +365,6 @@ class ChromeControlHost:
         self.setup_socket()
         send_message({'type': 'ready'})
 
-        import fcntl
         fl = fcntl.fcntl(sys.stdin.buffer.fileno(), fcntl.F_GETFL)
         fcntl.fcntl(sys.stdin.buffer.fileno(), fcntl.F_SETFL, fl | os.O_NONBLOCK)
 

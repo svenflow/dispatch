@@ -14,6 +14,10 @@ const networkRequests = new Map(); // tabId -> requests[]
 // TTL settings for stale tab cleanup (24 hours)
 const TAB_TTL_MS = 24 * 60 * 60 * 1000;
 
+// NOTE: Throughout this file, "grantUniveralAccess" (missing 's' in "Universal") is the
+// correct spelling per the Chrome DevTools Protocol spec for Page.createIsolatedWorld.
+// It is a known typo in the CDP API itself — do not "fix" it.
+
 // === DEBUGGER PERSISTENCE OPTIMIZATION ===
 // Keep debugger attached per-tab instead of attach/detach on every action
 const attachedDebuggers = new Map(); // tabId -> { attachedAt, idleTimer, inUse }
@@ -614,6 +618,34 @@ async function sendKey(tabId, key, modifiers) {
   }
 }
 
+// Well-known cross-origin iframe domains for authentication and payment flows
+const KNOWN_IFRAME_DOMAINS = [
+  'idmsa.apple.com', 'signin.apple.com',
+  'cybersource.com', 'flex.cybersource',
+  'payments.amazon', 'apx-security'
+];
+
+// Find target iframe frame ID from a frame tree, searching for known cross-origin patterns.
+// Returns the frame ID of the first matching frame, or null if none found.
+function findTargetFrame(frameTree, knownDomains = KNOWN_IFRAME_DOMAINS) {
+  let targetFrameId = null;
+  const search = (frame) => {
+    const url = frame.frame?.url || '';
+    if (knownDomains.some(d => url.includes(d))) {
+      targetFrameId = frame.frame?.id;
+      return true;
+    }
+    if (frame.childFrames) {
+      for (const child of frame.childFrames) {
+        if (search(child)) return true;
+      }
+    }
+    return false;
+  };
+  search(frameTree);
+  return targetFrameId;
+}
+
 // Insert text via debugger using Page.getFrameTree to find iframes
 async function insertText(tabId, text) {
   try {
@@ -626,25 +658,10 @@ async function insertText(tabId, text) {
     const frameTree = await chrome.debugger.sendCommand({ tabId }, 'Page.getFrameTree');
     console.log('[ChromeControl] Frame tree:', JSON.stringify(frameTree, null, 2));
 
-    // Find iframe with Apple sign-in OR CyberSource payment
-    let targetFrameId = null;
-    const findFrame = (frame) => {
-      const url = frame.frame?.url || '';
-      console.log('[ChromeControl] Checking frame:', url);
-      if (url.includes('idmsa.apple.com') || url.includes('signin.apple.com') ||
-          url.includes('cybersource.com') || url.includes('flex.cybersource')) {
-        targetFrameId = frame.frame?.id;
-        console.log('[ChromeControl] Found target auth/payment frame:', targetFrameId);
-        return true;
-      }
-      if (frame.childFrames) {
-        for (const child of frame.childFrames) {
-          if (findFrame(child)) return true;
-        }
-      }
-      return false;
-    };
-    findFrame(frameTree.frameTree);
+    let targetFrameId = findTargetFrame(frameTree.frameTree);
+    if (targetFrameId) {
+      console.log('[ChromeControl] Found target auth/payment frame:', targetFrameId);
+    }
 
     // For typing, we need to use a different approach:
     // Create an isolated world in the iframe and execute JS there
@@ -664,7 +681,7 @@ async function insertText(tabId, text) {
         // Check for multi-input 2FA code fields first
         const allInputs = document.querySelectorAll('input');
         const codeInputs = document.querySelectorAll('input.form-security-code-input, input[type="tel"], input.code-input');
-        const textToType = '${text.replace(/'/g, "\\'")}';
+        const textToType = ${JSON.stringify(text)};
 
         // Debug info
         const debugInfo = {
@@ -755,21 +772,7 @@ async function iframeDebug(tabId) {
 
     const frameTree = await chrome.debugger.sendCommand({ tabId }, 'Page.getFrameTree');
 
-    let targetFrameId = null;
-    const findFrame = (frame) => {
-      const url = frame.frame?.url || '';
-      if (url.includes('idmsa.apple.com') || url.includes('signin.apple.com')) {
-        targetFrameId = frame.frame?.id;
-        return true;
-      }
-      if (frame.childFrames) {
-        for (const child of frame.childFrames) {
-          if (findFrame(child)) return true;
-        }
-      }
-      return false;
-    };
-    findFrame(frameTree.frameTree);
+    let targetFrameId = findTargetFrame(frameTree.frameTree);
 
     if (targetFrameId) {
       const isolatedWorld = await chrome.debugger.sendCommand({ tabId }, 'Page.createIsolatedWorld', {
@@ -901,23 +904,7 @@ async function iframeClick(tabId, selector) {
 
     const frameTree = await chrome.debugger.sendCommand({ tabId }, 'Page.getFrameTree');
 
-    // Find target iframe (Apple auth, Amazon payment, or any child frame)
-    let targetFrameId = null;
-    const findFrame = (frame) => {
-      const url = frame.frame?.url || '';
-      if (url.includes('idmsa.apple.com') || url.includes('signin.apple.com') ||
-          url.includes('apx-security') || url.includes('payments.amazon')) {
-        targetFrameId = frame.frame?.id;
-        return true;
-      }
-      if (frame.childFrames) {
-        for (const child of frame.childFrames) {
-          if (findFrame(child)) return true;
-        }
-      }
-      return false;
-    };
-    findFrame(frameTree.frameTree);
+    let targetFrameId = findTargetFrame(frameTree.frameTree);
     // If no known iframe found, use the first child iframe
     if (!targetFrameId && frameTree.frameTree.childFrames?.length > 0) {
       targetFrameId = frameTree.frameTree.childFrames[0].frame?.id;
@@ -936,7 +923,7 @@ async function iframeClick(tabId, selector) {
     // Also supports text:XXX selector to click by text content
     // Searches both regular DOM AND shadow DOMs for cookie consent modals
     const script = `
-      const selector = '${selector.replace(/'/g, "\\'")}';
+      const selector = ${JSON.stringify(selector)};
       let el = null;
 
       // Helper function to search through shadow DOMs recursively
