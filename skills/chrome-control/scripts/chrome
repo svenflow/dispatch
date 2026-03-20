@@ -161,8 +161,8 @@ def cmd_tabs(client, args):
         print("No tabs open")
         return
     for tab in tabs:
-        title = tab.get("title", "")[:50]
-        url = tab.get("url", "")[:60]
+        title = tab.get("title", "")
+        url = tab.get("url", "")
         print(f"{tab['id']}  {title}")
         print(f"      {url}")
 
