@@ -3905,6 +3905,8 @@ You have 15 minutes. Work efficiently.
         imessage_error_logged = False
         last_poll_log_time = 0  # Telemetry: log poll status every 5 minutes
         POLL_LOG_INTERVAL = 300  # 5 minutes
+        last_imagent_kill = time.time()  # Periodic imagent restart for APNS freshness
+        IMAGENT_KILL_INTERVAL = 120  # Kill imagent every 2 minutes to prevent stale APNS
         last_iteration_end = time.time()  # Track time between poll iterations
         while not self._shutdown_flag:
             try:
@@ -4047,6 +4049,16 @@ You have 15 minutes. Work efficiently.
                 if time.time() - last_reminder_check > REMINDER_CHECK_INTERVAL:
                     await self.reminders.process_due_reminders()
                     last_reminder_check = time.time()
+
+                # Periodic imagent restart to keep APNS connection fresh (headless Mac)
+                if time.time() - last_imagent_kill > IMAGENT_KILL_INTERVAL:
+                    try:
+                        await loop.run_in_executor(None, lambda: __import__('subprocess').run(
+                            ['killall', 'imagent'], capture_output=True, timeout=5
+                        ))
+                    except Exception:
+                        pass  # Non-critical — skip if kill fails
+                    last_imagent_kill = time.time()
 
                 # Fast health check (Tier 1: regex-based fatal error detection)
                 if time.time() - last_fast_health > FAST_HEALTH_INTERVAL:
