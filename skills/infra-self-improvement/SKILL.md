@@ -136,6 +136,12 @@ These areas are most likely to cause production issues:
 - **Auto-restart**: Sessions with 3+ errors get restarted
 - **Test**: `test_health_checks.py`
 
+### 5a. Dispatch-API Health Check Respawner (`manager.py`)
+- **What**: The daemon monitors dispatch-api and respawns it if it dies or becomes unresponsive
+- **Danger**: The respawn code MUST call `_stop_dispatch_api()` (SIGTERM + 5s wait + SIGKILL) before spawning a new instance. Using raw `.kill()` + immediate respawn causes `Address already in use` crash loops because the old process hasn't released port 9091
+- **Rule**: Both the "died" and "unresponsive" respawn paths must use `_stop_dispatch_api()` to ensure clean port release
+- **Symptom**: Repeated `OSError: [Errno 48] Address already in use` in `dispatch-api.log`
+
 ### 6. Bus Write Queue (`bus/bus.py`)
 - **What**: In-memory queue drained by background writer thread. `produce_event()` enqueues (~microseconds).
 - **Danger**: Queue can grow unbounded if writer thread dies silently. Queue depth >1000 logged as warning.

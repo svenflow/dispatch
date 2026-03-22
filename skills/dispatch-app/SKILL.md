@@ -104,6 +104,10 @@ On first app launch, register the device token:
 # Add it to ~/dispatch/services/dispatch-api/allowed_tokens.json
 ```
 
+**IMPORTANT**: `allowed_tokens.json` is **gitignored** (instance-specific data). If a `git pull` ever overwrites it, re-add the token. The server loads tokens dynamically — no restart needed.
+
+To find the full device token: open the app → Settings → tap "Device Token" row to copy it. Server logs truncate tokens to 8 chars (`token[:8]`), so you need the full UUID from the app.
+
 ---
 
 ## Backend API (dispatch-api)
@@ -288,6 +292,22 @@ Previously used a 30-second window on `sdk_events` — checked if the latest eve
 ---
 
 ## Common Gotchas
+
+### Tailscale + VPN Conflicts
+
+If the app shows "Disconnected" but Tailscale is running on both devices:
+
+1. **Check if the Mac can reach its own Tailscale IP**: `ping 100.91.58.120` — if 100% packet loss, a VPN is overriding the routing table
+2. **Mullvad VPN conflict**: Mullvad steals routes from Tailscale. Fix: pause Mullvad, or add **both** the Tailscale app AND the `IPNExtension` (Tailscale's network extension) to Mullvad's split tunneling exclusions
+3. **Diagnosis**: `curl http://localhost:9091/health` works but `curl http://TAILSCALE_IP:9091/health` times out → VPN routing issue, not a server issue
+
+### Health Check Respawner (dispatch-api crash loop)
+
+If dispatch-api enters a crash loop with `OSError: Address already in use` on port 9091:
+
+- **Root cause**: The daemon's health check in `manager.py` must call `_stop_dispatch_api()` (which does SIGTERM + 5s wait + SIGKILL) before respawning — NOT raw `.kill()` + immediate respawn
+- **Symptom**: Log shows repeated `[Errno 48] Address already in use` because the old process hasn't released the port
+- **Fix**: Both the "died" and "unresponsive" respawn paths must use `_stop_dispatch_api()` to ensure clean port release
 
 ### Adding native Expo modules (e.g. expo-network, expo-camera)
 
