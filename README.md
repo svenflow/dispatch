@@ -1,6 +1,10 @@
 # Dispatch
 
-Turn a Mac into an always-on AI assistant with its own identity — its own iCloud, Gmail, and phone number. Not acting as you. A separate entity in your household.
+![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue) ![macOS 14+](https://img.shields.io/badge/macOS-14%2B-lightgrey) ![License: MIT](https://img.shields.io/badge/license-MIT-green) ![Tests: 920+](https://img.shields.io/badge/tests-920%2B-brightgreen)
+
+Turn a Mac into an always-on AI assistant with its own identity. Not acting as you — a separate entity in your household.
+
+> **Status:** Actively developed, daily-driven since 2025. Not a toy project — this runs 24/7 managing real conversations, smart home devices, and background tasks.
 
 **[Documentation](https://svenflow.github.io/dispatch/)** · **[Architecture](#architecture)** · **[Quick Start](#installation)**
 
@@ -16,41 +20,68 @@ Dispatch runs a daemon that:
 
 Each contact gets their own persistent Claude session with conversation history, memories, and tier-appropriate tool access.
 
+## What It Looks Like
+
+```
+┌─────────────────────────────────────────────┐
+│ iMessage                                     │
+│                                              │
+│ You: can you turn on the living room lights  │
+│      and set them to 50%?                    │
+│                                              │
+│ Assistant: done — living room lights on at   │
+│ 50% 💡                                       │
+│                                              │
+│ You: what's the weather like in SF tomorrow? │
+│                                              │
+│ Assistant: SF tomorrow: 62°F, partly cloudy, │
+│ 10% chance of rain. good day to be outside   │
+│                                              │
+│ You: remind me to call mom at 3pm            │
+│                                              │
+│ Assistant: reminder set for 3:00 PM today 👍 │
+└─────────────────────────────────────────────┘
+```
+
+### How it works
+
+You sign a Mac into a **separate Apple ID** so it gets its own iMessage phone number. Dispatch runs a daemon that polls `chat.db` for incoming messages, looks up the sender's contact tier, and routes the message to a persistent Claude SDK session. Claude processes the message with full computer access and responds by calling `send-sms` — the reply shows up in the sender's Messages app like a text from any other person.
+
+The same flow works for Signal via `signal-cli`. Each contact gets their own isolated session with conversation history, memories, and tier-appropriate tool access. Behind the scenes, 67+ skill modules give Claude capabilities like browser automation, smart home control, iOS development, and more.
+
+### Why Dispatch?
+
+Unlike chatbot UIs or voice assistants, Dispatch gives the AI **agency on a full computer**. It can browse the web, write and run code, control smart home devices, manage files, and send messages across platforms — all triggered by a simple text. It's closer to having a live-in assistant than talking to an app.
+
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  Messages.app (iMessage)      Signal (via signal-cli)       │
-│  Polled every 100ms           JSON-RPC socket               │
-└────────────────┬──────────────────────────┬─────────────────┘
-                 │                          │
-                 └──────────────┬───────────┘
-                                ▼
-                    ┌───────────────────────┐
-                    │    Manager Daemon     │
-                    │   (async event loop)  │
-                    └──────────┬────────────┘
+┌─────────────────────────────────────────────────────────┐
+│  Messages.app (iMessage)     Signal (via signal-cli)     │
+└────────────────┬─────────────────────────┬──────────────┘
+                 └─────────────┬───────────┘
+                               ▼
+                   ┌────────────────────────┐
+                   │    Manager Daemon      │
+                   └───────────┬────────────┘
                                │
                 ┌──────────────┼──────────────┐
                 ▼              ▼              ▼
-     ┌──────────────┐  ┌─────────────────────────────────┐
-     │  SDK Backend  │  │  Event Bus (Kafka-on-SQLite)    │
-     │  (sessions)   │  │  bus.db · WAL mode · FTS5       │
-     └──────┬───────┘  │                                  │
-            ▼          │  produce() ──→ write queue ──→   │
- ┌────────────────┐    │  background thread batches to    │
- │ Per-Contact    │    │  partitioned topic logs          │
- │ SDK Sessions   │    │                                  │
- │ (Opus)         │───→│  9 topics · 8+ consumer groups   │
- │ async queues,  │    │  7-day hot → infinite archive    │
- │ mid-turn       │    └──────────────┬──────────────────┘
- │ injection      │                   │
- └──────┬─────────┘          ┌────────┼─────────┐
-        ▼                    ▼        ▼         ▼
- ┌────────────────┐    ┌────────┐ ┌──────┐ ┌────────┐
- │ Tools & Skills │    │message-│ │audit-│ │task-   │
- │ Browser, Home, │    │router  │ │*     │ │runner  │
- │ Memory, Msg    │    └────────┘ └──────┘ └────────┘
+     ┌──────────────┐  ┌────────────────────────────┐
+     │  SDK Backend  │  │  Event Bus (SQLite)        │
+     │              │  │  9 topics · 8+ consumers   │
+     └──────┬───────┘  │  FTS5 · tiered retention   │
+            ▼          └─────────────┬──────────────┘
+ ┌────────────────┐          ┌───────┼────────┐
+ │ Per-Contact    │          ▼       ▼        ▼
+ │ Claude Sessions│    ┌────────┐ ┌──────┐ ┌──────┐
+ │ (Opus)         │    │router  │ │audit │ │tasks │
+ └──────┬─────────┘    └────────┘ └──────┘ └──────┘
+        ▼
+ ┌────────────────┐
+ │ 67+ Skills     │
+ │ Browser, Home, │
+ │ Memory, Msg    │
  └────────────────┘
 ```
 
@@ -87,49 +118,19 @@ Skills are modular capabilities in `~/.claude/skills/`. Each has:
 - Optional `scripts/` directory with CLI executables
 - Template placeholders: `{{CONTACT_NAME}}`, `{{TIER}}`, `{{CHAT_ID}}`
 
-**67+ built-in skills** including:
-- `sms-assistant` - Messaging guidelines and tier rules
-- `chrome-control` - Browser automation (clicks, typing, screenshots)
-- `memory` - Persistent memory with FTS search
-- `hue`, `lutron`, `sonos` - Smart home control
-- `ios-app` - iOS development and TestFlight
-- `gemini` - Vision API for image analysis
-- `reminders` - Natural language reminder parsing
-- And many more...
+**67+ built-in skills** including browser automation, smart home control (Hue, Lutron, Sonos), persistent memory, iOS development, vision analysis, natural language reminders, and more.
 
 ### Event Bus (Kafka-on-SQLite)
 
-Every message, session event, health check, and tool call flows through a SQLite-based event bus modeled after Kafka's log architecture.
+Every event flows through a SQLite-based message bus modeled after Kafka: partitioned topics, consumer groups with at-least-once delivery, FTS5 search, and tiered retention (7-day hot → infinite archive).
 
-**Core design:**
-- **Fire-and-forget writes**: In-memory write queue (~microsecond enqueue), background thread batches up to 100 records per transaction
-- **WAL mode**: Concurrent reads during writes, no event loop blocking
-- **Partitioned topics**: 9 topics (`messages`, `system`, `sessions`, `tasks`, `messages.dlq`, `facts`, `reminders`, `imessage.ui`, plus `sdk_events`) with configurable partition counts
-- **Consumer groups**: 8+ active groups (message-router, audit-\*, task-runner, compaction-handler, etc.) with committed offsets, generation tracking, and at-least-once delivery
-- **Two storage tiers**: Hot tables with 7-day retention auto-prune to archive tables with infinite retention
-- **FTS5 full-text search**: BM25-ranked search across all events with smart text extraction per event type
-- **SDK event tracking**: Every tool call from every Claude session traced with duration, error status, and session context
-
-**Schema:**
-- `records` — Business events with composite PK `(topic, partition, offset)`, WITHOUT ROWID
-- `sdk_events` — Tool execution traces with structured columns
-- `records_archive` / `sdk_events_archive` — Pruned records retained indefinitely
-- `records_fts` / `sdk_events_fts` — FTS5 virtual tables with auto-sync triggers
-
-**Bus CLI:**
 ```bash
 uv run python -m bus.cli stats          # Event counts, throughput, consumer lag
 uv run python -m bus.cli tail           # Live tail of events
 uv run python -m bus.cli search "query" # Full-text search across all records
-uv run python -m bus.cli groups         # Consumer group status and lag
-uv run python -m bus.cli export         # Export events as JSONL
 ```
 
-### Resource Lifecycle
-- **ResourceRegistry**: Centralized tracking of all persistent FDs, connections, and subprocesses via `AsyncExitStack`
-- **ManagedSQLiteReader/Writer**: Single-connection-per-database pattern on dedicated executor threads — eliminates contention
-- **FD leak detection**: Monitors `/dev/fd/` delta vs tracked resources every 5 minutes
-- **Safe cleanup**: Handles non-idempotent `close()` calls (SQLite, subprocesses) via wrapped callbacks
+See the [Event Bus docs](https://svenflow.github.io/dispatch/operations/message-bus/) for schema, consumer framework, and query examples.
 
 ### Reliability
 - **Watchdog daemon**: Auto-recovers from crashes
@@ -140,13 +141,24 @@ uv run python -m bus.cli export         # Export events as JSONL
 
 ## Requirements
 
-- macOS (uses Messages.app, Contacts.app)
+- macOS 14+ Sonoma or later (uses Messages.app, Contacts.app)
 - Python 3.12+ with [`uv`](https://github.com/astral-sh/uv) package manager
 - Claude API access (Anthropic)
 - Optional: `signal-cli` daemon for Signal messaging
-- Optional: Chrome with [Chrome Control extension](~/.claude/skills/chrome-control/) for browser automation
+- Optional: Chrome with Chrome Control extension for browser automation
 
 ## Installation
+
+### Prerequisites
+
+1. **A dedicated Mac** signed into a **separate Apple ID** — this gives the assistant its own iMessage phone number (use an eSIM, prepaid SIM, or Google Voice number to create one)
+2. **Full Disk Access** for Terminal/iTerm — System Settings → Privacy & Security (required for reading `chat.db`)
+3. **Anthropic API key** — Set `ANTHROPIC_API_KEY` in your environment
+4. **macOS Contacts.app groups** — Create groups named `Admin`, `Partner`, `Family`, `Favorite`, `Bots` and add contacts to set their tier
+5. **Optional: signal-cli** — For Signal support ([setup guide](https://github.com/AsamK/signal-cli#installation))
+6. **Optional: Google AI key** — For Gemini Vision image analysis (`GOOGLE_AI_API_KEY`)
+
+### Setup
 
 ```bash
 # Clone the repo
@@ -156,9 +168,9 @@ cd ~/dispatch
 # Install dependencies
 uv sync
 
-# Copy and edit config
+# Copy and configure
 cp config.example.yaml config.local.yaml
-# Edit config.local.yaml with your settings
+# Edit config.local.yaml — at minimum set assistant.name and contacts.owner_phone
 
 # Start the daemon
 ./bin/claude-assistant start
@@ -167,26 +179,36 @@ cp config.example.yaml config.local.yaml
 ./bin/watchdog-install
 ```
 
+Verify it's running:
+
+```bash
+./bin/claude-assistant status    # Should show "running" with 0 active sessions
+```
+
+Send a text to your Mac's phone number from a contact in your Admin group — the assistant should respond within a few seconds.
+
+> **Cost note:** Dispatch uses Claude Opus for all sessions. Expect ~$5-15/day with moderate usage depending on conversation volume and tool use.
+
 ## Configuration
 
 See `config.example.yaml` for all options. Key settings:
 
 ```yaml
 assistant:
-  name: "Sven"                    # Assistant's name
+  name: "Jarvis"                  # Your assistant's name
 
 contacts:
-  owner_phone: "+1234567890"      # Your phone (gets admin tier)
+  owner_phone: "+1234567890"      # Your phone number (gets admin tier)
 
 messaging:
   enabled_backends:
-    - imessage
-    - signal
+    - imessage                    # Requires Full Disk Access for chat.db
+    - signal                      # Requires signal-cli daemon
 
+# Optional integrations
 hue:
   bridges:
-    home: "192.168.1.x"
-    office: "192.168.1.y"
+    home: "192.168.1.x"          # Philips Hue bridge IP
 ```
 
 ## CLI Usage
@@ -210,110 +232,62 @@ hue:
 ./bin/watchdog-status      # Check watchdog status
 ```
 
-## Directory Structure
+## Project Structure
 
 ```
 ~/dispatch/
-├── assistant/           # Core daemon code
-│   ├── manager.py       # Main daemon (polling, routing)
-│   ├── sdk_backend.py   # Session factory and management
-│   ├── sdk_session.py   # Per-contact session wrapper
-│   ├── bus_helpers.py   # Bus event production helpers (taxonomy v6)
-│   ├── resources.py     # ResourceRegistry, ManagedSQLiteReader/Writer
-│   ├── health.py        # Health check logic (fast regex + deep LLM)
-│   ├── reminders.py     # Reminder system
-│   ├── readers.py       # Message readers (iMessage, Signal)
-│   ├── perf.py          # Performance metric recording
-│   ├── cli.py           # Command-line interface
-│   └── config.py        # Configuration loader
-├── bus/                 # Kafka-on-SQLite message bus
-│   ├── bus.py           # Core: Producer (write queue), Consumer groups, FTS5
-│   ├── cli.py           # Bus CLI (stats, tail, search, groups, export)
-│   ├── consumers.py     # Consumer framework with declarative configs
-│   └── search.py        # FTS5 full-text search (BM25, smart text extraction)
-├── bin/                 # Executable scripts
-│   ├── claude-assistant # Main CLI
-│   ├── watchdog         # Auto-recovery daemon
-│   └── watchdog-*       # Watchdog management
-├── services/            # Supporting services
-│   └── dispatch-api/        # iOS app backend
+├── assistant/           # Core daemon code (manager, sessions, health, config)
+├── bus/                 # Kafka-on-SQLite event bus (producer, consumers, FTS5)
+├── bin/                 # CLI scripts (claude-assistant, watchdog)
+├── services/            # Supporting services (dispatch-api for iOS app)
 ├── tests/               # Test suite (920+ tests)
-├── state/               # Runtime state
-│   ├── sessions.json    # Session registry
-│   ├── bus.db           # Bus database (records + sdk_events)
-│   └── daemon.pid       # Current PID
-├── logs/                # Log files
-│   ├── manager.log      # Daemon log
-│   ├── perf-*.jsonl     # Performance metrics (daily)
-│   └── sessions/        # Per-session logs
-├── plans/               # Architecture plans
+├── state/               # Runtime state (sessions.json, bus.db, daemon.pid)
+├── logs/                # Daemon + per-session logs
 └── config.local.yaml    # Local configuration
 ```
 
-## Development
+See the [full architecture documentation](https://svenflow.github.io/dispatch/) for directory details, design decisions, metrics, and operational guides.
+
+## Design Philosophy
+
+- **No auto-send**: Claude explicitly calls `send-sms`/`send-signal` CLIs — full control over when and what to message
+- **In-process sessions**: All sessions in one async event loop, no tmux or subprocesses
+- **Mid-turn steering**: New messages reach Claude between tool calls via async queue
+- **Skills as modules**: Shared, version-controlled, injected via symlink at session startup
+
+Full documentation at **[svenflow.github.io/dispatch](https://svenflow.github.io/dispatch/)**.
+
+## Troubleshooting
+
+| Problem | Solution |
+|---------|----------|
+| `chat.db` permission denied | Grant Full Disk Access to Terminal in System Settings → Privacy & Security |
+| Daemon won't start | Check `ANTHROPIC_API_KEY` is set; run `./bin/claude-assistant logs` for errors |
+| No response to messages | Ensure the sender is in a Contacts.app tier group (Admin, Family, etc.) — unknown contacts are ignored |
+| Signal not working | Verify `signal-cli` daemon is running: `signal-cli daemon --receive-mode on-connection` |
+| Session seems stuck | `./bin/claude-assistant restart-session <name>` to restart a specific session |
+
+## Contributing
+
+Contributions are welcome! The project uses:
+- **`uv`** for Python package management
+- **`ty`** for type checking (must pass with zero errors on `assistant/`)
+- **`ruff`** for linting
+- **`pytest`** for testing (920+ tests)
 
 ```bash
-# Run all tests
+# Run the full test suite before submitting a PR
 uv run pytest tests/ -v
 
-# Run core tests only
-uv run pytest tests/test_backends.py tests/test_session_lifecycle.py \
-    tests/test_registry.py tests/test_health_checks.py -v
+# Quick feedback on a specific area
+uv run pytest tests/test_bus.py -v
 
-# Type checking (uses ty, not mypy)
+# Type check + lint
 uv run ty check assistant/
-
-# Linting (uses ruff)
 uv run ruff check assistant/
 ```
 
-### Test Structure
-- `tests/test_backends.py` - Backend config, routing, normalization
-- `tests/test_session_lifecycle.py` - Session create/stop/inject, health
-- `tests/test_registry.py` - Registry CRUD, persistence
-- `tests/test_health_checks.py` - Health monitoring, idle reaping
-- `tests/test_message_routing.py` - Message normalization, file handling
-- `tests/test_performance.py` - Concurrency, throughput, leaks
-- `tests/test_bus.py` - Bus core: producer, consumer, write queue, retention, FTS5, archive
-- `tests/test_bus_helpers.py` - Event production, sanitize/reconstruct, taxonomy
-- `tests/test_consumers.py` - Consumer groups, offsets, commit, fanout, batching
-- `tests/unit/` - Pure function tests
-- `tests/integration/` - Integration tests with fake chatdb
-
-## Key Design Decisions
-
-1. **No auto-send**: Claude explicitly calls `send-sms` or `send-signal` CLIs (full control over messaging)
-2. **In-process sessions**: No tmux/subprocess shells, all sessions in async event loop
-3. **Mid-turn steering**: New messages injected between tool calls via async queue
-4. **Two-tier health**: Fast regex + slow LLM analysis balances speed vs accuracy
-5. **Skills as modules**: Shared, version-controlled, injected via symlink
-6. **Kafka-on-SQLite event bus**: Fire-and-forget audit trail with write queue (no event loop blocking), 8+ consumer groups for routing, auditing, and task execution
-7. **Tiered event storage**: Business events in `records` table (7-day hot → infinite archive), SDK traces in `sdk_events` table (7-day hot → infinite archive), both with FTS5 full-text search
-8. **Centralized resource lifecycle**: All FDs, connections, and subprocesses tracked via `ResourceRegistry` (AsyncExitStack wrapper) for structural cleanup and FD leak detection
-
-## Metrics & Limits
-
-| Setting | Value |
-|---------|-------|
-| Polling interval | 100ms |
-| Health check (Tier 1) | 60 seconds |
-| Health check (Tier 2) | 5 minutes |
-| Session idle reap | 2 hours |
-| Watchdog cycle | 60 seconds |
-| Max consecutive failures | 5 |
-| Session log size | 10MB (5 backups) |
-| Bus write batch size | 100 records |
-| Bus hot retention | 7 days (auto-prune to archive) |
-| Bus archive retention | Infinite |
-| Bus prune interval | Every 1000 produces |
-
-## Documentation
-
-Full documentation is available at **[svenflow.github.io/dispatch](https://svenflow.github.io/dispatch/)**, covering:
-
-- **Getting Started** — Philosophy, setup guide
-- **Core Systems** — Architecture, messaging, tiers & permissions, skills, CLI reference
-- **Operations** — Message bus, memory, health & healing, analytics, postmortems, configuration
+See the [documentation site](https://svenflow.github.io/dispatch/) for architecture details and design decisions.
 
 ## License
 
