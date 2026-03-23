@@ -10,19 +10,21 @@ import {
 } from "react-native";
 import { SymbolView } from "expo-symbols";
 import { branding } from "../config/branding";
-import type { VoiceState } from "../hooks/useVoiceMode";
+import type { ConversationVoiceState } from "../hooks/useVoiceConversation";
 
 // ---------------------------------------------------------------------------
 // Props
 // ---------------------------------------------------------------------------
 
 interface VoiceStripProps {
-  voiceState: VoiceState;
+  voiceState: ConversationVoiceState;
   sttPartial: string;
   errorMessage: string | null;
   onSpeak: () => void;
   onSend: () => void;
   onStop: () => void;
+  onInterrupt: () => void;
+  onRetry: () => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -38,6 +40,8 @@ export function VoiceStrip({
   onSpeak,
   onSend,
   onStop,
+  onInterrupt,
+  onRetry,
 }: VoiceStripProps) {
   // Respect reduced motion
   const [reduceMotion, setReduceMotion] = useState(false);
@@ -47,7 +51,7 @@ export function VoiceStrip({
     return () => sub.remove();
   }, []);
 
-  // Waveform bar animations
+  // Waveform bar animations — active during LISTENING
   const barAnims = useRef(
     Array.from({ length: NUM_BARS }, () => new Animated.Value(0.3)),
   ).current;
@@ -98,8 +102,8 @@ export function VoiceStrip({
         <SymbolView name={"xmark" as any} tintColor="#a1a1aa" size={14} weight="bold" />
       </Pressable>
 
-      {/* Center content — varies by state */}
-      {voiceState === "IDLE" && !errorMessage && (
+      {/* IDLE — tap to speak */}
+      {voiceState === "IDLE" && (
         <Pressable
           onPress={onSpeak}
           style={({ pressed }) => [styles.centerArea, pressed && styles.pressed]}
@@ -112,12 +116,13 @@ export function VoiceStrip({
         </Pressable>
       )}
 
-      {voiceState === "IDLE" && errorMessage && (
+      {/* ERROR — tap to retry */}
+      {voiceState === "ERROR" && (
         <Pressable
-          onPress={onSpeak}
+          onPress={onRetry}
           style={({ pressed }) => [styles.centerArea, pressed && styles.pressed]}
           accessibilityRole="alert"
-          accessibilityLabel={errorMessage}
+          accessibilityLabel={errorMessage || "Error occurred"}
           accessibilityHint="Tap to retry"
         >
           <SymbolView name={"exclamationmark.triangle" as any} tintColor="#fbbf24" size={16} />
@@ -125,6 +130,7 @@ export function VoiceStrip({
         </Pressable>
       )}
 
+      {/* LISTENING — waveform + partial text + send button */}
       {voiceState === "LISTENING" && (
         <View style={styles.listeningRow}>
           <View style={styles.waveformAndText}>
@@ -167,11 +173,21 @@ export function VoiceStrip({
         </View>
       )}
 
-      {voiceState === "SENT" && (
-        <View style={styles.centerArea} accessibilityRole="text" accessibilityLabel="Message sent">
-          <SymbolView name={"checkmark" as any} tintColor="#22c55e" size={18} weight="bold" />
-          <Text style={styles.sentText}>Sent!</Text>
-        </View>
+      {/* SPEAKING — speaker icon + tap to interrupt */}
+      {voiceState === "SPEAKING" && (
+        <Pressable
+          onPress={onInterrupt}
+          style={({ pressed }) => [styles.speakingRow, pressed && styles.pressed]}
+          accessibilityRole="button"
+          accessibilityLabel="Playing response"
+          accessibilityHint="Tap to interrupt and speak"
+        >
+          <View style={styles.speakerIconContainer}>
+            <SymbolView name={"speaker.wave.2.fill" as any} tintColor={branding.accentColor} size={18} />
+          </View>
+          <Text style={styles.speakingText}>Playing response...</Text>
+          <Text style={styles.interruptHint}>Speak or tap to interrupt</Text>
+        </Pressable>
       )}
     </View>
   );
@@ -255,11 +271,6 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontStyle: "italic",
   },
-  sentText: {
-    color: "#22c55e",
-    fontSize: 15,
-    fontWeight: "600",
-  },
   sendButton: {
     width: 30,
     height: 30,
@@ -269,6 +280,31 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginLeft: 6,
     marginRight: 2,
+  },
+  speakingRow: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 8,
+    paddingHorizontal: 8,
+    gap: 8,
+  },
+  speakerIconContainer: {
+    width: 24,
+    height: 24,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  speakingText: {
+    color: branding.accentColor,
+    fontSize: 15,
+    fontWeight: "500",
+    flex: 1,
+  },
+  interruptHint: {
+    color: "#52525b",
+    fontSize: 12,
+    fontWeight: "500",
   },
   pressed: {
     opacity: 0.7,

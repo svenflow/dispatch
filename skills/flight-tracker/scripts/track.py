@@ -35,7 +35,7 @@ HEADERS = {
 def parse_flight(flight_str: str) -> tuple[str, str]:
     """Parse 'UA1372' or 'UA 1372' into (iata_code, number)."""
     flight_str = flight_str.strip().upper().replace(" ", "")
-    match = re.match(r"^([A-Z]{2})(\d{1,5})$", flight_str)
+    match = re.match(r"^([A-Z\d]{2})(\d{1,5})$", flight_str)
     if not match:
         print(f"Error: Could not parse flight number '{flight_str}'", file=sys.stderr)
         print("Expected format: UA1372, DL405, AA100", file=sys.stderr)

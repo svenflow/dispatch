@@ -1,40 +1,23 @@
-import React, { useEffect, useRef } from "react";
+import React, { useCallback, useEffect, useRef } from "react";
 import { Animated, StyleSheet, Text, View, Pressable } from "react-native";
 import { Image } from "expo-image";
 import type { Conversation } from "../api/types";
 import { relativeTime } from "../utils/time";
+import { PulsingDots } from "./PulsingDots";
 import { buildImageUrl } from "../api/images";
+import { useReduceMotion } from "../utils/animation";
 
 interface ChatRowProps {
   conversation: Conversation;
   onPress: () => void;
   onLongPress?: () => void;
-  /** Optimistic read/unread override */
-  readOverride?: "read" | "unread";
+  /** Pre-computed unread state (from isCurrentlyUnread in useChatList) */
+  isUnread: boolean;
 }
 
-export function ChatRow({ conversation, onPress, onLongPress, readOverride }: ChatRowProps) {
-  const { title, last_message, last_message_at, last_message_role, last_opened_at, is_thinking, marked_unread, image_url } =
+export function ChatRow({ conversation, onPress, onLongPress, isUnread }: ChatRowProps) {
+  const { title, last_message, last_message_at, last_message_role, is_thinking, image_url, image_status } =
     conversation;
-
-  // Compute unread state with optimistic override
-  // readOverride takes priority, then server marked_unread, then time-based logic
-  let isUnread: boolean;
-  if (readOverride === "unread") {
-    isUnread = true;
-  } else if (readOverride === "read") {
-    isUnread = false;
-  } else if (marked_unread) {
-    isUnread = true;
-  } else {
-    // Original time-based logic: unread only when assistant sent a message user hasn't seen
-    isUnread =
-      last_message_role === "assistant" && last_message_at
-        ? last_opened_at
-          ? new Date(last_message_at) > new Date(last_opened_at)
-          : true // No last_opened_at yet — assistant message is unread
-        : false;
-  }
 
   // Build preview text with "You: " prefix for user messages
   let preview = "";
@@ -55,83 +38,113 @@ export function ChatRow({ conversation, onPress, onLongPress, readOverride }: Ch
 
   const timestamp = relativeTime(last_message_at);
 
+  // Animated press scale — 60fps via native driver, smoother than Pressable style
+  const pressScale = useRef(new Animated.Value(1)).current;
+  const handlePressIn = useCallback(() => {
+    Animated.timing(pressScale, {
+      toValue: 0.98,
+      duration: 100,
+      useNativeDriver: true,
+    }).start();
+  }, [pressScale]);
+  const handlePressOut = useCallback(() => {
+    Animated.timing(pressScale, {
+      toValue: 1,
+      duration: 150,
+      useNativeDriver: true,
+    }).start();
+  }, [pressScale]);
+
   return (
     <Pressable
       onPress={onPress}
       onLongPress={onLongPress}
-      style={({ pressed }) => [styles.row, pressed && styles.pressed]}
+      onPressIn={handlePressIn}
+      onPressOut={handlePressOut}
+      accessibilityRole="button"
+      accessibilityLabel={`${title}${isUnread ? ", unread" : ""}${preview ? `, ${preview}` : ""}`}
     >
-      {isUnread ? (
-        <View style={styles.unreadDot} />
-      ) : (
-        <View style={styles.unreadDotSpacer} />
-      )}
-      {image_url ? (
-        <Image
-          source={{ uri: buildImageUrl(image_url) }}
-          style={styles.avatarImage}
-          contentFit="cover"
-          transition={200}
-        />
-      ) : (
-        <View style={styles.avatar}>
-          <Text style={styles.avatarText}>{initials || "?"}</Text>
-        </View>
-      )}
-      <View style={styles.content}>
-        <View style={styles.topRow}>
-          <Text style={[styles.title, isUnread && styles.titleUnread]} numberOfLines={1}>
-            {title}
-          </Text>
-          {timestamp ? (
-            <Text style={[styles.time, isUnread && styles.timeUnread]}>{timestamp}</Text>
-          ) : null}
-        </View>
-        {is_thinking ? (
-          <TypingDots />
-        ) : preview ? (
-          <Text style={[styles.preview, isUnread && styles.previewUnread]} numberOfLines={2}>
-            {preview}
-          </Text>
+      <Animated.View style={[styles.row, { transform: [{ scale: pressScale }] }]}>
+        {isUnread ? (
+          <View style={styles.unreadDot} />
         ) : (
-          <Text style={styles.emptyPreview}>No messages yet</Text>
+          <View style={styles.unreadDotSpacer} />
         )}
-      </View>
+        {image_url ? (
+          <Image
+            source={{ uri: buildImageUrl(image_url) }}
+            style={styles.avatarImage}
+            contentFit="cover"
+            transition={200}
+          />
+        ) : image_status === "generating" ? (
+          <GeneratingAvatar />
+        ) : image_status === "failed" ? (
+          <View style={[styles.avatar, styles.avatarFailed]}>
+            <Text style={styles.avatarGeneratingText}>⚠️</Text>
+          </View>
+        ) : (
+          <View style={styles.avatar}>
+            <Text style={styles.avatarText}>{initials || "?"}</Text>
+          </View>
+        )}
+        <View style={styles.content}>
+          <View style={styles.topRow}>
+            <Text style={[styles.title, isUnread && styles.titleUnread]} numberOfLines={1}>
+              {title}
+            </Text>
+            {timestamp ? (
+              <Text style={[styles.time, isUnread && styles.timeUnread]}>{timestamp}</Text>
+            ) : null}
+          </View>
+          {is_thinking ? (
+            <TypingDots />
+          ) : preview ? (
+            <Text style={[styles.preview, isUnread && styles.previewUnread]} numberOfLines={2}>
+              {preview}
+            </Text>
+          ) : (
+            <Text style={styles.emptyPreview}>No messages yet</Text>
+          )}
+        </View>
+      </Animated.View>
     </Pressable>
+  );
+}
+
+/** Pulsing sparkle avatar shown while cover image is generating.
+ *  Respects reduce-motion preference — shows static avatar instead. */
+function GeneratingAvatar() {
+  const reduceMotion = useReduceMotion();
+  const pulse = useRef(new Animated.Value(reduceMotion ? 0.7 : 0.4)).current;
+
+  useEffect(() => {
+    if (reduceMotion) {
+      pulse.setValue(0.7);
+      return;
+    }
+    const anim = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, { toValue: 1, duration: 800, useNativeDriver: true }),
+        Animated.timing(pulse, { toValue: 0.4, duration: 800, useNativeDriver: true }),
+      ]),
+    );
+    anim.start();
+    return () => anim.stop();
+  }, [pulse, reduceMotion]);
+
+  return (
+    <Animated.View style={[styles.avatar, styles.avatarGenerating, { opacity: pulse }]}>
+      <Text style={styles.avatarGeneratingText}>✨</Text>
+    </Animated.View>
   );
 }
 
 /** Small pulsing dots for typing indicator in chat list */
 function TypingDots() {
-  const dot1 = useRef(new Animated.Value(0.3)).current;
-  const dot2 = useRef(new Animated.Value(0.3)).current;
-  const dot3 = useRef(new Animated.Value(0.3)).current;
-
-  useEffect(() => {
-    const pulse = (dot: Animated.Value, delay: number) =>
-      Animated.loop(
-        Animated.sequence([
-          Animated.delay(delay),
-          Animated.timing(dot, { toValue: 1, duration: 400, useNativeDriver: true }),
-          Animated.timing(dot, { toValue: 0.3, duration: 400, useNativeDriver: true }),
-        ]),
-      );
-
-    const a1 = pulse(dot1, 0);
-    const a2 = pulse(dot2, 200);
-    const a3 = pulse(dot3, 400);
-    a1.start();
-    a2.start();
-    a3.start();
-
-    return () => { a1.stop(); a2.stop(); a3.stop(); };
-  }, [dot1, dot2, dot3]);
-
   return (
     <View style={styles.typingRow}>
-      <Animated.View style={[styles.typingDot, { opacity: dot1 }]} />
-      <Animated.View style={[styles.typingDot, { opacity: dot2 }]} />
-      <Animated.View style={[styles.typingDot, { opacity: dot3 }]} />
+      <PulsingDots size={6} gap={4} />
     </View>
   );
 }
@@ -148,7 +161,7 @@ const styles = StyleSheet.create({
     borderBottomColor: "#27272a",
   },
   pressed: {
-    backgroundColor: "#27272a",
+    backgroundColor: "#1f1f23",
   },
   unreadDot: {
     width: 10,
@@ -176,6 +189,19 @@ const styles = StyleSheet.create({
     borderRadius: 22,
     marginRight: 12,
     backgroundColor: "#3f3f46",
+  },
+  avatarGenerating: {
+    backgroundColor: "#2d2640",
+    borderWidth: 1,
+    borderColor: "#7c3aed",
+  },
+  avatarFailed: {
+    backgroundColor: "#2d1f1f",
+    borderWidth: 1,
+    borderColor: "#991b1b",
+  },
+  avatarGeneratingText: {
+    fontSize: 18,
   },
   avatarText: {
     color: "#d4d4d8",
@@ -227,11 +253,5 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 4,
     height: 19,
-  },
-  typingDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: "#a1a1aa",
   },
 });

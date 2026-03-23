@@ -15,15 +15,13 @@ export interface UseSdkEventsReturn {
 }
 
 /**
- * Stateless SDK events hook — fetches ALL events since `sinceTs` on every poll.
- * This means navigating away and back shows the full event history for the
- * current turn, not just events that arrived while on screen.
+ * Stateless SDK events hook — fetches ALL events since the last completed turn.
+ * Uses the timestamp of the last "result" event as the boundary, so sending a
+ * new message doesn't clear the events list mid-turn.
  */
 export function useSdkEvents(
   sessionId: string,
   enabled: boolean,
-  /** Timestamp (ms) to fetch events after. Typically the last user message time. */
-  sinceTs?: number,
 ): UseSdkEventsReturn {
   const [events, setEvents] = useState<SdkEvent[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -32,8 +30,8 @@ export function useSdkEvents(
 
   const mountedRef = useRef(true);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const sinceTsRef = useRef(sinceTs);
-  sinceTsRef.current = sinceTs;
+  /** Timestamp of the last "result" event we saw — used as since_ts boundary */
+  const lastResultTsRef = useRef<number | undefined>(undefined);
 
   /**
    * Fetch all events since the cutoff timestamp.
@@ -42,7 +40,7 @@ export function useSdkEvents(
   const fetchEvents = useCallback(async () => {
     try {
       const res = await getAgentSdkEvents(sessionId, {
-        since_ts: sinceTsRef.current,
+        since_ts: lastResultTsRef.current,
         limit: 200,
       });
       if (!mountedRef.current) return;
@@ -54,6 +52,8 @@ export function useSdkEvents(
       // Check if the newest event is a "result" (turn complete)
       if (res.events.length > 0 && res.events[0].event_type === "result") {
         setIsComplete(true);
+        // Store the result event's timestamp for the next turn boundary
+        lastResultTsRef.current = res.events[0].timestamp;
       } else {
         setIsComplete(false);
       }
@@ -90,8 +90,9 @@ export function useSdkEvents(
   useEffect(() => {
     if (!enabled) {
       stopPolling();
-      setEvents([]);
-      setIsComplete(false);
+      // Don't clear events — avoids visual flash when isThinking briefly
+      // toggles off/on during server state transitions. Events naturally
+      // repopulate from lastResultTsRef when polling resumes.
       return;
     }
 
@@ -109,13 +110,6 @@ export function useSdkEvents(
       stopPolling();
     };
   }, [enabled, fetchEvents, startPolling, stopPolling]);
-
-  // When sinceTs changes (new message sent), do an immediate fetch
-  useEffect(() => {
-    if (!enabled || sinceTs === undefined) return;
-    setIsComplete(false);
-    fetchEvents();
-  }, [sinceTs]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Pause/resume on app state change
   useEffect(() => {

@@ -34,9 +34,10 @@ import re
 import socket as sock_module
 import sqlite3
 import subprocess
+import threading
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -63,6 +64,16 @@ def _load_dispatch_config() -> dict:
 _DISPATCH_CONFIG = _load_dispatch_config()
 ASSISTANT_NAME = (_DISPATCH_CONFIG.get("assistant", {}) or {}).get("name", "Dispatch")
 APP_SESSION_PREFIX = "dispatch-app"  # Always "dispatch-app" regardless of assistant name
+# Legacy prefixes that should be treated as APP_SESSION_PREFIX
+_LEGACY_APP_PREFIXES = {"sven-app"}
+
+
+def _normalize_session_id(session_id: str) -> str:
+    """Normalize legacy app prefixes (e.g. sven-app:) to the canonical APP_SESSION_PREFIX."""
+    for legacy in _LEGACY_APP_PREFIXES:
+        if session_id.startswith(f"{legacy}:"):
+            return f"{APP_SESSION_PREFIX}:{session_id.split(':', 1)[1]}"
+    return session_id
 
 
 def log_perf(metric: str, value: float, **labels) -> None:
@@ -234,12 +245,18 @@ class MessagesResponse(BaseModel):
     messages: list[Message]
 
 
+_init_db_done = False
+
+
 def init_db():
     """Initialize the SQLite database if it doesn't exist.
 
     NOTE: Schema mirrors dispatch_db.py (the single source of truth).
     If adding migrations, update dispatch_db.py too.
     """
+    global _init_db_done
+    if _init_db_done:
+        return
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
     conn = sqlite3.connect(DB_PATH)
@@ -321,11 +338,20 @@ def init_db():
             conn.execute("ALTER TABLE chats ADD COLUMN marked_unread BOOLEAN DEFAULT 0")
         except sqlite3.OperationalError:
             pass
+    # Migration: add image_status column for generation tracking
+    if "image_status" not in chat_columns:
+        try:
+            conn.execute("ALTER TABLE chats ADD COLUMN image_status TEXT")
+        except sqlite3.OperationalError:
+            pass
 
     # Reconcile orphaned 'generating' messages from prior crashes/restarts
     conn.execute("UPDATE messages SET status='failed', failure_reason='server_restart', content='Image generation interrupted' WHERE status='generating'")
+    # Reconcile orphaned image generation status from prior crashes/restarts
+    conn.execute("UPDATE chats SET image_status = NULL WHERE image_status = 'generating'")
     conn.commit()
     conn.close()
+    _init_db_done = True
 
 
 def load_allowed_tokens() -> set[str]:
@@ -814,17 +840,29 @@ def copy_image_to_canonical(source_path: str, message_id: str, chat_id: str) -> 
         return None
 
 
+def _sanitize_chat_id_for_path(chat_id: str) -> str:
+    """Sanitize chat_id for safe use in file paths. Only allow UUID-like characters."""
+    import re
+    sanitized = re.sub(r'[^a-zA-Z0-9\-_]', '', chat_id)
+    if not sanitized:
+        raise ValueError(f"Invalid chat_id for file path: {chat_id}")
+    return sanitized
+
+
 async def _generate_chat_image_background(chat_id: str, chat_title: str, prompt: str):
     """Background task: run nano-banana and store result as chat cover image."""
-    output_path = f"/tmp/chat-image-{chat_id}.png"
+    safe_id = _sanitize_chat_id_for_path(chat_id)
+    dest_dir = IMAGE_DIR / "chat-covers"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest_path = str(dest_dir / f"{safe_id}.png")
     start = time.monotonic()
     try:
         async with _generate_semaphore:
             env = {k: v for k, v in os.environ.items() if k != "VIRTUAL_ENV"}
             result = await asyncio.to_thread(
                 subprocess.run,
-                [str(NANO_BANANA_PATH), prompt, "--aspect-ratio", "1:1", "-o", output_path],
-                timeout=90,
+                [str(NANO_BANANA_PATH), prompt, "--aspect-ratio", "1:1", "-o", dest_path],
+                timeout=300,
                 capture_output=True,
                 text=True,
                 env=env,
@@ -832,20 +870,12 @@ async def _generate_chat_image_background(chat_id: str, chat_title: str, prompt:
         if result.returncode != 0:
             raise RuntimeError(f"exit {result.returncode}: {result.stderr[:200]}")
 
-        # Copy to canonical location for chat images
-        dest_dir = IMAGE_DIR / "chat-covers"
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        import shutil
-        dest = dest_dir / f"{chat_id}.png"
-        shutil.copy2(output_path, dest)
-        canonical_path = str(dest)
-
-        # Update chats table with image_path
+        # Update chats table with image_path and status
         conn = get_db()
         try:
             conn.execute(
-                "UPDATE chats SET image_path = ? WHERE id = ?",
-                (canonical_path, chat_id),
+                "UPDATE chats SET image_path = ?, image_status = 'ready' WHERE id = ?",
+                (dest_path, chat_id),
             )
             conn.commit()
         finally:
@@ -856,21 +886,34 @@ async def _generate_chat_image_background(chat_id: str, chat_title: str, prompt:
 
     except subprocess.TimeoutExpired:
         logger.error(f"Chat image generation timeout: chat_id={chat_id}")
+        _set_chat_image_status(chat_id, "failed")
     except Exception as e:
         logger.error(f"Chat image generation failed: chat_id={chat_id}, error={e}")
-    finally:
-        Path(output_path).unlink(missing_ok=True)
+        _set_chat_image_status(chat_id, "failed")
+
+
+def _set_chat_image_status(chat_id: str, status: str):
+    """Update image_status on a chat."""
+    try:
+        conn = get_db()
+        try:
+            conn.execute("UPDATE chats SET image_status = ? WHERE id = ?", (status, chat_id))
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.warning(f"Failed to set image_status={status} for chat_id={chat_id}: {e}")
 
 
 @app.post("/generate-image", status_code=202)
 async def generate_image(req: GenerateImageRequest, token: Optional[str] = None):
-    """Generate an image via nano-banana and store as an assistant message.
+    """Generate a chat cover image by summarizing conversation and calling nano-banana.
 
-    Returns 202 immediately with the placeholder message_id.
-    The image is generated in the background; poll GET /messages to see the result.
+    Returns 202 immediately. The image is generated in the background;
+    poll GET /chats to see the updated image_url on the chat.
     """
     token_short = token[:8] if token else "none"
-    logger.info(f"POST /generate-image: chat_id={req.chat_id}, prompt={req.prompt[:100]}, token={token_short}...")
+    logger.info(f"POST /generate-image: chat_id={req.chat_id}, token={token_short}...")
 
     # Validate token
     if token:
@@ -878,57 +921,73 @@ async def generate_image(req: GenerateImageRequest, token: Optional[str] = None)
         if allowed_tokens and token not in allowed_tokens:
             raise HTTPException(status_code=401, detail="Unknown device token")
 
-    # Validate prompt
-    if not req.prompt or not req.prompt.strip():
-        raise HTTPException(status_code=400, detail="Prompt is required")
-    if len(req.prompt) > 1000:
-        raise HTTPException(status_code=400, detail="Prompt must be 1000 characters or less")
+    # Sanitize chat_id for file path safety
+    try:
+        _sanitize_chat_id_for_path(req.chat_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid chat_id format")
 
-    # Validate chat_id exists
+    # Validate chat_id exists and fetch title + recent messages for summarization
     conn = get_db()
     try:
-        chat_row = conn.execute("SELECT id FROM chats WHERE id = ?", (req.chat_id,)).fetchone()
+        chat_row = conn.execute("SELECT id, title, image_status FROM chats WHERE id = ?", (req.chat_id,)).fetchone()
         if not chat_row:
             raise HTTPException(status_code=404, detail="Chat not found")
+        chat_title = chat_row[1]
+        image_status = chat_row[2]
 
-        # DB-based rate limit: check if already generating for this chat
-        existing = conn.execute(
-            "SELECT id FROM messages WHERE chat_id = ? AND status = 'generating' LIMIT 1",
-            (req.chat_id,),
-        ).fetchone()
-        if existing:
-            logger.warning(f"POST /generate-image: already generating for chat_id={req.chat_id}")
-            raise HTTPException(status_code=429, detail="An image is already being generated for this chat")
+        # Per-chat deduplication: don't allow re-trigger while generating
+        if image_status == "generating":
+            raise HTTPException(status_code=429, detail="Image is already being generated for this chat")
 
         # Check global concurrency
         if len(_active_generate_tasks) >= 3:
             raise HTTPException(status_code=429, detail="Server busy, please try again")
 
-        # Create placeholder message
-        message_id = str(uuid.uuid4())
-        conn.execute(
-            "INSERT INTO messages (id, role, content, status, chat_id) VALUES (?, ?, ?, ?, ?)",
-            (message_id, "assistant", "🎨 Generating image...", "generating", req.chat_id),
-        )
-        conn.execute(
-            "UPDATE chats SET updated_at=CURRENT_TIMESTAMP WHERE id=?",
+        # Fetch last 20 messages to build a summary prompt
+        msg_rows = conn.execute(
+            "SELECT role, content FROM messages WHERE chat_id = ? ORDER BY created_at DESC LIMIT 20",
             (req.chat_id,),
-        )
+        ).fetchall()
+        if not msg_rows:
+            raise HTTPException(status_code=400, detail="This chat needs messages before generating an image")
+
+        # Mark as generating
+        conn.execute("UPDATE chats SET image_status = 'generating' WHERE id = ?", (req.chat_id,))
         conn.commit()
     finally:
         conn.close()
 
+    # Build a summary of the conversation for nano-banana
+    conversation_lines = []
+    for role, content in reversed(msg_rows):
+        prefix = "User" if role == "user" else "Assistant"
+        # Truncate very long messages to keep prompt reasonable
+        snippet = content[:200] if content else ""
+        conversation_lines.append(f"{prefix}: {snippet}")
+    conversation_summary = "\n".join(conversation_lines)
+
+    prompt = (
+        f"Create an icon that represents a chat conversation titled \"{chat_title}\". "
+        f"This will be used as a small circular avatar/icon in a chat list (like app icons), "
+        f"so it should be simple, bold, and recognizable at small sizes. "
+        f"Here is a summary of the conversation to understand the topic:\n\n{conversation_summary}\n\n"
+        f"Design a clean, iconic image that visually represents the main topic or theme. "
+        f"Think app icon style — simple shapes, bold colors, minimal detail. "
+        f"Do NOT include any text, words, or letters in the image."
+    )
+
     logger.info(
-        f"POST /generate-image: placeholder created message_id={message_id}, "
-        f"in_flight={len(_active_generate_tasks)}"
+        f"POST /generate-image: spawning background task for chat_id={req.chat_id}, "
+        f"title=\"{chat_title}\", in_flight={len(_active_generate_tasks)}"
     )
 
     # Spawn background generation task
-    task = asyncio.create_task(_generate_image_background(message_id, req.chat_id, req.prompt.strip()))
+    task = asyncio.create_task(_generate_chat_image_background(req.chat_id, chat_title, prompt))
     _active_generate_tasks.add(task)
     task.add_done_callback(_active_generate_tasks.discard)
 
-    return {"message_id": message_id, "status": "generating"}
+    return {"chat_id": req.chat_id, "status": "generating"}
 
 
 @app.get("/messages")
@@ -1323,6 +1382,13 @@ async def get_chat_image(chat_id: str, token: Optional[str] = None):
         raise HTTPException(status_code=404, detail="Chat image not found")
 
     image_path = Path(row[0]).resolve()
+
+    # Security: validate path is within expected directory
+    expected_dir = (IMAGE_DIR / "chat-covers").resolve()
+    if not image_path.is_relative_to(expected_dir):
+        logger.warning(f"GET /chat-image: path traversal attempt: {image_path}")
+        raise HTTPException(status_code=403, detail="Access denied")
+
     if not image_path.exists():
         raise HTTPException(status_code=404, detail="Image file not found")
 
@@ -1331,7 +1397,7 @@ async def get_chat_image(chat_id: str, token: Optional[str] = None):
         path=image_path,
         media_type=mime_type,
         filename=image_path.name,
-        headers={"Cache-Control": "max-age=3600"},
+        headers={"Cache-Control": "max-age=60"},
     )
 
 
@@ -1502,6 +1568,17 @@ def _sqlite_to_iso(ts: str | None) -> str | None:
     return ts.replace(" ", "T") + "Z" if " " in ts else ts
 
 
+def _build_chat_image_url(chat_id: str, image_path_str: str | None) -> str | None:
+    """Build a cache-busted URL for a chat cover image, handling TOCTOU races."""
+    if not image_path_str:
+        return None
+    try:
+        mtime = int(Path(image_path_str).stat().st_mtime)
+        return f"/chat-image/{chat_id}?v={mtime}"
+    except OSError:
+        return None
+
+
 @app.get("/chats")
 async def list_chats(token: str = None):
     """List all chats with last message previews."""
@@ -1515,7 +1592,8 @@ async def list_chats(token: str = None):
                EXISTS(SELECT 1 FROM chat_notes cn WHERE cn.chat_id = c.id AND cn.content != '') AS has_notes,
                c.forked_from,
                c.marked_unread,
-               c.image_path
+               c.image_path,
+               c.image_status
         FROM chats c
         LEFT JOIN (
             SELECT chat_id, content, created_at, role,
@@ -1540,7 +1618,8 @@ async def list_chats(token: str = None):
             "is_thinking": _check_is_thinking(f"{APP_SESSION_PREFIX}/{chat_id}"),
             "forked_from": row[9],
             "marked_unread": bool(row[10]),
-            "image_url": f"/chat-image/{chat_id}" if row[11] and Path(row[11]).exists() else None,
+            "image_url": _build_chat_image_url(chat_id, row[11]),
+            "image_status": row[12],
         })
     conn.close()
     return {"chats": chats}
@@ -2039,6 +2118,57 @@ async def dashboard_events(
             "events": events,
             "total_count": total_row[0],
             "max_offset": max_offset_row[0] or 0,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/search")
+async def search_bus(
+    q: str = Query(..., description="Search query (FTS5 syntax supported)"),
+    type: Optional[str] = None,
+    source: Optional[str] = None,
+    key: Optional[str] = None,
+    topic: Optional[str] = None,
+    since_hours: Optional[float] = None,
+    limit: int = 20,
+):
+    """Full-text search across bus records using FTS5 with BM25 ranking."""
+    import sys
+    sys.path.insert(0, os.path.expanduser("~/dispatch"))
+    from bus.search import search_records
+
+    limit = min(limit, 100)
+    since_ms = None
+    if since_hours is not None:
+        since_ms = int((time.time() - since_hours * 3600) * 1000)
+
+    try:
+        conn = get_bus_db()
+        results = search_records(
+            conn, q,
+            topic=topic, type=type, key=key, source=source,
+            since_ms=since_ms, limit=limit,
+        )
+        conn.close()
+
+        now_ms = int(time.time() * 1000)
+        return {
+            "query": q,
+            "results": [
+                {
+                    "topic": r.topic,
+                    "key": r.key,
+                    "type": r.type,
+                    "source": r.source,
+                    "text": r.payload_text,
+                    "timestamp": r.timestamp,
+                    "age_seconds": round((now_ms - r.timestamp) / 1000, 1),
+                    "rank": round(r.rank, 4),
+                }
+                for r in results
+            ],
+            "count": len(results),
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -2681,6 +2811,130 @@ async def client_logs(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ─────────────────────────────────────────────────────────────
+# CCU (Claude Code Usage) — background-cached to avoid blocking
+# ─────────────────────────────────────────────────────────────
+_ccu_cache: dict = {"data": None, "updated_at": None, "loading": False}
+_ccu_lock = threading.Lock()
+
+def _ccu_fetch():
+    """Run ccusage CLI (slow ~17s) in background thread, store result in cache."""
+    try:
+        ccusage = str(Path.home() / ".bun/bin/ccusage")
+
+        # Get current blocks data
+        blocks_proc = subprocess.run(
+            [ccusage, "blocks", "--json", "--offline"],
+            capture_output=True, text=True, timeout=60
+        )
+        blocks_data = {}
+        if blocks_proc.returncode == 0:
+            raw = blocks_proc.stdout
+            json_start = raw.find("{")
+            if json_start >= 0:
+                blocks_data = json.loads(raw[json_start:])
+        else:
+            logger.error(f"ccusage blocks failed (rc={blocks_proc.returncode}): {blocks_proc.stderr[:200]}")
+
+        # Get daily data for last 7 days
+        since = (datetime.now() - timedelta(days=7)).strftime("%Y%m%d")
+        daily_proc = subprocess.run(
+            [ccusage, "daily", "--json", "--offline", "--since", since, "--breakdown"],
+            capture_output=True, text=True, timeout=60
+        )
+        daily_data = {}
+        if daily_proc.returncode == 0:
+            raw = daily_proc.stdout
+            json_start = raw.find("{")
+            if json_start >= 0:
+                daily_data = json.loads(raw[json_start:])
+        else:
+            logger.error(f"ccusage daily failed (rc={daily_proc.returncode}): {daily_proc.stderr[:200]}")
+
+        # Find active block and recent blocks
+        blocks = blocks_data.get("blocks", [])
+
+        # Scan ALL non-gap blocks for max tokens (used for % calculation)
+        max_tokens_observed = 0
+        for b in blocks:
+            if not b.get("isGap"):
+                max_tokens_observed = max(max_tokens_observed, b.get("totalTokens", 0))
+
+        # Collect active block and most recent 12 non-gap blocks
+        active_block = None
+        recent_blocks = []
+        for b in reversed(blocks):
+            if b.get("isGap"):
+                continue
+            if b.get("isActive"):
+                active_block = b
+            recent_blocks.append(b)
+            if len(recent_blocks) >= 12:
+                break
+        recent_blocks.reverse()
+
+        # Merge results, preserving previous daily data if daily fetch failed
+        with _ccu_lock:
+            prev = _ccu_cache["data"] or {}
+
+        new_daily = daily_data.get("daily", [])
+        new_totals = daily_data.get("totals", {})
+        result = {
+            "active_block": active_block,
+            "recent_blocks": recent_blocks,
+            "daily": new_daily if new_daily else prev.get("daily", []),
+            "daily_totals": new_totals if new_totals else prev.get("daily_totals", {}),
+            "max_tokens_observed": max_tokens_observed,
+        }
+
+        with _ccu_lock:
+            _ccu_cache["data"] = result
+            _ccu_cache["updated_at"] = datetime.now().isoformat()
+            _ccu_cache["loading"] = False
+            _ccu_cache["error"] = None
+
+        logger.info("CCU cache refreshed successfully")
+    except Exception as e:
+        logger.error(f"CCU background fetch error: {e}")
+        with _ccu_lock:
+            _ccu_cache["loading"] = False
+            _ccu_cache["error"] = str(e)
+
+
+def _ccu_maybe_refresh(max_age_seconds: int = 60):
+    """Trigger background refresh if cache is stale. Never blocks."""
+    with _ccu_lock:
+        if _ccu_cache["loading"]:
+            return  # already fetching
+        updated = _ccu_cache["updated_at"]
+        if updated:
+            age = (datetime.now() - datetime.fromisoformat(updated)).total_seconds()
+            if age < max_age_seconds:
+                return  # fresh enough
+        _ccu_cache["loading"] = True
+
+    t = threading.Thread(target=_ccu_fetch, daemon=True)
+    t.start()
+
+
+@app.get("/api/dashboard/ccu")
+async def dashboard_ccu():
+    """Claude Code Usage — returns cached data, triggers background refresh."""
+    _ccu_maybe_refresh(max_age_seconds=60)
+
+    with _ccu_lock:
+        data = _ccu_cache["data"]
+        updated = _ccu_cache["updated_at"]
+        loading = _ccu_cache["loading"]
+        error = _ccu_cache.get("error")
+
+    if data is None:
+        # First request ever — no cache yet
+        return {"active_block": None, "recent_blocks": [], "daily": [], "daily_totals": {}, "_loading": True, "_updated_at": None, "_error": None}
+
+    return {**data, "_loading": loading, "_updated_at": updated, "_error": error}
+
+
 @app.get("/api/dashboard/facts")
 async def dashboard_facts():
     """Structured contact facts."""
@@ -2729,9 +2983,12 @@ def _load_sessions() -> dict:
 
 
 def _get_messages_db():
-    """Get a connection to dispatch-messages.db (read-write)."""
+    """Get a connection to dispatch-messages.db (read-write) with WAL mode."""
     init_db()
-    return sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
+    return conn
 
 
 def _ipc_command(cmd: dict, timeout: float = 30) -> dict:
@@ -2774,6 +3031,7 @@ def _check_is_thinking(session_name: str) -> bool:
     """
     if not session_name:
         return False
+    conn = None
     try:
         conn = get_bus_db()
         # Try multiple session_name formats — the daemon writes with
@@ -2796,20 +3054,23 @@ def _check_is_thinking(session_name: str) -> bool:
             f"SELECT is_busy, updated_at FROM session_states WHERE session_name IN ({placeholders}) ORDER BY updated_at DESC LIMIT 1",
             names_to_try,
         ).fetchone()
-        conn.close()
         if row is None:
             return False
         is_busy, updated_at = row["is_busy"], row["updated_at"]
-        # Staleness guard: if the daemon hasn't updated in 10 minutes,
+        # Staleness guard: if the daemon hasn't updated in 3 minutes,
         # assume it crashed or the session ended without clearing the flag.
-        # Sessions can legitimately be busy for 10+ minutes during long
-        # subagent calls, so this needs to be generous.
+        # The daemon refreshes updated_at periodically during long operations
+        # (receive_loop re-sends set_session_busy(True) on each message),
+        # so 3 minutes is safe — a truly busy session will have recent updates.
         now_ms = int(time.time() * 1000)
-        if now_ms - updated_at > 600_000:
+        if now_ms - updated_at > 180_000:
             return False
         return bool(is_busy)
     except Exception:
         return False
+    finally:
+        if conn:
+            conn.close()
 
 
 def _extract_text_from_record(payload_str: str, source: str, type_: str) -> str | None:
@@ -3132,14 +3393,13 @@ async def agents_sdk_events(
     """Get SDK events (tool calls, thinking, errors) for a session."""
     limit = min(limit, 500)
     try:
+        # Normalize legacy prefixes (e.g. sven-app: → dispatch-app:)
+        session_id = _normalize_session_id(session_id)
+
         # Map session_id to session_name for sdk_events lookup
         # Try registry first (most reliable), then construct from prefix
         registry = _load_sessions()
         session_info = registry.get(session_id, {})
-        # Also try with sven-app: prefix for backward compat (frontend sends dispatch-app: but registry may have sven-app:)
-        if not session_info and session_id.startswith(f"{APP_SESSION_PREFIX}:"):
-            legacy_id = "sven-app:" + session_id.split(":", 1)[1]
-            session_info = registry.get(legacy_id, {})
         session_name = session_info.get("session_name")
 
         if not session_name:
@@ -3210,41 +3470,56 @@ async def agents_messages(
     and after_ts (polling for new messages).
     """
     limit = min(limit, 500)
+    logger.info(f"agents_messages: session_id={session_id}, limit={limit}, before_ts={before_ts}, after_ts={after_ts}")
+
+    # Determine if this is a dispatch-api session by checking prefix OR chats table
+    def _is_dispatch_api_session(sid: str) -> bool:
+        if sid.startswith("dispatch-api:") or sid.startswith("dispatch-app:") or sid.startswith("sven-app:"):
+            return True
+        # Check if it's a bare UUID that exists in dispatch-messages.db chats
+        try:
+            db = _get_messages_db()
+            row = db.execute("SELECT 1 FROM chats WHERE id = ?", (sid,)).fetchone()
+            db.close()
+            return row is not None
+        except Exception:
+            return False
 
     try:
-        if session_id.startswith("dispatch-api:"):
+        if _is_dispatch_api_session(session_id):
             # --- Agent session: read from dispatch-messages.db ---
             msg_db = _get_messages_db()
+            try:
+                if after_ts is not None:
+                    # Polling for new messages — use sub-second precision
+                    after_dt = datetime.fromtimestamp(after_ts / 1000).strftime("%Y-%m-%d %H:%M:%S.") + f"{after_ts % 1000:03d}"
+                    cursor = msg_db.execute(
+                        "SELECT id, role, content, audio_path, created_at "
+                        "FROM messages WHERE chat_id = ? AND created_at > ? "
+                        "ORDER BY created_at ASC LIMIT 50",
+                        (session_id, after_dt),
+                    )
+                elif before_ts is not None:
+                    # Historical load (scrolling up)
+                    before_dt = datetime.fromtimestamp(before_ts / 1000).strftime("%Y-%m-%d %H:%M:%S.") + f"{before_ts % 1000:03d}"
+                    cursor = msg_db.execute(
+                        "SELECT id, role, content, audio_path, created_at "
+                        "FROM messages WHERE chat_id = ? AND created_at < ? "
+                        "ORDER BY created_at DESC LIMIT ?",
+                        (session_id, before_dt, limit),
+                    )
+                else:
+                    # Initial load (most recent messages)
+                    cursor = msg_db.execute(
+                        "SELECT id, role, content, audio_path, created_at "
+                        "FROM messages WHERE chat_id = ? "
+                        "ORDER BY created_at DESC LIMIT ?",
+                        (session_id, limit),
+                    )
 
-            if after_ts is not None:
-                # Polling for new messages
-                after_dt = datetime.fromtimestamp(after_ts / 1000).strftime("%Y-%m-%d %H:%M:%S")
-                cursor = msg_db.execute(
-                    "SELECT id, role, content, audio_path, created_at "
-                    "FROM messages WHERE chat_id = ? AND created_at > ? "
-                    "ORDER BY created_at ASC LIMIT 50",
-                    (session_id, after_dt),
-                )
-            elif before_ts is not None:
-                # Historical load (scrolling up)
-                before_dt = datetime.fromtimestamp(before_ts / 1000).strftime("%Y-%m-%d %H:%M:%S")
-                cursor = msg_db.execute(
-                    "SELECT id, role, content, audio_path, created_at "
-                    "FROM messages WHERE chat_id = ? AND created_at < ? "
-                    "ORDER BY created_at DESC LIMIT ?",
-                    (session_id, before_dt, limit),
-                )
-            else:
-                # Initial load (most recent messages)
-                cursor = msg_db.execute(
-                    "SELECT id, role, content, audio_path, created_at "
-                    "FROM messages WHERE chat_id = ? "
-                    "ORDER BY created_at DESC LIMIT ?",
-                    (session_id, limit),
-                )
-
-            rows = cursor.fetchall()
-            msg_db.close()
+                rows = cursor.fetchall()
+            finally:
+                msg_db.close()
 
             messages = []
             for row in rows:
@@ -3266,7 +3541,7 @@ async def agents_messages(
                 })
 
             # Check if there are more messages beyond this page
-            has_more = len(rows) >= limit if before_ts is None and after_ts is None else len(rows) >= limit
+            has_more = len(rows) >= limit
 
             # Check thinking status from sdk_events
             # session_id is "dispatch-app:voice" -> extract "voice" for session_name lookup
@@ -3281,48 +3556,49 @@ async def agents_messages(
             sender_map = _build_sender_map(registry)
 
             conn = get_bus_db()
+            try:
+                if after_ts is not None:
+                    # Polling for new messages
+                    cursor = conn.execute(
+                        'SELECT "offset", type, source, payload, timestamp '
+                        "FROM records "
+                        "WHERE topic = 'messages' "
+                        "  AND json_extract(payload, '$.chat_id') = ? "
+                        "  AND type IN ('message.received', 'message.sent', 'message.admin_inject') "
+                        "  AND source NOT IN ('consumer-retry', 'sdk_backend.replay') "
+                        "  AND timestamp > ? "
+                        "ORDER BY timestamp ASC LIMIT 50",
+                        (session_id, after_ts),
+                    )
+                elif before_ts is not None:
+                    # Historical load (scrolling up)
+                    cursor = conn.execute(
+                        'SELECT "offset", type, source, payload, timestamp '
+                        "FROM records "
+                        "WHERE topic = 'messages' "
+                        "  AND json_extract(payload, '$.chat_id') = ? "
+                        "  AND type IN ('message.received', 'message.sent', 'message.admin_inject') "
+                        "  AND source NOT IN ('consumer-retry', 'sdk_backend.replay') "
+                        "  AND timestamp < ? "
+                        "ORDER BY timestamp DESC LIMIT ?",
+                        (session_id, before_ts, limit),
+                    )
+                else:
+                    # Initial load (most recent messages)
+                    cursor = conn.execute(
+                        'SELECT "offset", type, source, payload, timestamp '
+                        "FROM records "
+                        "WHERE topic = 'messages' "
+                        "  AND json_extract(payload, '$.chat_id') = ? "
+                        "  AND type IN ('message.received', 'message.sent', 'message.admin_inject') "
+                        "  AND source NOT IN ('consumer-retry', 'sdk_backend.replay') "
+                        "ORDER BY timestamp DESC LIMIT ?",
+                        (session_id, limit),
+                    )
 
-            if after_ts is not None:
-                # Polling for new messages
-                cursor = conn.execute(
-                    'SELECT "offset", type, source, payload, timestamp '
-                    "FROM records "
-                    "WHERE topic = 'messages' "
-                    "  AND json_extract(payload, '$.chat_id') = ? "
-                    "  AND type IN ('message.received', 'message.sent', 'message.admin_inject') "
-                    "  AND source NOT IN ('consumer-retry', 'sdk_backend.replay') "
-                    "  AND timestamp > ? "
-                    "ORDER BY timestamp ASC LIMIT 50",
-                    (session_id, after_ts),
-                )
-            elif before_ts is not None:
-                # Historical load (scrolling up)
-                cursor = conn.execute(
-                    'SELECT "offset", type, source, payload, timestamp '
-                    "FROM records "
-                    "WHERE topic = 'messages' "
-                    "  AND json_extract(payload, '$.chat_id') = ? "
-                    "  AND type IN ('message.received', 'message.sent', 'message.admin_inject') "
-                    "  AND source NOT IN ('consumer-retry', 'sdk_backend.replay') "
-                    "  AND timestamp < ? "
-                    "ORDER BY timestamp DESC LIMIT ?",
-                    (session_id, before_ts, limit),
-                )
-            else:
-                # Initial load (most recent messages)
-                cursor = conn.execute(
-                    'SELECT "offset", type, source, payload, timestamp '
-                    "FROM records "
-                    "WHERE topic = 'messages' "
-                    "  AND json_extract(payload, '$.chat_id') = ? "
-                    "  AND type IN ('message.received', 'message.sent', 'message.admin_inject') "
-                    "  AND source NOT IN ('consumer-retry', 'sdk_backend.replay') "
-                    "ORDER BY timestamp DESC LIMIT ?",
-                    (session_id, limit),
-                )
-
-            rows = cursor.fetchall()
-            conn.close()
+                rows = cursor.fetchall()
+            finally:
+                conn.close()
 
             messages = []
             for row in rows:
@@ -3339,9 +3615,16 @@ async def agents_messages(
                     text = _extract_text_from_record(payload_str, source, type_)
                     sender = _resolve_sender(payload, type_, sender_map)
 
+                # Map role to user/assistant only — frontend only supports these two
+                # admin_inject = admin user sending, so role = "user"
+                if type_ == "message.sent":
+                    msg_role = "assistant"
+                else:
+                    msg_role = "user"
+
                 messages.append({
                     "id": str(offset),
-                    "role": "admin" if type_ == "message.admin_inject" else ("assistant" if type_ == "message.sent" else "user"),
+                    "role": msg_role,
                     "text": text,
                     "sender": sender,
                     "is_from_me": type_ == "message.sent" or type_ == "message.admin_inject",
@@ -3351,18 +3634,20 @@ async def agents_messages(
                     "is_admin": type_ == "message.admin_inject",
                 })
 
-            has_more = len(rows) >= limit if before_ts is None and after_ts is None else len(rows) >= limit
+            has_more = len(rows) >= limit
 
             # Check thinking status from sdk_events
             session_info = registry.get(session_id, {})
             session_name = session_info.get("session_name", "")
             is_thinking = _check_is_thinking(session_name) if session_name else False
 
+            logger.info(f"agents_messages: returning {len(messages)} msgs for contact session {session_id}")
             return {"messages": messages, "has_more": has_more, "is_thinking": is_thinking}
 
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"agents_messages: error for {session_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

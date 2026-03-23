@@ -29,6 +29,16 @@ export interface SpeechCaptureActions {
 interface SpeechCaptureOptions {
   /** Strings the recognizer should bias toward (e.g., app name) */
   contextualStrings?: string[];
+  /**
+   * iOS audio session category to pass to the native speech recognizer.
+   * When running STT during TTS playback, use this to prevent the native module
+   * from overriding the audio session with incompatible settings.
+   */
+  iosCategory?: {
+    category: string;
+    categoryOptions: string[];
+    mode: string;
+  };
 }
 
 export function useSpeechCapture(options: SpeechCaptureOptions = {}): SpeechCaptureState & SpeechCaptureActions {
@@ -36,12 +46,15 @@ export function useSpeechCapture(options: SpeechCaptureOptions = {}): SpeechCapt
   const [transcript, setTranscript] = useState("");
   const [partial, setPartial] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const errorSeqRef = useRef(0);
 
   const accumulatedRef = useRef("");
   const activeRef = useRef(false);
   const startingRef = useRef(false);
   const contextualStringsRef = useRef(options.contextualStrings || []);
   contextualStringsRef.current = options.contextualStrings || [];
+  const iosCategoryRef = useRef(options.iosCategory);
+  iosCategoryRef.current = options.iosCategory;
 
   // -- Event handlers (guarded by activeRef) --
 
@@ -79,7 +92,11 @@ export function useSpeechCapture(options: SpeechCaptureOptions = {}): SpeechCapt
   useSpeechRecognitionEvent("error", (event) => {
     if (!activeRef.current) return;
     if (event.error === "aborted") return;
-    setError(event.message || event.error || "Speech recognition error");
+    // Append a unique sequence number so React always sees a new value,
+    // even if iOS fires the same error string repeatedly (e.g., "no speech detected").
+    errorSeqRef.current++;
+    const msg = event.message || event.error || "Speech recognition error";
+    setError(`${msg}|${errorSeqRef.current}`);
     setIsListening(false);
     startingRef.current = false;
   });
@@ -107,12 +124,18 @@ export function useSpeechCapture(options: SpeechCaptureOptions = {}): SpeechCapt
 
       // continuous: false — iOS auto-stops after a speech pause, enabling natural
       // turn-taking. The voice agent hook uses this to auto-submit when STT ends.
-      ExpoSpeechRecognitionModule.start({
+      const startOpts: Record<string, unknown> = {
         lang: "en-US",
         interimResults: true,
         continuous: false,
         contextualStrings: contextualStringsRef.current,
-      });
+      };
+      // When iosCategory is provided, pass it to the native module so it doesn't
+      // override the audio session with incompatible settings (e.g., during TTS playback)
+      if (iosCategoryRef.current) {
+        startOpts.iosCategory = iosCategoryRef.current;
+      }
+      ExpoSpeechRecognitionModule.start(startOpts);
 
       impactMedium();
     } catch (err) {

@@ -10,7 +10,7 @@ export interface AudioPlayerState {
   isPlaying: boolean;
   isPaused: boolean;
   currentMessageId: string | null;
-  play: (messageId: string, audioUrl: string) => Promise<void>;
+  play: (messageId: string, audioUrl: string, opts?: { allowsRecording?: boolean }) => Promise<void>;
   pause: () => void;
   resume: () => void;
   stop: () => void;
@@ -44,10 +44,15 @@ export function useAudioPlayer(): AudioPlayerState {
     }
   }, [status.playing, status.currentTime, status.duration]);
 
-  const configureAudioSession = useCallback(async () => {
-    if (audioConfiguredRef.current) return;
+  const configureAudioSession = useCallback(async (opts?: { allowsRecording?: boolean }) => {
     try {
-      await setAudioModeAsync({ playsInSilentMode: true });
+      await setAudioModeAsync({
+        playsInSilentMode: true,
+        // When allowsRecording is true, iOS uses .playAndRecord category,
+        // which allows STT (microphone) to run simultaneously with audio playback.
+        // This enables voice-interrupt during TTS.
+        allowsRecording: opts?.allowsRecording ?? false,
+      });
       audioConfiguredRef.current = true;
     } catch {
       // Ignore audio session config errors
@@ -70,7 +75,7 @@ export function useAudioPlayer(): AudioPlayerState {
   }, [player, resetState]);
 
   const play = useCallback(
-    async (messageId: string, audioUrl: string) => {
+    async (messageId: string, audioUrl: string, opts?: { allowsRecording?: boolean }) => {
       // Stop any currently playing audio
       if (currentMessageIdRef.current) {
         try {
@@ -80,7 +85,7 @@ export function useAudioPlayer(): AudioPlayerState {
         }
       }
 
-      await configureAudioSession();
+      await configureAudioSession(opts);
 
       try {
         const localUri = await downloadAudio(audioUrl);
@@ -90,8 +95,9 @@ export function useAudioPlayer(): AudioPlayerState {
 
         player.replace({ uri: localUri });
         player.play();
-      } catch {
+      } catch (err) {
         resetState();
+        throw err; // Re-throw so callers (useAutoTTS) can detect failure
       }
     },
     [player, configureAudioSession, resetState],

@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Animated, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import type { SdkEvent } from "../api/types";
+import { PulsingDots } from "./PulsingDots";
+import { isReduceMotionEnabled } from "../utils/animation";
 
 /**
  * Map SDK tool names to human-readable descriptions.
@@ -22,51 +24,88 @@ const TOOL_LABELS: Record<string, string> = {
 interface ThinkingIndicatorProps {
   /** SDK events to display when expanded */
   events?: SdkEvent[];
+  /** Whether the indicator is visible — animates in/out */
+  visible?: boolean;
 }
 
 /**
  * Animated "thinking" indicator shown as a left-aligned bubble with 3 pulsing dots.
  * Tap to expand into a scrolling list of SDK events showing what the agent is doing.
+ * Fades in/out smoothly instead of appearing/disappearing instantly.
  */
-export function ThinkingIndicator({ events = [] }: ThinkingIndicatorProps) {
+export function ThinkingIndicator({ events = [], visible = true }: ThinkingIndicatorProps) {
   const [expanded, setExpanded] = useState(false);
-  const dot1 = useRef(new Animated.Value(0.3)).current;
-  const dot2 = useRef(new Animated.Value(0.3)).current;
-  const dot3 = useRef(new Animated.Value(0.3)).current;
+  const [shouldRender, setShouldRender] = useState(visible);
   const scrollRef = useRef<ScrollView>(null);
 
+  // Entrance/exit animation
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const scaleAnim = useRef(new Animated.Value(0.8)).current;
+
+  const exitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
-    const createPulse = (dot: Animated.Value, delay: number) =>
-      Animated.loop(
-        Animated.sequence([
-          Animated.delay(delay),
-          Animated.timing(dot, {
+    if (visible) {
+      // Cancel any pending exit animation
+      if (exitTimerRef.current) {
+        clearTimeout(exitTimerRef.current);
+        exitTimerRef.current = null;
+      }
+      setShouldRender(true);
+      setExpanded(false); // Reset expanded state on new thinking
+      if (isReduceMotionEnabled()) {
+        fadeAnim.setValue(1);
+        scaleAnim.setValue(1);
+      } else {
+        Animated.parallel([
+          Animated.spring(fadeAnim, {
             toValue: 1,
-            duration: 400,
+            tension: 120,
+            friction: 14,
             useNativeDriver: true,
           }),
-          Animated.timing(dot, {
-            toValue: 0.3,
-            duration: 400,
+          Animated.spring(scaleAnim, {
+            toValue: 1,
+            tension: 120,
+            friction: 14,
             useNativeDriver: true,
           }),
-        ]),
-      );
-
-    const a1 = createPulse(dot1, 0);
-    const a2 = createPulse(dot2, 200);
-    const a3 = createPulse(dot3, 400);
-
-    a1.start();
-    a2.start();
-    a3.start();
-
+        ]).start();
+      }
+    } else {
+      if (isReduceMotionEnabled()) {
+        // Instant hide — no animation
+        exitTimerRef.current = setTimeout(() => {
+          exitTimerRef.current = null;
+          fadeAnim.setValue(0);
+          scaleAnim.setValue(0.8);
+          setShouldRender(false);
+        }, 100);
+      } else {
+        // Small delay before exit to prevent flicker on rapid visible toggling
+        exitTimerRef.current = setTimeout(() => {
+          exitTimerRef.current = null;
+          Animated.parallel([
+            Animated.timing(fadeAnim, {
+              toValue: 0,
+              duration: 200,
+              useNativeDriver: true,
+            }),
+            Animated.timing(scaleAnim, {
+              toValue: 0.8,
+              duration: 200,
+              useNativeDriver: true,
+            }),
+          ]).start(({ finished }) => {
+            if (finished) setShouldRender(false);
+          });
+        }, 100);
+      }
+    }
     return () => {
-      a1.stop();
-      a2.stop();
-      a3.stop();
+      if (exitTimerRef.current) clearTimeout(exitTimerRef.current);
     };
-  }, [dot1, dot2, dot3]);
+  }, [visible, fadeAnim, scaleAnim]);
 
   // Auto-scroll to bottom when new events arrive
   useEffect(() => {
@@ -77,36 +116,41 @@ export function ThinkingIndicator({ events = [] }: ThinkingIndicatorProps) {
     }
   }, [expanded, events.length]);
 
-  const dots = (
-    <View style={styles.dotsRow}>
-      <Animated.View style={[styles.dot, { opacity: dot1 }]} />
-      <Animated.View style={[styles.dot, { opacity: dot2 }]} />
-      <Animated.View style={[styles.dot, { opacity: dot3 }]} />
-    </View>
-  );
+  if (!shouldRender) return null;
+
+  const animatedWrapperStyle = {
+    opacity: fadeAnim,
+    transform: [{ scale: scaleAnim }],
+  };
 
   if (!expanded) {
     return (
-      <View style={styles.wrapper}>
+      <Animated.View
+        style={[styles.wrapper, animatedWrapperStyle]}
+        accessibilityLiveRegion="polite"
+        accessibilityLabel="Assistant is thinking"
+      >
         <Pressable
           onPress={() => setExpanded(true)}
           style={styles.bubble}
+          accessibilityRole="button"
+          accessibilityHint="Expand to see thinking details"
         >
-          {dots}
+          <PulsingDots size={8} gap={5} />
           <Text style={styles.chevron}>▾</Text>
         </Pressable>
-      </View>
+      </Animated.View>
     );
   }
 
   return (
-    <View style={styles.wrapper}>
+    <Animated.View style={[styles.wrapper, animatedWrapperStyle]}>
       <View style={styles.expandedBubble}>
         <Pressable
           onPress={() => setExpanded(false)}
           style={styles.expandedHeader}
         >
-          {dots}
+          <PulsingDots size={8} gap={5} />
           <Text style={styles.chevron}>▴</Text>
         </Pressable>
         <ScrollView
@@ -124,7 +168,7 @@ export function ThinkingIndicator({ events = [] }: ThinkingIndicatorProps) {
           )}
         </ScrollView>
       </View>
-    </View>
+    </Animated.View>
   );
 }
 
@@ -356,15 +400,5 @@ const styles = StyleSheet.create({
     marginTop: 2,
     width: 8,
     textAlign: "center",
-  },
-  dotsRow: {
-    flexDirection: "row",
-    gap: 5,
-  },
-  dot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: "#a1a1aa",
   },
 });

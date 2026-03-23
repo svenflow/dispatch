@@ -10,6 +10,7 @@ import {
 import { SymbolView } from "expo-symbols";
 import { getSkills, type Skill } from "../api/skills";
 import { pickerBaseStyles } from "../styles/pickerStyles";
+import { createFuzzySearch } from "../utils/fuzzySearch";
 
 interface SkillPickerProps {
   onSelect: (skill: Skill) => void;
@@ -39,15 +40,18 @@ export function SkillPicker({ onSelect, onClose }: SkillPickerProps) {
     return () => { cancelled = true; };
   }, []);
 
-  const filteredSkills = useMemo(() => {
-    if (!query.trim()) return skills;
-    const q = query.toLowerCase();
-    return skills.filter(
-      (s) =>
-        s.name.toLowerCase().includes(q) ||
-        s.description.toLowerCase().includes(q)
-    );
-  }, [skills, query]);
+  const fuzzySearch = useMemo(
+    () =>
+      createFuzzySearch(skills, {
+        keys: [
+          { name: "name", weight: 2 },
+          { name: "description", weight: 1 },
+        ],
+      }),
+    [skills]
+  );
+
+  const filteredSkills = useMemo(() => fuzzySearch(query), [fuzzySearch, query]);
 
   const renderSkill = useCallback(
     ({ item }: { item: Skill }) => {

@@ -23,6 +23,7 @@ import { InputBar } from "@/src/components/InputBar";
 import { ThinkingIndicator } from "@/src/components/ThinkingIndicator";
 import { EmptyState } from "@/src/components/EmptyState";
 import { useAudioPlayer } from "@/src/hooks/useAudioPlayer";
+import { useVoiceConversation } from "@/src/hooks/useVoiceConversation";
 import { useSdkEvents } from "@/src/hooks/useSdkEvents";
 import { updateChat, markChatAsOpened, forkChat, deleteChat, generateChatImage } from "@/src/api/chats";
 import { ApiError } from "@/src/api/client";
@@ -45,6 +46,13 @@ export default function ChatDetailScreen() {
     useMessages(adapter, id ? `chat:${id}` : undefined);
 
   const audioPlayer = useAudioPlayer();
+  const clearInputTextRef = useRef<(() => void) | null>(null);
+  const voiceConversation = useVoiceConversation({
+    chatId: id ?? "",
+    onSend: sendMessage,
+    messages,
+    onClearText: () => clearInputTextRef.current?.(),
+  });
 
   const [imageSendError, setImageSendError] = useState<string | null>(null);
   const [menuVisible, setMenuVisible] = useState(false);
@@ -68,17 +76,7 @@ export default function ChatDetailScreen() {
   // Use {sessionPrefix}:{chatId} format for the session_id so the server resolves the right session_name
   const sdkSessionId = useMemo(() => `${sessionPrefix}:${id ?? ""}`, [id]);
 
-  // Find the last user message timestamp to scope SDK events to the current turn
-  const lastUserMsgTs = useMemo(() => {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === "user") {
-        return new Date(messages[i].timestamp).getTime();
-      }
-    }
-    return undefined;
-  }, [messages]);
-
-  const { events: sdkEvents, isComplete: sdkComplete } = useSdkEvents(sdkSessionId, isThinking, lastUserMsgTs);
+  const { events: sdkEvents, isComplete: sdkComplete } = useSdkEvents(sdkSessionId, isThinking);
 
   // Hide thinking immediately when SDK events report turn complete
   const showThinking = isThinking && !sdkComplete;
@@ -194,7 +192,7 @@ export default function ChatDetailScreen() {
   const handleGenerateImage = useCallback(async () => {
     try {
       await generateChatImage(id ?? "");
-      showAlert("Generating", "Creating a cover image for this chat. It will appear in the chat list shortly.");
+      showAlert("Generating", "Creating a cover image for this chat. This usually takes 30-60 seconds — it will appear in the chat list when ready.");
     } catch (err) {
       if (err instanceof ApiError && err.status === 429) {
         showAlert("Please Wait", "Server is busy, please try again in a moment");
@@ -316,11 +314,13 @@ export default function ChatDetailScreen() {
             keyboardShouldPersistTaps="handled"
           />
         )}
-        {showThinking && <ThinkingIndicator events={sdkEvents} />}
+        <ThinkingIndicator events={sdkEvents} visible={showThinking} />
         <InputBar
           onSend={handleSend}
           onSendWithImage={handleSendWithImage}
           chatId={`${sessionPrefix}:${id}`}
+          voiceConversation={voiceConversation}
+          clearTextRef={clearInputTextRef}
         />
       </KeyboardAvoidingView>
 

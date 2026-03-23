@@ -37,7 +37,18 @@ const MAX_CONSECUTIVE_ERRORS = 3;
 
 export function useVoiceMode(options: UseVoiceModeOptions): VoiceModeReturn {
   const { onSend, minLength = DEFAULT_MIN_LENGTH } = options;
-  const stt = useSpeechCapture({ contextualStrings: [branding.displayName] });
+
+  // Destructure so stable function refs (start/stop/reset via useCallback([]))
+  // don't get invalidated when state values (isListening/transcript/partial/error) change.
+  const {
+    isListening: sttIsListening,
+    transcript: sttTranscript,
+    partial: sttPartial,
+    error: sttError,
+    start: sttStart,
+    stop: sttStop,
+    reset: sttReset,
+  } = useSpeechCapture({ contextualStrings: [branding.displayName] });
 
   const [isActive, setIsActive] = useState(false);
   const [voiceState, setVoiceState] = useState<VoiceState>("IDLE");
@@ -51,6 +62,12 @@ export function useVoiceMode(options: UseVoiceModeOptions): VoiceModeReturn {
   /** Guards against double-send if auto-send effect fires twice in the same render cycle. */
   const hasSentRef = useRef(false);
 
+  // Keep latest STT values in refs so callbacks can read without re-creating
+  const sttPartialRef = useRef(sttPartial);
+  sttPartialRef.current = sttPartial;
+  const sttTranscriptRef = useRef(sttTranscript);
+  sttTranscriptRef.current = sttTranscript;
+
   // Keep refs in sync
   useEffect(() => { isActiveRef.current = isActive; }, [isActive]);
   useEffect(() => { voiceStateRef.current = voiceState; }, [voiceState]);
@@ -63,7 +80,7 @@ export function useVoiceMode(options: UseVoiceModeOptions): VoiceModeReturn {
       clearTimeout(sentTimerRef.current);
       sentTimerRef.current = null;
     }
-    stt.stop();
+    sttStop();
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     setIsActive(false);
     setVoiceState("IDLE");
@@ -71,7 +88,7 @@ export function useVoiceMode(options: UseVoiceModeOptions): VoiceModeReturn {
     consecutiveErrorRef.current = 0;
     isActivatingRef.current = false;
     hasSentRef.current = false;
-  }, [stt]);
+  }, [sttStop]);
 
   /** Process a transcript result: send if long enough, show error if too short. */
   const handleTranscriptResult = useCallback(
@@ -115,7 +132,7 @@ export function useVoiceMode(options: UseVoiceModeOptions): VoiceModeReturn {
     hasSentRef.current = false;
     impactLight();
     try {
-      await stt.start();
+      await sttStart();
     } catch (err) {
       console.warn("[VoiceMode] Failed to start STT on retry:", err);
       setErrorMessage("Microphone unavailable — tap to try again");
@@ -131,7 +148,7 @@ export function useVoiceMode(options: UseVoiceModeOptions): VoiceModeReturn {
         );
       }
     }
-  }, [stt, resetToInactive]);
+  }, [sttStart, resetToInactive]);
 
   const deactivate = useCallback(() => {
     resetToInactive();
@@ -167,7 +184,7 @@ export function useVoiceMode(options: UseVoiceModeOptions): VoiceModeReturn {
     setVoiceState("LISTENING");
     hasSentRef.current = false;
     try {
-      await stt.start();
+      await sttStart();
     } catch (err) {
       // STT failed to start — revert to text input cleanly
       console.warn("[VoiceMode] Failed to start STT:", err);
@@ -177,21 +194,21 @@ export function useVoiceMode(options: UseVoiceModeOptions): VoiceModeReturn {
       return;
     }
     isActivatingRef.current = false;
-  }, [stt, resetToInactive]);
+  }, [sttStart, resetToInactive]);
 
   const sendNow = useCallback(() => {
     if (voiceStateRef.current !== "LISTENING") return;
-    const text = stt.partial || stt.transcript;
-    stt.stop();
+    const text = sttPartialRef.current || sttTranscriptRef.current;
+    sttStop();
     handleTranscriptResult(text || "");
-  }, [stt, handleTranscriptResult]);
+  }, [sttStop, handleTranscriptResult]);
 
   // -- Effects --
 
   // STT error → voice error
   useEffect(() => {
-    if (!stt.error || !isActiveRef.current) return;
-    setErrorMessage(stt.error);
+    if (!sttError || !isActiveRef.current) return;
+    setErrorMessage(sttError);
     setVoiceState("IDLE");
     notificationError();
     consecutiveErrorRef.current++;
@@ -202,41 +219,41 @@ export function useVoiceMode(options: UseVoiceModeOptions): VoiceModeReturn {
         "Voice mode unavailable — returning to text input",
       );
     }
-  }, [stt.error, resetToInactive]);
+  }, [sttError, resetToInactive]);
 
   // STT completed → auto-send
   useEffect(() => {
     if (voiceStateRef.current !== "LISTENING") return;
-    if (!stt.isListening && stt.transcript && isActiveRef.current) {
-      const text = stt.transcript;
-      stt.reset();
+    if (!sttIsListening && sttTranscript && isActiveRef.current) {
+      const text = sttTranscript;
+      sttReset();
       handleTranscriptResult(text);
     }
-  }, [stt.isListening, stt.transcript, stt, handleTranscriptResult]);
+  }, [sttIsListening, sttTranscript, sttReset, handleTranscriptResult]);
 
   // AppState: stop STT on background
   useEffect(() => {
     const sub = AppState.addEventListener("change", (state) => {
       if (state !== "active" && isActiveRef.current && voiceStateRef.current === "LISTENING") {
-        stt.stop();
+        sttStop();
         setVoiceState("IDLE");
       }
     });
     return () => sub.remove();
-  }, [stt]);
+  }, [sttStop]);
 
   // Cleanup on unmount
   useEffect(() => {
     return () => {
       if (sentTimerRef.current) clearTimeout(sentTimerRef.current);
-      stt.stop();
+      sttStop();
     };
-  }, [stt]);
+  }, [sttStop]);
 
   return {
     isActive,
     voiceState,
-    sttPartial: stt.partial,
+    sttPartial,
     errorMessage,
     activate,
     deactivate,

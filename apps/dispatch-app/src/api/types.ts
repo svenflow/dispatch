@@ -26,6 +26,7 @@ export interface Conversation {
   fork_message_id?: string | null;
   marked_unread?: boolean;
   image_url?: string | null; // Cover image URL (generated via nano-banana)
+  image_status?: string | null; // "generating" | "ready" | "failed" | null
 }
 
 /** Notes for a chat */

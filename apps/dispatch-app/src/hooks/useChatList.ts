@@ -3,6 +3,10 @@ import { AppState, type AppStateStatus } from "react-native";
 import { getChats, createChat, deleteChat, markChatAsUnread as apiMarkChatAsUnread } from "../api/chats";
 import type { Conversation } from "../api/types";
 import { notifyUnreadChatCount } from "../state/unreadChats";
+import { makeLayoutAnim, safeConfigureNext, backoffDelay } from "../utils/animation";
+
+/** Smooth reorder animation for chat list updates */
+const chatListAnim = makeLayoutAnim(250);
 
 // ---------------------------------------------------------------------------
 // Unified optimistic read/unread tracking (module-level, persists across navigations)
@@ -64,11 +68,19 @@ function _isServerUnread(c: Conversation): boolean {
   return true; // No last_opened_at — assistant message is unread
 }
 
+/** Check if a chat is currently unread (server data + optimistic overrides) */
+export function isCurrentlyUnread(conversation: Conversation): boolean {
+  const opt = _optimisticState.get(conversation.id);
+  if (opt === "read") return false;
+  if (opt === "unread") return true;
+  return _isServerUnread(conversation);
+}
+
 interface UseChatListReturn {
   conversations: Conversation[];
   isLoading: boolean;
   error: string | null;
-  loadConversations: () => Promise<void>;
+  loadConversations: () => Promise<boolean>;
   createConversation: (title?: string) => Promise<Conversation | null>;
   deleteConversation: (chatId: string) => Promise<boolean>;
   markAsUnread: (chatId: string) => Promise<void>;
@@ -79,8 +91,12 @@ export function useChatList(): UseChatListReturn {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const mountedRef = useRef(true);
+  const prevOrderRef = useRef<string[]>([]);
+  /** Fingerprint of last poll result — skip setState when unchanged to avoid re-renders */
+  const prevFingerprintRef = useRef<string>("");
 
-  const loadConversations = useCallback(async () => {
+  /** Load conversations. Returns true on success, false on failure (for backoff). */
+  const loadConversations = useCallback(async (): Promise<boolean> => {
     try {
       const chats = await getChats();
       // Sort by last message time descending (most recent first)
@@ -91,23 +107,41 @@ export function useChatList(): UseChatListReturn {
       });
       if (mountedRef.current) {
         _updateReadTracking(chats);
-        // Count unread chats for tab badge
-        const unreadCount = chats.filter((c) => {
-          const opt = _optimisticState.get(c.id);
-          if (opt === "read") return false;
-          if (opt === "unread") return true;
-          return _isServerUnread(c);
-        }).length;
+
+        // Build lightweight fingerprint — includes unread-relevant fields
+        const fingerprint = chats
+          .map((c) => `${c.id}:${c.last_message_at ?? ""}:${c.is_thinking}:${c.marked_unread}:${c.image_status}:${c.last_opened_at ?? ""}`)
+          .join("|");
+
+        // Skip state update AND badge notification when nothing changed
+        if (fingerprint === prevFingerprintRef.current) return true;
+        prevFingerprintRef.current = fingerprint;
+
+        // Count unread chats for tab badge (only on actual changes)
+        const unreadCount = chats.filter((c) => isCurrentlyUnread(c)).length;
         notifyUnreadChatCount(unreadCount);
+
+        // Animate if order or count changed
+        const newOrder = chats.map((c) => c.id);
+        const orderChanged =
+          newOrder.length !== prevOrderRef.current.length ||
+          newOrder.some((id, i) => id !== prevOrderRef.current[i]);
+        if (orderChanged && prevOrderRef.current.length > 0) {
+          safeConfigureNext(chatListAnim);
+        }
+        prevOrderRef.current = newOrder;
+
         setConversations(chats);
         setError(null);
       }
+      return true;
     } catch (err) {
       if (mountedRef.current) {
         setError(
           err instanceof Error ? err.message : "Failed to load conversations",
         );
       }
+      return false;
     } finally {
       if (mountedRef.current) {
         setIsLoading(false);
@@ -137,12 +171,15 @@ export function useChatList(): UseChatListReturn {
     [],
   );
 
+  /** Snapshot ref for rollback — safe under concurrent React */
+  const deleteSnapshotRef = useRef<Conversation[]>([]);
+
   const deleteConversation = useCallback(
     async (chatId: string): Promise<boolean> => {
-      // Optimistically remove from list immediately
-      let removed: Conversation[] = [];
+      // Optimistically remove from list immediately with animation
+      safeConfigureNext(chatListAnim);
       setConversations((prev) => {
-        removed = prev.filter((c) => c.id === chatId);
+        deleteSnapshotRef.current = prev; // Capture full list for rollback
         return prev.filter((c) => c.id !== chatId);
       });
 
@@ -151,8 +188,9 @@ export function useChatList(): UseChatListReturn {
         return true;
       } catch (err) {
         if (mountedRef.current) {
-          // Restore on failure
-          setConversations((prev) => [...removed, ...prev]);
+          // Restore to original order on failure
+          safeConfigureNext(chatListAnim);
+          setConversations(deleteSnapshotRef.current);
           setError(
             err instanceof Error
               ? err.message
@@ -190,14 +228,34 @@ export function useChatList(): UseChatListReturn {
     loadConversations();
   }, [loadConversations]);
 
-  // Poll for updates every 3 seconds
-  useEffect(() => {
-    const interval = setInterval(() => {
-      loadConversations();
-    }, 3000);
+  // Poll for updates with exponential backoff on failures
+  const pollFailCountRef = useRef(0);
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-    return () => clearInterval(interval);
+  const schedulePoll = useCallback(() => {
+    if (pollTimerRef.current) return;
+    const delay = backoffDelay(3000, pollFailCountRef.current);
+    pollTimerRef.current = setTimeout(async () => {
+      pollTimerRef.current = null;
+      const ok = await loadConversations();
+      if (ok) {
+        pollFailCountRef.current = 0;
+      } else {
+        pollFailCountRef.current += 1;
+      }
+      if (mountedRef.current) schedulePoll();
+    }, delay);
   }, [loadConversations]);
+
+  useEffect(() => {
+    schedulePoll();
+    return () => {
+      if (pollTimerRef.current) {
+        clearTimeout(pollTimerRef.current);
+        pollTimerRef.current = null;
+      }
+    };
+  }, [schedulePoll]);
 
   // Refresh on app foreground
   useEffect(() => {

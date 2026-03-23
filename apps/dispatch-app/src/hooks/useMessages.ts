@@ -5,6 +5,10 @@ import { getAgentMessages, sendAgentMessage } from "../api/agents";
 import type { ChatMessage, AgentMessage } from "../api/types";
 import { MESSAGE_POLL_INTERVAL } from "../config/constants";
 import { generateUUID } from "../utils/uuid";
+import { makeLayoutAnim, safeConfigureNext, backoffDelay } from "../utils/animation";
+
+/** iMessage-like eased animation for new messages — no bounce, just smooth */
+const messageEaseAnim = makeLayoutAnim(300);
 
 // ---------------------------------------------------------------------------
 // Unified message type used by the UI layer
@@ -21,6 +25,7 @@ export interface DisplayMessage {
   audioUrl?: string | null;
   imageUrl?: string | null;
   localImageUri?: string | null; // optimistic preview (local file URI)
+  retryChatId?: string; // chatId for image message retry
   status?: string; // "generating" | "complete" | "failed"
 }
 
@@ -118,12 +123,6 @@ function agentMessageToDisplay(m: AgentMessage): DisplayMessage {
 }
 
 // ---------------------------------------------------------------------------
-// In-memory message cache — prevents flash when re-entering a chat
-// ---------------------------------------------------------------------------
-
-const messageCache = new Map<string, { messages: DisplayMessage[]; isThinking: boolean }>();
-
-// ---------------------------------------------------------------------------
 // useMessages hook
 // ---------------------------------------------------------------------------
 
@@ -138,26 +137,14 @@ export interface UseMessagesReturn {
   refresh: () => Promise<void>;
 }
 
-export function useMessages(adapter: MessageAdapter, cacheKey?: string): UseMessagesReturn {
-  // Don't use cached messages on mount — always start fresh to avoid flashing stale data.
-  // The cache is still written to (below) for potential future use, but on mount we
-  // always do a clean load to ensure the user sees current data.
+export function useMessages(adapter: MessageAdapter, _cacheKey?: string): UseMessagesReturn {
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isThinking, setIsThinking] = useState(false);
 
-  // Write-through cache so re-entering chat shows latest data instantly
-  const cacheKeyRef = useRef(cacheKey);
-  cacheKeyRef.current = cacheKey;
-  useEffect(() => {
-    if (cacheKeyRef.current) {
-      messageCache.set(cacheKeyRef.current, { messages, isThinking });
-    }
-  }, [messages, isThinking]);
-
   const mountedRef = useRef(true);
-  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const adapterRef = useRef(adapter);
   adapterRef.current = adapter;
 
@@ -240,6 +227,9 @@ export function useMessages(adapter: MessageAdapter, cacheKey?: string): UseMess
 
       if (newMsgs.length === 0) return;
 
+      // Schedule animation before state update — configureNext applies to the next layout commit
+      safeConfigureNext(messageEaseAnim);
+
       setMessages((prev) => {
         // Merge: remove pending duplicates, add new, dedup by id
         const existingIds = new Set(prev.map((m) => m.id));
@@ -247,13 +237,20 @@ export function useMessages(adapter: MessageAdapter, cacheKey?: string): UseMess
 
         if (truly_new.length === 0) return prev;
 
-        // Remove pending messages whose content matches an incoming message
-        const newContents = new Set(truly_new.map((m) => m.content));
+        // Remove pending messages that match incoming server messages by serverMessageId
+        const newIds = new Set(truly_new.map((m) => m.id));
         const filtered = prev.filter(
-          (m) => !m.isPending || !newContents.has(m.content),
+          (m) => !m.isPending || !m.serverMessageId || !newIds.has(m.serverMessageId),
         );
 
-        return [...filtered, ...truly_new];
+        // Fallback: also match by content for messages without serverMessageId.
+        // Safe because user-typed chat messages are unique in practice.
+        const newContents = new Set(truly_new.map((m) => m.content));
+        const deduped = filtered.filter(
+          (m) => !m.isPending || m.serverMessageId || !newContents.has(m.content),
+        );
+
+        return [...deduped, ...truly_new];
       });
 
       updateLatestTs(newMsgs);
@@ -266,7 +263,7 @@ export function useMessages(adapter: MessageAdapter, cacheKey?: string): UseMess
           setIsThinking(false);
         }
       }
-    } catch (err) {
+    } catch {
       // Surface persistent connection issues after repeated failures
       pollFailCountRef.current += 1;
       if (
@@ -279,17 +276,26 @@ export function useMessages(adapter: MessageAdapter, cacheKey?: string): UseMess
   }, [updateLatestTs]);
 
   // -----------------------------------------------------------------------
-  // Start / stop polling
+  // Start / stop polling — exponential backoff on repeated failures
   // -----------------------------------------------------------------------
 
-  const startPolling = useCallback(() => {
+  const schedulePoll = useCallback(() => {
     if (pollingRef.current) return;
-    pollingRef.current = setInterval(poll, adapterRef.current.pollInterval);
+    const delay = backoffDelay(adapterRef.current.pollInterval, pollFailCountRef.current);
+    pollingRef.current = setTimeout(async () => {
+      pollingRef.current = null;
+      await poll();
+      if (mountedRef.current) schedulePoll();
+    }, delay);
   }, [poll]);
+
+  const startPolling = useCallback(() => {
+    schedulePoll();
+  }, [schedulePoll]);
 
   const stopPolling = useCallback(() => {
     if (pollingRef.current) {
-      clearInterval(pollingRef.current);
+      clearTimeout(pollingRef.current);
       pollingRef.current = null;
     }
   }, []);
@@ -314,13 +320,14 @@ export function useMessages(adapter: MessageAdapter, cacheKey?: string): UseMess
         serverMessageId,
       };
 
+      safeConfigureNext(messageEaseAnim);
       setMessages((prev) => [...prev, pendingMsg]);
       // Don't set isThinking optimistically — let the server drive it
       setError(null);
 
       try {
         await adapterRef.current.sendMessage(trimmed, serverMessageId);
-      } catch (err) {
+      } catch {
         if (!mountedRef.current) return;
         // Mark message as failed instead of removing — user can retry
         setMessages((prev) =>
@@ -340,9 +347,13 @@ export function useMessages(adapter: MessageAdapter, cacheKey?: string): UseMess
   // Retry a failed message
   // -----------------------------------------------------------------------
 
+  // Use a ref to avoid stale closure over messages in retryMessage
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+
   const retryMessage = useCallback(
     async (messageId: string) => {
-      const failedMsg = messages.find((m) => m.id === messageId && m.sendFailed);
+      const failedMsg = messagesRef.current.find((m) => m.id === messageId && m.sendFailed);
       if (!failedMsg) return;
 
       // Mark as pending again
@@ -353,11 +364,15 @@ export function useMessages(adapter: MessageAdapter, cacheKey?: string): UseMess
             : m,
         ),
       );
-      // Don't set isThinking optimistically — let the server drive it
 
       try {
-        await adapterRef.current.sendMessage(failedMsg.content, failedMsg.serverMessageId);
-      } catch (err) {
+        // Retry with image if the original message had one
+        if (failedMsg.localImageUri && failedMsg.retryChatId) {
+          await sendPromptWithImage(failedMsg.content, failedMsg.localImageUri, failedMsg.retryChatId);
+        } else {
+          await adapterRef.current.sendMessage(failedMsg.content, failedMsg.serverMessageId);
+        }
+      } catch {
         if (!mountedRef.current) return;
         setMessages((prev) =>
           prev.map((m) =>
@@ -369,7 +384,7 @@ export function useMessages(adapter: MessageAdapter, cacheKey?: string): UseMess
         setIsThinking(false);
       }
     },
-    [messages],
+    [],
   );
 
   // -----------------------------------------------------------------------
@@ -380,6 +395,7 @@ export function useMessages(adapter: MessageAdapter, cacheKey?: string): UseMess
     async (text: string, imageUri: string, chatId: string) => {
       const trimmed = text.trim();
 
+      const serverMessageId = generateUUID();
       const pendingId = `pending-img-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       const pendingMsg: DisplayMessage = {
         id: pendingId,
@@ -388,21 +404,28 @@ export function useMessages(adapter: MessageAdapter, cacheKey?: string): UseMess
         timestamp: new Date().toISOString(),
         isPending: true,
         localImageUri: imageUri,
+        serverMessageId,
+        retryChatId: chatId,
       };
 
+      safeConfigureNext(messageEaseAnim);
       setMessages((prev) => [...prev, pendingMsg]);
       // Don't set isThinking optimistically — let the server drive it
       setError(null);
 
       try {
         await sendPromptWithImage(trimmed, imageUri, chatId);
-      } catch (err) {
+      } catch {
         if (!mountedRef.current) return;
-        setMessages((prev) => prev.filter((m) => m.id !== pendingId));
-        setIsThinking(false);
-        setError(
-          err instanceof Error ? err.message : "Failed to send image",
+        // Mark as failed — consistent with text send failure UX
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === pendingId
+              ? { ...m, isPending: false, sendFailed: true }
+              : m,
+          ),
         );
+        setIsThinking(false);
       }
     },
     [],
@@ -431,10 +454,6 @@ export function useMessages(adapter: MessageAdapter, cacheKey?: string): UseMess
     return () => {
       mountedRef.current = false;
       stopPolling();
-      // Clear cache on unmount so stale data doesn't flash on re-entry
-      if (cacheKeyRef.current) {
-        messageCache.delete(cacheKeyRef.current);
-      }
     };
   }, [loadInitial, startPolling, stopPolling]);
 
@@ -452,7 +471,7 @@ export function useMessages(adapter: MessageAdapter, cacheKey?: string): UseMess
     };
     const sub = AppState.addEventListener("change", handleAppState);
     return () => sub.remove();
-  }, [poll, startPolling, stopPolling]);
+  }, [loadInitial, startPolling, stopPolling]);
 
   return {
     messages,

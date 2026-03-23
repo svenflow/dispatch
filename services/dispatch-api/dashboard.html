@@ -770,6 +770,10 @@ body {
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
         Facts
       </div>
+      <div class="nav-item" data-page="ccu" tabindex="0" role="button" onclick="navigate('ccu')" onkeydown="if(event.key==='Enter')navigate('ccu')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+        CCU
+      </div>
       <div class="nav-item" data-page="logs" tabindex="0" role="button" onclick="navigate('logs')" onkeydown="if(event.key==='Enter')navigate('logs')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
         Logs
@@ -1049,6 +1053,111 @@ body {
       </div>
     </div>
 
+    <!-- CCU Page -->
+    <div class="page" id="page-ccu">
+      <div class="page-header">
+        <div class="page-title">Claude Code Usage</div>
+        <div class="live-indicator"><span class="live-dot"></span> Live - 30s <span id="ccu-freshness" style="margin-left:8px;color:var(--text-tertiary)"></span></div>
+      </div>
+
+      <!-- Active Block Stats -->
+      <div class="stat-cards" id="ccu-stats">
+        <div class="stat-card" style="--card-accent: var(--accent-cyan)">
+          <div class="stat-number" id="ccu-block-pct">—</div>
+          <div class="stat-label">Block Used</div>
+        </div>
+        <div class="stat-card" style="--card-accent: var(--accent-green)">
+          <div class="stat-number" id="ccu-block-remaining">—</div>
+          <div class="stat-label">Time Left</div>
+        </div>
+        <div class="stat-card" style="--card-accent: var(--accent-amber)">
+          <div class="stat-number" id="ccu-block-cost">—</div>
+          <div class="stat-label">Block Cost</div>
+        </div>
+        <div class="stat-card" style="--card-accent: var(--accent-purple)">
+          <div class="stat-number" id="ccu-projected">—</div>
+          <div class="stat-label">Projected</div>
+        </div>
+        <div class="stat-card" style="--card-accent: var(--accent-blue)">
+          <div class="stat-number" id="ccu-today-cost">—</div>
+          <div class="stat-label">Today Cost</div>
+        </div>
+        <div class="stat-card" style="--card-accent: var(--accent-orange)">
+          <div class="stat-number" id="ccu-7d-cost">—</div>
+          <div class="stat-label">7-Day Cost</div>
+        </div>
+      </div>
+
+      <!-- Block Progress Bar -->
+      <div class="panel" style="margin-bottom:12px">
+        <div class="panel-header">Current Block</div>
+        <div class="panel-body" style="padding:16px">
+          <div id="ccu-block-info" style="font-family:var(--font-mono);font-size:0.75rem;color:var(--text-secondary);margin-bottom:10px">—</div>
+          <div style="background:var(--bg-tertiary);border-radius:2px;height:24px;position:relative;overflow:hidden">
+            <div id="ccu-progress-bar" style="height:100%;background:var(--accent-cyan);transition:width 0.5s ease;width:0%"></div>
+            <div id="ccu-progress-label" style="position:absolute;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;font-family:var(--font-mono);font-size:0.6875rem;color:var(--text-primary)">—</div>
+          </div>
+          <div id="ccu-burn-rate" style="font-family:var(--font-mono);font-size:0.6875rem;color:var(--text-tertiary);margin-top:8px">—</div>
+        </div>
+      </div>
+
+      <!-- Charts row -->
+      <div class="panels" style="grid-template-columns:repeat(auto-fit, minmax(300px, 1fr))">
+        <!-- Daily Cost Chart -->
+        <div class="panel">
+          <div class="panel-header">Daily Cost</div>
+          <div class="panel-body" style="padding:16px;height:240px">
+            <canvas id="ccu-daily-chart"></canvas>
+          </div>
+        </div>
+        <!-- Recent Blocks Chart -->
+        <div class="panel">
+          <div class="panel-header">Recent Blocks</div>
+          <div class="panel-body" style="padding:16px;height:240px">
+            <canvas id="ccu-blocks-chart"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <!-- Daily Breakdown Table -->
+      <div class="panel" style="margin-top:12px">
+        <div class="panel-header">Daily Breakdown</div>
+        <div class="table-scroll-x">
+          <div class="table-scroll" style="max-height:400px">
+            <table class="data-table">
+              <thead><tr>
+                <th>Date</th>
+                <th>Tokens</th>
+                <th>Cost</th>
+                <th>Models</th>
+              </tr></thead>
+              <tbody id="ccu-daily-body"><tr><td colspan="4"><div class="state-message">Loading...</div></td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Recent Blocks Table -->
+      <div class="panel" style="margin-top:12px">
+        <div class="panel-header">Recent Blocks</div>
+        <div class="table-scroll-x">
+          <div class="table-scroll" style="max-height:400px">
+            <table class="data-table">
+              <thead><tr>
+                <th>Block Start</th>
+                <th>Duration</th>
+                <th>Tokens</th>
+                <th>Cost</th>
+                <th>Models</th>
+                <th>Status</th>
+              </tr></thead>
+              <tbody id="ccu-blocks-body"><tr><td colspan="6"><div class="state-message">Loading...</div></td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Logs Page -->
     <div class="page" id="page-logs">
       <div class="page-header">
@@ -1224,7 +1333,7 @@ function closeNav() {
   document.getElementById('nav-overlay').classList.remove('open');
 }
 
-const VALID_PAGES = ['overview','bus','sessions','sdk','perf','skills','tasks','facts','logs'];
+const VALID_PAGES = ['overview','bus','sessions','sdk','perf','skills','tasks','facts','ccu','logs'];
 let activeAbortController = null;
 
 function navigate(page) {
@@ -1264,6 +1373,7 @@ function navigate(page) {
     case 'skills': loadSkills(); pollers.skills = setInterval(loadSkills, 60000); break;
     case 'tasks': loadTasks(); pollers.tasks = setInterval(loadTasks, 10000); break;
     case 'facts': loadFacts(); pollers.facts = setInterval(loadFacts, 30000); break;
+    case 'ccu': loadCcu(); pollers.ccu = setInterval(loadCcu, 30000); break;
     case 'logs': loadLogFiles(); loadLogs(); pollers.logs = setInterval(() => { if (!logsPaused) loadLogs(); }, 3000); break;
   }
 }
@@ -1990,6 +2100,208 @@ async function loadFacts() {
       <td data-label="Status"><span class="badge ${f.active ? 'badge-active' : 'badge-inactive'}">${f.active ? 'active' : 'inactive'}</span></td>
     </tr>
   `).join('') : '<tr><td colspan="7"><div class="state-message">No facts</div></td></tr>';
+}
+
+// ─────────────────────────────────────────────
+// CCU Page
+// ─────────────────────────────────────────────
+let ccuDailyChart = null;
+let ccuBlocksChart = null;
+
+function fmtTokens(n) {
+  if (n == null) return '—';
+  if (n >= 1e9) return (n / 1e9).toFixed(1) + 'B';
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+  return String(n);
+}
+function fmtCost(n) { return n != null ? '$' + n.toFixed(2) : '—'; }
+function fmtMinutes(m) {
+  if (m == null) return '—';
+  const h = Math.floor(m / 60);
+  const mins = Math.round(m % 60);
+  return h > 0 ? h + 'h ' + mins + 'm' : mins + 'm';
+}
+function ccuModelName(m) {
+  return m.replace('claude-','').replace(/-\d{6,}$/, '');
+}
+function ccuTimeAgo(isoStr) {
+  if (!isoStr) return '';
+  const secs = Math.round((Date.now() - new Date(isoStr).getTime()) / 1000);
+  if (secs < 10) return 'just now';
+  if (secs < 60) return secs + 's ago';
+  if (secs < 3600) return Math.floor(secs / 60) + 'm ago';
+  return Math.floor(secs / 3600) + 'h ago';
+}
+
+const ccuChartOpts = {
+  responsive: true, maintainAspectRatio: false,
+  animation: { duration: 300 },
+  plugins: { legend: { display: false } },
+  scales: {
+    x: { ticks: { color: '#71717a', font: { family: "'Fira Code',monospace", size: 10 } }, grid: { color: 'rgba(255,255,255,0.04)' } },
+    y: { ticks: { color: '#71717a', font: { family: "'Fira Code',monospace", size: 10 }, callback: v => '$' + v }, grid: { color: 'rgba(255,255,255,0.04)' } }
+  }
+};
+const ccuBlocksChartOpts = {
+  ...ccuChartOpts,
+  scales: {
+    ...ccuChartOpts.scales,
+    x: { ticks: { color: '#71717a', font: { family: "'Fira Code',monospace", size: 9 }, maxTicksLimit: 8, maxRotation: 0 }, grid: { color: 'rgba(255,255,255,0.04)' } }
+  }
+};
+
+function renderCcuFreshness(data) {
+  const el = document.getElementById('ccu-freshness');
+  if (data._error) {
+    el.textContent = '· error';
+    el.style.color = 'var(--accent-red)';
+  } else if (data._updated_at) {
+    const ago = ccuTimeAgo(data._updated_at);
+    const stale = (Date.now() - new Date(data._updated_at).getTime()) > 300000;
+    el.textContent = '· ' + ago;
+    el.style.color = stale ? 'var(--accent-amber)' : 'var(--text-tertiary)';
+  } else if (data._loading) {
+    el.textContent = '· loading...';
+    el.style.color = 'var(--text-tertiary)';
+  }
+}
+
+function renderCcuStats(data) {
+  const ab = data.active_block;
+  const daily = data.daily || [];
+  const totals = data.daily_totals || {};
+
+  if (ab) {
+    const maxTokens = data.max_tokens_observed || ab.totalTokens;
+    const pct = maxTokens > 0 ? ((ab.totalTokens / maxTokens) * 100) : 0;
+    const remaining = ab.projection ? ab.projection.remainingMinutes : null;
+
+    document.getElementById('ccu-block-pct').textContent = pct.toFixed(1) + '%';
+    document.getElementById('ccu-block-remaining').textContent = fmtMinutes(remaining);
+    document.getElementById('ccu-block-cost').textContent = fmtCost(ab.costUSD);
+    document.getElementById('ccu-projected').textContent = ab.projection ? fmtCost(ab.projection.totalCost) : '—';
+
+    // Progress bar
+    const barColor = pct > 80 ? 'var(--accent-red)' : pct > 50 ? 'var(--accent-amber)' : 'var(--accent-cyan)';
+    document.getElementById('ccu-progress-bar').style.width = Math.min(pct, 100) + '%';
+    document.getElementById('ccu-progress-bar').style.background = barColor;
+    document.getElementById('ccu-progress-label').textContent = fmtTokens(ab.totalTokens) + ' / ' + fmtTokens(maxTokens) + ' (' + pct.toFixed(1) + '%)';
+
+    // Block info
+    const start = new Date(ab.startTime);
+    const end = new Date(ab.endTime);
+    document.getElementById('ccu-block-info').textContent =
+      start.toLocaleTimeString('en-US', {hour:'numeric',minute:'2-digit'}) + ' → ' +
+      end.toLocaleTimeString('en-US', {hour:'numeric',minute:'2-digit'}) +
+      ' · ' + ab.models.map(ccuModelName).join(', ');
+
+    // Burn rate
+    if (ab.burnRate) {
+      document.getElementById('ccu-burn-rate').textContent =
+        'Burn: ' + fmtCost(ab.burnRate.costPerHour) + '/hr · ' +
+        fmtTokens(ab.burnRate.tokensPerMinute) + ' tok/min';
+    }
+  } else {
+    document.getElementById('ccu-block-pct').textContent = '—';
+    document.getElementById('ccu-block-remaining').textContent = '—';
+    document.getElementById('ccu-block-cost').textContent = '—';
+    document.getElementById('ccu-projected').textContent = '—';
+    document.getElementById('ccu-block-info').textContent = 'No active block';
+    document.getElementById('ccu-progress-label').textContent = 'Inactive';
+    document.getElementById('ccu-burn-rate').textContent = '';
+  }
+
+  // Today's cost — use local date to match timezone
+  const now = new Date();
+  const todayLocal = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0') + '-' + String(now.getDate()).padStart(2,'0');
+  const todayData = daily.find(d => d.date === todayLocal);
+  document.getElementById('ccu-today-cost').textContent = todayData ? fmtCost(todayData.totalCost) : '$0';
+  document.getElementById('ccu-7d-cost').textContent = totals.totalCost != null ? fmtCost(totals.totalCost) : '—';
+}
+
+function renderCcuCharts(data) {
+  const daily = data.daily || [];
+  const blocks = data.recent_blocks || [];
+
+  // Daily Cost Chart (update in-place to avoid flicker)
+  if (typeof Chart !== 'undefined' && daily.length > 0) {
+    const labels = daily.map(d => d.date.slice(5));
+    const costs = daily.map(d => d.totalCost);
+
+    if (ccuDailyChart) {
+      ccuDailyChart.data.labels = labels;
+      ccuDailyChart.data.datasets[0].data = costs;
+      ccuDailyChart.update('none');
+    } else {
+      ccuDailyChart = new Chart(document.getElementById('ccu-daily-chart').getContext('2d'), {
+        type: 'bar',
+        data: { labels, datasets: [{ label: 'Cost ($)', data: costs, backgroundColor: 'rgba(37,99,235,0.7)', borderColor: 'rgba(37,99,235,1)', borderWidth: 1, borderRadius: 2 }] },
+        options: ccuChartOpts
+      });
+    }
+  }
+
+  // Recent Blocks Chart (update in-place to avoid flicker)
+  if (typeof Chart !== 'undefined' && blocks.length > 0) {
+    const blkLabels = blocks.map(b => {
+      const d = new Date(b.startTime);
+      return d.toLocaleDateString('en-US',{month:'short',day:'numeric'}) + '\n' + d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
+    });
+    const blkCosts = blocks.map(b => b.costUSD);
+    const blkColors = blocks.map(b => b.isActive ? 'rgba(6,182,212,0.8)' : 'rgba(139,92,246,0.6)');
+
+    if (ccuBlocksChart) {
+      ccuBlocksChart.data.labels = blkLabels;
+      ccuBlocksChart.data.datasets[0].data = blkCosts;
+      ccuBlocksChart.data.datasets[0].backgroundColor = blkColors;
+      ccuBlocksChart.update('none');
+    } else {
+      ccuBlocksChart = new Chart(document.getElementById('ccu-blocks-chart').getContext('2d'), {
+        type: 'bar',
+        data: { labels: blkLabels, datasets: [{ label: 'Cost ($)', data: blkCosts, backgroundColor: blkColors, borderWidth: 0, borderRadius: 2 }] },
+        options: ccuBlocksChartOpts
+      });
+    }
+  }
+}
+
+function renderCcuTables(data) {
+  const daily = data.daily || [];
+  const blocks = data.recent_blocks || [];
+
+  document.getElementById('ccu-daily-body').innerHTML = daily.length ? daily.map(d => `
+    <tr>
+      <td data-label="Date" style="font-family:var(--font-mono)">${escapeHtml(d.date)}</td>
+      <td data-label="Tokens" style="font-family:var(--font-mono)">${fmtTokens(d.totalTokens)}</td>
+      <td data-label="Cost" style="font-family:var(--font-mono);color:var(--accent-amber)">${fmtCost(d.totalCost)}</td>
+      <td data-label="Models">${(d.modelsUsed||[]).map(m => '<span class="badge badge-type" style="font-size:0.5625rem;margin:1px">' + escapeHtml(ccuModelName(m)) + '</span>').join(' ')}</td>
+    </tr>
+  `).join('') : '<tr><td colspan="4"><div class="state-message">No daily data</div></td></tr>';
+
+  document.getElementById('ccu-blocks-body').innerHTML = blocks.length ? blocks.map(b => {
+    const start = new Date(b.startTime);
+    const end = b.actualEndTime ? new Date(b.actualEndTime) : new Date(b.endTime);
+    const durMin = Math.round((end - start) / 60000);
+    const status = b.isActive ? '<span class="badge badge-active">active</span>' : '<span class="badge badge-inactive">done</span>';
+    return `<tr>
+      <td data-label="Start" style="font-family:var(--font-mono);font-size:0.75rem">${start.toLocaleDateString('en-US',{month:'short',day:'numeric'})} ${start.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})}</td>
+      <td data-label="Duration" style="font-family:var(--font-mono)">${fmtMinutes(durMin)}</td>
+      <td data-label="Tokens" style="font-family:var(--font-mono)">${fmtTokens(b.totalTokens)}</td>
+      <td data-label="Cost" style="font-family:var(--font-mono);color:var(--accent-amber)">${fmtCost(b.costUSD)}</td>
+      <td data-label="Models">${(b.models||[]).map(m => '<span class="badge badge-type" style="font-size:0.5625rem;margin:1px">' + escapeHtml(ccuModelName(m)) + '</span>').join(' ')}</td>
+      <td data-label="Status">${status}</td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="6"><div class="state-message">No blocks</div></td></tr>';
+}
+
+async function loadCcu() {
+  const data = await api('/api/dashboard/ccu');
+  if (!data) return;
+  renderCcuFreshness(data);
+  renderCcuStats(data);
+  renderCcuCharts(data);
+  renderCcuTables(data);
 }
 
 // ─────────────────────────────────────────────

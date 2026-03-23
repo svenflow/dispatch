@@ -330,7 +330,7 @@ export default function AgentConversationScreen() {
             keyboardShouldPersistTaps="handled"
           />
         )}
-        {showThinking && <ThinkingIndicator events={sdkEvents} />}
+        <ThinkingIndicator events={sdkEvents} visible={showThinking} />
         {isDispatchApi ? (
           <InputBar onSend={handleSend} />
         ) : (

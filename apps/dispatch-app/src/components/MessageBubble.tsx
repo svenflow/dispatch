@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Alert, Animated, Pressable, Share, StyleSheet, Text, View } from "react-native";
 import { Image } from "expo-image";
 import { useRouter } from "expo-router";
@@ -9,6 +9,7 @@ import type { DisplayMessage } from "../hooks/useMessages";
 import { branding } from "../config/branding";
 import { buildImageUrl } from "../api/images";
 import { relativeTime } from "../utils/time";
+import { PulsingDots } from "./PulsingDots";
 
 const URL_REGEX = /https?:\/\/[^\s<>\"'\])},]+/gi;
 
@@ -117,6 +118,20 @@ export function MessageBubble({ message, audioState, onRetry }: MessageBubblePro
   const isFailed = status === "failed";
   const router = useRouter();
 
+  // Animated opacity for pending → delivered transition
+  const opacityAnim = useRef(new Animated.Value(isPending ? 0.55 : 1)).current;
+  const prevPendingRef = useRef(isPending);
+
+  useEffect(() => {
+    if (prevPendingRef.current && !isPending && !sendFailed) {
+      // Smoothly animate from pending opacity to full
+      Animated.timing(opacityAnim, { toValue: 1, duration: 300, useNativeDriver: true }).start();
+    } else if (sendFailed) {
+      Animated.timing(opacityAnim, { toValue: 0.7, duration: 200, useNativeDriver: true }).start();
+    }
+    prevPendingRef.current = isPending;
+  }, [isPending, sendFailed, opacityAnim]);
+
   // Determine image source: optimistic local preview takes priority over server URL
   const imageSource = localImageUri
     ? { uri: localImageUri }
@@ -200,10 +215,11 @@ export function MessageBubble({ message, audioState, onRetry }: MessageBubblePro
   };
 
   return (
-    <View
+    <Animated.View
       style={[
         styles.wrapper,
         isUser ? styles.wrapperUser : styles.wrapperAssistant,
+        (isPending || sendFailed) ? { opacity: opacityAnim } : undefined,
       ]}
     >
       <View style={[styles.bubbleRow, isUser && styles.bubbleRowUser]}>
@@ -212,8 +228,6 @@ export function MessageBubble({ message, audioState, onRetry }: MessageBubblePro
           style={[
             styles.bubble,
             isUser ? styles.bubbleUser : styles.bubbleAssistant,
-            isPending && styles.bubblePending,
-            sendFailed && styles.bubbleFailed,
             isFailed && styles.bubbleGenerationFailed,
             isPlayingThis && styles.bubblePlaying,
           ]}
@@ -321,39 +335,13 @@ export function MessageBubble({ message, audioState, onRetry }: MessageBubblePro
           {relativeTime(timestamp)}
         </Text>
       )}
-    </View>
+    </Animated.View>
   );
 }
 
 /** Pulsing dots for "generating" state */
 function GeneratingDots() {
-  const dot1 = useRef(new Animated.Value(0.3)).current;
-  const dot2 = useRef(new Animated.Value(0.3)).current;
-  const dot3 = useRef(new Animated.Value(0.3)).current;
-
-  useEffect(() => {
-    const createPulse = (dot: Animated.Value, delay: number) =>
-      Animated.loop(
-        Animated.sequence([
-          Animated.delay(delay),
-          Animated.timing(dot, { toValue: 1, duration: 400, useNativeDriver: true }),
-          Animated.timing(dot, { toValue: 0.3, duration: 400, useNativeDriver: true }),
-        ]),
-      );
-    const a1 = createPulse(dot1, 0);
-    const a2 = createPulse(dot2, 200);
-    const a3 = createPulse(dot3, 400);
-    a1.start(); a2.start(); a3.start();
-    return () => { a1.stop(); a2.stop(); a3.stop(); };
-  }, [dot1, dot2, dot3]);
-
-  return (
-    <View style={{ flexDirection: "row", gap: 4 }}>
-      <Animated.View style={[iconStyles.genDot, { opacity: dot1 }]} />
-      <Animated.View style={[iconStyles.genDot, { opacity: dot2 }]} />
-      <Animated.View style={[iconStyles.genDot, { opacity: dot3 }]} />
-    </View>
-  );
+  return <PulsingDots color="#a78bfa" size={6} gap={4} />;
 }
 
 /** Play triangle icon drawn with RN Views */
@@ -439,12 +427,6 @@ const iconStyles = StyleSheet.create({
     height: 1.5,
     backgroundColor: "#71717a",
     borderRadius: 1,
-  },
-  genDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: "#a78bfa",
   },
 });
 
@@ -578,6 +560,8 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 18,
     overflow: "hidden",
+    borderWidth: 1,
+    borderColor: "transparent", // Prevents layout shift when bubblePlaying adds border
   },
   imageContainer: {
     marginHorizontal: -14,
@@ -597,12 +581,6 @@ const styles = StyleSheet.create({
     backgroundColor: "#27272a",
     borderBottomLeftRadius: 4,
     flexGrow: 1,
-  },
-  bubblePending: {
-    opacity: 0.55,
-  },
-  bubbleFailed: {
-    opacity: 0.7,
   },
   bubbleGenerationFailed: {
     borderLeftWidth: 2,

@@ -74,8 +74,8 @@ The app backend must be registered in `~/dispatch/assistant/backends.py`. For a 
     label="PANG_APP",
     session_suffix="-pang-app",
     registry_prefix="pang-app:",
-    send_cmd='~/.claude/skills/dispatch-app/scripts/reply-sven "{chat_id}"',
-    send_group_cmd='~/.claude/skills/dispatch-app/scripts/reply-sven "{chat_id}"',
+    send_cmd='~/.claude/skills/dispatch-app/scripts/reply-app "{chat_id}"',
+    send_group_cmd='~/.claude/skills/dispatch-app/scripts/reply-app "{chat_id}"',
     history_cmd="",
     supports_image_context=True,
 ),
@@ -240,11 +240,11 @@ Do NOT add instance-specific names to app code, component names, or file names.
 
 Location: `~/dispatch/state/dispatch-messages.db`
 
-### reply-sven CLI
+### reply-app CLI
 
-Location: `~/.claude/skills/dispatch-app/scripts/reply-sven`
+Location: `~/.claude/skills/dispatch-app/scripts/reply-app`
 
-Called by Claude to send responses. Stores message in SQLite, generates TTS audio on demand, and sends push notification.
+Called by Claude to send responses. Stores message in SQLite, generates TTS audio on demand, and sends push notification. (`reply-sven` exists as a backward-compat wrapper.)
 
 ### Sessions (Multi-Chat)
 
@@ -316,6 +316,51 @@ npx expo run:ios --device "Nikhil iPhone 16"
 ```
 
 **Key insight**: If pods are missing but node_modules has the package, the native build will succeed but metro will fail to resolve the module at JS bundle time. Old metro processes with stale caches make this worse — always kill them before rebuilding.
+
+### Native modules not available in the running binary (Expo Go crash)
+
+**Distinct from "Unable to resolve module"**: A native module can be in `node_modules` yet absent from the running app binary (e.g., when using Expo Go or after a JS-only update that didn't rebuild native code). A top-level `import` of such a module crashes the **entire module tree**, not just the file that imports it. This produces misleading errors like "missing default export" on screens that don't use the module at all.
+
+**The pattern: never top-level import optional native modules.**
+
+For modules used on user action (file pickers, media library, camera), use a guarded import:
+
+```typescript
+// Synchronous require guard — for modules used at component mount or on interaction
+let DocumentPicker: typeof import("expo-document-picker") | null = null;
+try {
+  DocumentPicker = require("expo-document-picker");
+} catch {
+  // Native module not available (e.g. Expo Go)
+}
+
+// Then guard usage:
+if (!DocumentPicker) {
+  Alert.alert("Not available", "This feature requires a native build.");
+  return;
+}
+const result = await DocumentPicker.getDocumentAsync({ ... });
+```
+
+```typescript
+// Async dynamic import guard — for modules used only in async callbacks (e.g. save image)
+try {
+  const MediaLibrary = await import("expo-media-library");
+  await MediaLibrary.saveToLibraryAsync(localUri);
+} catch {
+  // Fall back to share sheet or show alert
+  await Share.share({ url: localUri });
+}
+```
+
+**When to use which:**
+- Use synchronous `require()` in a `try/catch` at module scope when the feature is used at component mount or in event handlers that need a null check.
+- Use async dynamic `import()` in a `try/catch` inside an async callback when the module is only ever needed once the user performs a specific action (e.g., tapping "Save Image").
+
+**Do NOT do this** — a bare top-level import crashes the whole module tree:
+```typescript
+import * as DocumentPicker from "expo-document-picker"; // ✗ crashes Expo Go
+```
 
 ### Finding device names for `--device`
 
@@ -708,3 +753,56 @@ lsof -ti tcp:8081 -sTCP:LISTEN && echo "dev server running" || echo "NOT RUNNING
 ```
 
 This ensures the phone picks up changes via fast refresh automatically.
+
+---
+
+## OTA Updates (EAS Update)
+
+### Prerequisites
+
+**EAS CLI must be authenticated.** This is a recurring issue — EAS auth is NOT persisted across sessions.
+
+```bash
+# Check if logged in
+npx eas whoami
+
+# If "Not logged in", you need an EXPO_TOKEN
+export EXPO_TOKEN="your-token-here"
+```
+
+### Getting an EXPO_TOKEN
+
+1. Go to https://expo.dev → Account Settings → Access Tokens
+2. Create a "Robot" token (or personal token)
+3. Store it persistently:
+   ```bash
+   # Add to secrets.env so all sessions can use it
+   echo 'EXPO_TOKEN=your-token-here' >> ~/.claude/secrets.env
+   ```
+
+### Pushing an OTA Update
+
+```bash
+cd ~/dispatch/apps/dispatch-app
+
+# 1. Verify build passes first
+npx expo export --platform ios
+
+# 2. Push update
+EXPO_TOKEN=$(grep EXPO_TOKEN ~/.claude/secrets.env 2>/dev/null | cut -d= -f2) \
+  eas update --branch production --message "Description of changes"
+```
+
+### When EAS Isn't Available (Workaround)
+
+If no EXPO_TOKEN exists and the admin can't provide one, fall back to local device builds:
+
+```bash
+cd ~/dispatch/apps/dispatch-app
+npx expo run:ios --device "Nikhil iPhone 16"
+
+# For release builds:
+npx expo run:ios --device --configuration Release --no-bundler
+```
+
+**IMPORTANT**: Always tell the admin when EAS auth is missing so they can set up the token. Don't silently fall back without mentioning it.

@@ -1804,6 +1804,34 @@ class Manager:
             log.error(f"IMESSAGE_UI | tapback.scpt not found at {tapback_script}")
             return False
 
+        # GUID verification: Cmd+T always reacts to the most recent incoming
+        # message. If a new message arrived between queueing and execution, the
+        # tapback would land on the wrong message. Query chat.db to verify.
+        if guid:
+            try:
+                conn = sqlite3.connect(f"file:{MESSAGES_DB}?mode=ro", uri=True)
+                conn.execute("PRAGMA busy_timeout=2000")
+                row = conn.execute(
+                    """
+                    SELECT m.guid FROM message m
+                    JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
+                    JOIN chat c ON c.ROWID = cmj.chat_id
+                    WHERE c.chat_identifier = ?
+                      AND m.is_from_me = 0
+                    ORDER BY m.date DESC LIMIT 1
+                    """,
+                    (chat_id,),
+                ).fetchone()
+                conn.close()
+                if row and row[0] != guid:
+                    log.warning(
+                        f"IMESSAGE_UI | tapback GUID mismatch for {chat_id}: "
+                        f"target={guid} latest={row[0]}, skipping to avoid wrong-message reaction"
+                    )
+                    return False
+            except Exception as e:
+                log.warning(f"IMESSAGE_UI | GUID verification failed ({e}), proceeding anyway")
+
         if not self._navigate_to_chat(chat_id):
             return False
 
@@ -1892,8 +1920,10 @@ class Manager:
         Events are batched by chat_id to minimize chat switching — all actions
         for the same chat are executed together before moving to the next.
 
-        NOTE: No per-record try/except — let exceptions propagate so the
-        ConsumerRunner framework handles retry (max_retries=1) and DLQ.
+        NOTE: Per-action try/except catches and logs execution errors to
+        prevent a single failed action from aborting the remaining actions
+        in the batch. The ConsumerRunner framework handles record-level
+        retry (max_retries=1) and DLQ for unhandled exceptions.
         """
         now_ms = int(time.time() * 1000)
 
@@ -3153,13 +3183,20 @@ class Manager:
                     self.dispatch_api_daemon.kill()
                     self.dispatch_api_daemon = self._spawn_dispatch_api_daemon()
 
-            # Check Metro dev server health
+            # Check Metro dev server health (death + unresponsiveness, mirroring dispatch-api pattern)
             if self.metro_daemon is not None:
                 if self.metro_daemon.poll() is not None:
                     log.warning("Metro dev server died, restarting...")
                     lifecycle_log.info(f"METRO | DIED | restarting")
                     produce_event(self._producer, "system", "health.service_restarted",
                         service_restarted_payload("metro", "died"), source="health")
+                    self.metro_daemon = self._spawn_metro_daemon()
+                elif not self._check_metro_health():
+                    log.warning("Metro dev server not responding, restarting...")
+                    lifecycle_log.info(f"METRO | UNRESPONSIVE | restarting")
+                    produce_event(self._producer, "system", "health.service_restarted",
+                        service_restarted_payload("metro", "unresponsive"), source="health")
+                    self.metro_daemon.kill()
                     self.metro_daemon = self._spawn_metro_daemon()
 
             # Proactive FD monitoring via ResourceRegistry — calibrated leak detection

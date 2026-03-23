@@ -341,6 +341,32 @@ class SDKBackend:
         self.CIRCUIT_BREAKER_MAX_RESTARTS = 3  # max restarts allowed in window
         self.CIRCUIT_BREAKER_WINDOW_SECONDS = 1200  # 20-minute window (must exceed stuck detection's 10min)
 
+    def _clear_all_busy_flags(self) -> None:
+        """Clear all is_busy flags in session_states at startup.
+
+        On daemon startup, no sessions are active yet — any is_busy=1 is stale
+        from the previous process. Without clearing, the app shows a stuck
+        thinking bubble until the 10-minute staleness guard kicks in.
+        """
+        if not self._producer:
+            return
+        try:
+            import sqlite3
+            bus_db = Path.home() / "dispatch" / "state" / "bus.db"
+            if not bus_db.exists():
+                return
+            conn = sqlite3.connect(str(bus_db))
+            updated = conn.execute(
+                "UPDATE session_states SET is_busy = 0, updated_at = ? WHERE is_busy = 1",
+                (int(time.time() * 1000),),
+            ).rowcount
+            conn.commit()
+            conn.close()
+            if updated:
+                log.info(f"STARTUP | Cleared {updated} stale is_busy flags from session_states")
+        except Exception as e:
+            log.warning(f"STARTUP | Failed to clear stale is_busy flags: {e}")
+
     def _read_restart_initiator(self) -> str | None:
         """Read the restart initiator chat_id from the graceful restart marker.
 
@@ -368,6 +394,12 @@ class SDKBackend:
         Returns the number of sessions recreated.
         """
         recreated = 0
+
+        # Clear all stale is_busy flags from session_states.
+        # On startup, no sessions are running yet — any is_busy=1 is leftover
+        # from the previous daemon process (crashed or restarted).
+        # Without this, the app shows a stuck thinking bubble for up to 10 min.
+        self._clear_all_busy_flags()
 
         # Determine which session (if any) initiated this restart
         restart_initiator = self._read_restart_initiator()
@@ -1501,6 +1533,10 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
                 "turn_count": session.turn_count, "uptime_seconds": round(uptime, 1),
                 "error_count": session._error_count,
             }, source="daemon")
+            # Clear is_busy BEFORE stopping — session.stop() may not complete
+            # cleanly (e.g., subprocess hangs), leaving a stale thinking bubble.
+            if self._producer:
+                self._producer.set_session_busy(session._session_name, False)
             await session.stop()
 
         lifecycle_log.info(f"KILL | {chat_id} | killed={'yes' if session else 'no'}")
@@ -1932,7 +1968,7 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
 
                 async def _isolated_restart(cid: str):
                     try:
-                        await self.restart_session(cid)
+                        await self.restart_session(cid, clean=True)
                     except Exception as e:
                         log.error(f"Deep heal restart failed for {cid}: {e}")
 
@@ -2064,6 +2100,15 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
         for s in sessions:
             if s.session_id and s.chat_id:
                 self.registry.update_session_id(s.chat_id, s.session_id)
+
+        # Clear all is_busy flags before disconnecting — prevents stuck
+        # thinking bubbles if stop() doesn't complete cleanly.
+        if self._producer:
+            for s in sessions:
+                try:
+                    self._producer.set_session_busy(s._session_name, False)
+                except Exception:
+                    pass
 
         # Disconnect all
         for s in sessions:

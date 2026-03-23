@@ -110,6 +110,41 @@ export async function forkAgentToChat(
   );
 }
 
+/** Search bus records via FTS5. GET /api/search */
+export interface BusSearchResult {
+  topic: string;
+  key: string | null;
+  type: string | null;
+  source: string | null;
+  text: string;
+  timestamp: number;
+  age_seconds: number;
+  rank: number;
+}
+
+export async function searchBus(
+  query: string,
+  options?: {
+    type?: string;
+    source?: string;
+    key?: string;
+    since_hours?: number;
+    limit?: number;
+  },
+): Promise<BusSearchResult[]> {
+  const res = await apiRequest<{ results: BusSearchResult[] }>("/api/search", {
+    params: {
+      q: query,
+      type: options?.type,
+      source: options?.source,
+      key: options?.key,
+      since_hours: options?.since_hours,
+      limit: options?.limit,
+    },
+  });
+  return res.results;
+}
+
 /** Delete an agent session. DELETE /api/agents/sessions/:sessionId */
 export async function deleteAgentSession(
   sessionId: string,

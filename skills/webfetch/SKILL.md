@@ -23,12 +23,38 @@ Need to scrape a website?
 │    (tier 2)            │
 └────────────────────────┘
          │
+         ▼ (output nearly empty? just "*Source: domain*" with no body?)
+┌──────────────────────────────┐
+│ 3. Use chrome fetch          │  ← JS-rendered page
+│    chrome fetch <url>        │     (Shopify, React/Next.js SPA)
+└──────────────────────────────┘
+         │
          ▼ (need login / still blocked?)
 ┌────────────────────────┐
-│ 3. Use chrome-control  │  ← Uses real Chrome with your session
+│ 4. Use chrome-control  │  ← Uses real Chrome with your session
 │    chrome fetch <url>  │     See /chrome-control skill
 └────────────────────────┘
 ```
+
+## Silent Failure: Empty Output on JS-Rendered Pages
+
+**IMPORTANT:** webfetch can exit with code 0 (success) but return nearly empty markdown — just `"*Source: domain*"` with no body content. This happens with JavaScript-rendered pages (Shopify stores, React/Next.js SPAs, Vue apps) where content is injected by JavaScript after page load. The HTML fetched is valid but has no pre-rendered text.
+
+**How to detect it:** If webfetch output is only 1-2 lines or contains just the source header with no real text, the page requires JS rendering.
+
+**Fix immediately — use `chrome fetch`:**
+```bash
+~/.claude/skills/chrome-control/scripts/chrome fetch "https://example.com"
+```
+
+`chrome fetch` uses your real Chrome browser which fully executes JavaScript, so product data, prices, descriptions, and other dynamic content are all present.
+
+**Known JS-rendered site patterns:**
+- Shopify stores (shop.hak5.org, any `myshopify.com` or custom Shopify domain)
+- Next.js / React SPA product and listing pages
+- Any site where webfetch returns under ~100 chars of actual content after the source header
+
+Do NOT use `chrome open` + `sleep` + `chrome text` + `chrome close` — just use `chrome fetch <url>` directly.
 
 ## Quick Start
 
@@ -79,9 +105,9 @@ print(page.html_content)
 ```
 
 ### Fallback: Chrome Extension
-**Best for:** Sites requiring login, when scrapling fails
+**Best for:** JS-rendered pages (Shopify/SPA), sites requiring login, when scrapling fails
 
-If tiers 1-2 fail (login required, extreme anti-bot), use the Chrome extension which controls your actual browser with your logged-in session:
+If tiers 1-2 fail or return empty output, use the Chrome extension which controls your actual browser:
 
 ```bash
 ~/.claude/skills/chrome-control/scripts/chrome fetch "https://example.com"
@@ -102,6 +128,8 @@ Use chrome-control for screenshots:
 |----------|---------------------|
 | Public website, no login | Tier 1 (scrapling HTTP) |
 | Cloudflare protection | Tier 2 (scrapling Stealthy) |
+| webfetch returns empty/minimal output | chrome fetch (JS-rendered page) |
+| Shopify / React SPA / Next.js store | chrome fetch directly (skip webfetch) |
 | Need logged-in content | Chrome extension |
 | Need to click/interact | Chrome extension |
 | Need screenshot | Chrome extension |
@@ -118,6 +146,7 @@ Use chrome-control for screenshots:
 | Twitter/X | ❌ | ❌ | ✅ | Requires login |
 | Instagram | ❌ | ❌ | ✅ | Requires login |
 | Gmail | ❌ | ❌ | ✅ | Requires login |
+| Shopify stores (e.g. shop.hak5.org) | ❌ empty | ❌ empty | ✅ | JS-rendered, use chrome fetch |
 
 ## Performance Comparison
 

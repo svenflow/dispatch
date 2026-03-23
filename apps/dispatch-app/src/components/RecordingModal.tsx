@@ -67,16 +67,29 @@ export function RecordingModal({
   // Slide animation
   // -------------------------------------------------------------------------
 
+  const [showModal, setShowModal] = useState(false);
+
   useEffect(() => {
     if (visible) {
-      Animated.spring(slideAnim, {
-        toValue: 0,
+      setShowModal(true);
+      // Small delay to ensure modal is mounted before animating
+      requestAnimationFrame(() => {
+        Animated.spring(slideAnim, {
+          toValue: 0,
+          useNativeDriver: true,
+          tension: 65,
+          friction: 11,
+        }).start();
+      });
+    } else if (showModal) {
+      // Animate out, then hide modal
+      Animated.timing(slideAnim, {
+        toValue: 300,
+        duration: 250,
         useNativeDriver: true,
-        tension: 65,
-        friction: 11,
-      }).start();
-    } else {
-      slideAnim.setValue(300);
+      }).start(() => {
+        setShowModal(false);
+      });
     }
   }, [visible, slideAnim]);
 
@@ -186,7 +199,7 @@ export function RecordingModal({
 
   return (
     <Modal
-      visible={visible}
+      visible={showModal}
       transparent
       animationType="none"
       onRequestClose={handleCancel}

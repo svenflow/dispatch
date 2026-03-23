@@ -1,6 +1,7 @@
 import React, { useCallback, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Animated,
   FlatList,
   Pressable,
   StyleSheet,
@@ -11,33 +12,12 @@ import { useRouter } from "expo-router";
 import { useFocusEffect } from "@react-navigation/native";
 import Swipeable from "react-native-gesture-handler/Swipeable";
 import * as Haptics from "expo-haptics";
-import { useChatList, getChatOptimisticState } from "@/src/hooks/useChatList";
+import { useChatList, isCurrentlyUnread } from "@/src/hooks/useChatList";
 import { ChatRow } from "@/src/components/ChatRow";
 import { EmptyState } from "@/src/components/EmptyState";
 import { branding } from "@/src/config/branding";
 import { showDestructiveConfirm } from "@/src/utils/alert";
 import type { Conversation } from "@/src/api/types";
-
-/** Check if a chat is currently unread (server data + optimistic) */
-function isCurrentlyUnread(conversation: Conversation): boolean {
-  const opt = getChatOptimisticState(conversation.id);
-  if (opt === "read") return false;
-  if (opt === "unread") return true;
-  if (conversation.marked_unread) return true;
-  if (
-    conversation.last_message_role === "assistant" &&
-    conversation.last_message_at
-  ) {
-    if (conversation.last_opened_at) {
-      return (
-        new Date(conversation.last_message_at) >
-        new Date(conversation.last_opened_at)
-      );
-    }
-    return true;
-  }
-  return false;
-}
 
 export default function ChatListScreen() {
   const router = useRouter();
@@ -132,15 +112,19 @@ export default function ChatListScreen() {
     [handleDeleteChat],
   );
 
+  // Stable ref map for Swipeable instances — avoids creating refs on every render
+  const swipeableRefs = useRef(new Map<string, Swipeable | null>()).current;
+
   const renderItem = useCallback(
     ({ item }: { item: Conversation }) => {
-      const optState = getChatOptimisticState(item.id);
       const unread = isCurrentlyUnread(item);
-      const swipeableRef = React.createRef<Swipeable>();
 
       return (
         <Swipeable
-          ref={swipeableRef}
+          ref={(ref) => {
+            if (ref) swipeableRefs.set(item.id, ref);
+            else swipeableRefs.delete(item.id);
+          }}
           onSwipeableWillOpen={() => {
             swipeActiveRef.current = true;
           }}
@@ -162,7 +146,7 @@ export default function ChatListScreen() {
             ? {
                 renderLeftActions: () => (
                   <Pressable
-                    onPress={() => handleMarkUnread(item, swipeableRef.current)}
+                    onPress={() => handleMarkUnread(item, swipeableRefs.get(item.id) ?? null)}
                     style={styles.unreadAction}
                     accessibilityLabel="Mark as unread"
                     accessibilityRole="button"
@@ -181,12 +165,12 @@ export default function ChatListScreen() {
             conversation={item}
             onPress={() => handleOpenChat(item)}
             onLongPress={() => handleDeleteChat(item)}
-            readOverride={optState}
+            isUnread={unread}
           />
         </Swipeable>
       );
     },
-    [handleOpenChat, handleDeleteChat, handleMarkUnread, renderRightActions],
+    [handleOpenChat, handleDeleteChat, handleMarkUnread, renderRightActions, swipeableRefs],
   );
 
   if (isLoading) {
@@ -220,17 +204,35 @@ export default function ChatListScreen() {
           />
         }
       />
-      <Pressable
-        onPress={handleNewChat}
-        style={({ pressed }) => [
+      <AnimatedFab onPress={handleNewChat} />
+    </View>
+  );
+}
+
+/** FAB with native-driver animated press scale */
+function AnimatedFab({ onPress }: { onPress: () => void }) {
+  const scale = useRef(new Animated.Value(1)).current;
+  return (
+    <Pressable
+      onPress={onPress}
+      onPressIn={() =>
+        Animated.timing(scale, { toValue: 0.9, duration: 100, useNativeDriver: true }).start()
+      }
+      onPressOut={() =>
+        Animated.timing(scale, { toValue: 1, duration: 150, useNativeDriver: true }).start()
+      }
+      accessibilityLabel="New chat"
+      accessibilityRole="button"
+    >
+      <Animated.View
+        style={[
           styles.fab,
-          { backgroundColor: branding.accentColor },
-          pressed && styles.fabPressed,
+          { backgroundColor: branding.accentColor, transform: [{ scale }] },
         ]}
       >
         <Text style={styles.fabText}>+</Text>
-      </Pressable>
-    </View>
+      </Animated.View>
+    </Pressable>
   );
 }
 
@@ -271,9 +273,6 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 4,
     elevation: 6,
-  },
-  fabPressed: {
-    opacity: 0.8,
   },
   fabText: {
     color: "#fff",

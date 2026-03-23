@@ -1,6 +1,7 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   Alert,
+  Animated,
   AppState,
   Image,
   Platform,
@@ -23,10 +24,11 @@ import * as Clipboard from "expo-clipboard";
 import * as FileSystem from "expo-file-system/legacy";
 import { SymbolView } from "expo-symbols";
 import { branding } from "../config/branding";
+import { makeLayoutAnim, safeConfigureNext } from "../utils/animation";
 import { impactLight } from "../utils/haptics";
 import { useSpeechRecognition } from "../hooks/useSpeechRecognition";
-import { useVoiceMode } from "../hooks/useVoiceMode";
 import { VoiceStrip } from "./VoiceStrip";
+import type { VoiceConversationReturn } from "../hooks/useVoiceConversation";
 import { SessionPicker } from "./SessionPicker";
 import { SkillPicker } from "./SkillPicker";
 import type { AgentSession } from "../api/types";
@@ -40,22 +42,32 @@ interface InputBarProps {
   onSendWithImage?: (text: string, imageUri: string) => void;
   disabled?: boolean;
   chatId?: string;
+  voiceConversation?: VoiceConversationReturn;
+  /** Ref that parent sets to a function that clears the text input (used by voice mode). */
+  clearTextRef?: React.MutableRefObject<(() => void) | null>;
 }
 
-export function InputBar({ onSend, onSendWithImage, disabled, chatId }: InputBarProps) {
+export function InputBar({ onSend, onSendWithImage, disabled, chatId, voiceConversation, clearTextRef }: InputBarProps) {
   const [text, setText] = useState("");
   const [selectedAttachment, setSelectedAttachment] = useState<string | null>(null);
   const [activePanel, setActivePanel] = useState<ActivePanel>("none");
   const speech = useSpeechRecognition();
   const insets = useSafeAreaInsets();
 
-  // Voice mode (long-press mic to activate)
-  const voiceMode = useVoiceMode({ onSend });
+  // Wire up clearTextRef so parent (voice mode) can clear the input
+  useEffect(() => {
+    if (clearTextRef) {
+      clearTextRef.current = () => setText("");
+    }
+    return () => {
+      if (clearTextRef) clearTextRef.current = null;
+    };
+  }, [clearTextRef]);
 
   const handleMicLongPress = useCallback(() => {
     if (text.trim()) return; // Ignore long-press when text is present — send text first
-    voiceMode.activate();
-  }, [voiceMode, text]);
+    voiceConversation?.activate();
+  }, [voiceConversation, text]);
 
   // Track text that was in the field before dictation started
   const [preDictationText, setPreDictationText] = useState("");
@@ -103,21 +115,46 @@ export function InputBar({ onSend, onSendWithImage, disabled, chatId }: InputBar
     }
   }, []);
 
-  const canSend = (text.trim().length > 0 || selectedAttachment) && !disabled;
+  const canSend = !!(text.trim().length > 0 || selectedAttachment) && !disabled;
   const showMic = !text.trim() && !selectedAttachment && speech.isAvailable && !disabled && !speech.isListening;
+
+  // Send button pop-in animation
+  const sendButtonScale = useRef(new Animated.Value(0)).current;
+  const prevCanSend = useRef(false);
+
+  useEffect(() => {
+    if (canSend && !prevCanSend.current) {
+      // Pop in
+      sendButtonScale.setValue(0);
+      Animated.spring(sendButtonScale, {
+        toValue: 1,
+        tension: 200,
+        friction: 12,
+        useNativeDriver: true,
+      }).start();
+    } else if (!canSend && prevCanSend.current) {
+      // Shrink out
+      Animated.timing(sendButtonScale, {
+        toValue: 0,
+        duration: 150,
+        useNativeDriver: true,
+      }).start();
+    }
+    prevCanSend.current = canSend;
+  }, [canSend, sendButtonScale]);
 
   // Sync speech transcript into the text field (skip when voice mode is active —
   // the global STT singleton fires events to both hooks, and useSpeechCapture's
   // activeRef guard handles its side; we suppress the old hook's side here)
   useEffect(() => {
-    if (voiceMode.isActive) return;
+    if (voiceConversation?.isActive) return;
     if (!speech.isListening && !speech.transcript && !speech.partialTranscript) return;
     const liveText = speech.partialTranscript || speech.transcript;
     if (liveText) {
       const prefix = preDictationText ? preDictationText + " " : "";
       setText(prefix + liveText);
     }
-  }, [speech.transcript, speech.partialTranscript, speech.isListening, preDictationText, voiceMode.isActive]);
+  }, [speech.transcript, speech.partialTranscript, speech.isListening, preDictationText, voiceConversation?.isActive]);
 
   const handleSend = useCallback(() => {
     if (!canSend) return;
@@ -205,6 +242,7 @@ export function InputBar({ onSend, onSendWithImage, disabled, chatId }: InputBar
 
   const handleAttachPress = useCallback(() => {
     impactLight();
+    safeConfigureNext(makeLayoutAnim(200));
     setActivePanel((prev) => (prev === "attach" ? "none" : "attach"));
   }, []);
 
@@ -251,6 +289,16 @@ export function InputBar({ onSend, onSendWithImage, disabled, chatId }: InputBar
     onSend(PLAN_BUILD_TEST_PROMPT);
   }, [onSend]);
 
+  const handleNudge = useCallback(() => {
+    setActivePanel("none");
+    onSend("Keep going!");
+  }, [onSend]);
+
+  const handleBugFinder = useCallback(() => {
+    setActivePanel("none");
+    onSend("Use /bug-finder — run in a subagent to find bugs with the above.");
+  }, [onSend]);
+
   const handleRemoveAttachment = useCallback(() => {
     setSelectedAttachment(null);
   }, []);
@@ -272,14 +320,20 @@ export function InputBar({ onSend, onSendWithImage, disabled, chatId }: InputBar
       ) : null}
 
       {activePanel === "attach" && onSendWithImage ? (
-        <View style={attachStyles.row} accessibilityRole="toolbar" accessibilityLabel="Attachment options">
-          <AttachOption icon="camera.fill" label="Camera" onPress={() => handleAttachOption(handleTakePicture)} />
-          <AttachOption icon="photo.fill" label="Gallery" onPress={() => handleAttachOption(handlePickFromGallery)} />
-          <AttachOption icon="folder.fill" label="Files" onPress={() => handleAttachOption(handlePickFromFiles)} />
-          <AttachOption icon="bubble.left.and.bubble.right.fill" label="Sessions" iconSize={18} onPress={handleOpenSessionPicker} />
-          <AttachOption icon="wrench.and.screwdriver.fill" label="Skills" iconColor="#38bdf8" onPress={handleOpenSkillPicker} />
-          <AttachOption icon="checkmark.seal.fill" label="Review" iconColor="#a78bfa" onPress={handleReview} />
-          <AttachOption icon="hammer.fill" label="Build" iconColor="#f59e0b" onPress={handlePlanBuildTest} />
+        <View accessibilityRole="toolbar" accessibilityLabel="Attachment options">
+          <View style={attachStyles.row}>
+            <AttachOption icon="camera.fill" label="Camera" onPress={() => handleAttachOption(handleTakePicture)} />
+            <AttachOption icon="photo.fill" label="Gallery" onPress={() => handleAttachOption(handlePickFromGallery)} />
+            <AttachOption icon="folder.fill" label="Files" onPress={() => handleAttachOption(handlePickFromFiles)} />
+            <AttachOption icon="bubble.left.and.bubble.right.fill" label="Sessions" iconSize={18} onPress={handleOpenSessionPicker} />
+            <AttachOption icon="wrench.and.screwdriver.fill" label="Skills" iconColor="#38bdf8" onPress={handleOpenSkillPicker} />
+          </View>
+          <View style={[attachStyles.row, { borderTopWidth: 0, paddingTop: 0 }]}>
+            <AttachOption icon="checkmark.seal.fill" label="Review" iconColor="#a78bfa" onPress={handleReview} />
+            <AttachOption icon="hammer.fill" label="Build" iconColor="#f59e0b" onPress={handlePlanBuildTest} />
+            <AttachOption icon="ant.fill" label="Debug" iconColor="#ef4444" onPress={handleBugFinder} />
+            <AttachOption icon="arrow.right.circle.fill" label="Nudge" iconColor="#34d399" onPress={handleNudge} />
+          </View>
         </View>
       ) : null}
 
@@ -320,14 +374,16 @@ export function InputBar({ onSend, onSendWithImage, disabled, chatId }: InputBar
       ) : null}
 
       <View style={[styles.container, { paddingBottom: Math.max(insets.bottom, 12) }]}>
-        {voiceMode.isActive ? (
+        {voiceConversation?.isActive ? (
           <VoiceStrip
-            voiceState={voiceMode.voiceState}
-            sttPartial={voiceMode.sttPartial}
-            errorMessage={voiceMode.errorMessage}
-            onSpeak={voiceMode.startListening}
-            onSend={voiceMode.sendNow}
-            onStop={voiceMode.deactivate}
+            voiceState={voiceConversation.voiceState}
+            sttPartial={voiceConversation.sttPartial}
+            errorMessage={voiceConversation.errorMessage}
+            onSpeak={voiceConversation.startListening}
+            onSend={voiceConversation.sendNow}
+            onStop={voiceConversation.deactivate}
+            onInterrupt={voiceConversation.interrupt}
+            onRetry={voiceConversation.retry}
           />
         ) : (
           <View style={styles.inputRow}>
@@ -388,24 +444,26 @@ export function InputBar({ onSend, onSendWithImage, disabled, chatId }: InputBar
                 <View style={styles.stopSquare} />
               </Pressable>
             ) : canSend ? (
-              <Pressable
-                onPress={handleSend}
-                style={({ pressed }) => [
-                  styles.actionButton,
-                  styles.sendButton,
-                  pressed && styles.buttonPressed,
-                ]}
-                hitSlop={8}
-                accessibilityRole="button"
-                accessibilityLabel="Send message"
-              >
-                <SymbolView
-                  name="arrow.up"
-                  tintColor="#ffffff"
-                  size={18}
-                  weight="bold"
-                />
-              </Pressable>
+              <Animated.View style={{ transform: [{ scale: sendButtonScale }] }}>
+                <Pressable
+                  onPress={handleSend}
+                  style={({ pressed }) => [
+                    styles.actionButton,
+                    styles.sendButton,
+                    pressed && styles.buttonPressed,
+                  ]}
+                  hitSlop={8}
+                  accessibilityRole="button"
+                  accessibilityLabel="Send message"
+                >
+                  <SymbolView
+                    name="arrow.up"
+                    tintColor="#ffffff"
+                    size={18}
+                    weight="bold"
+                  />
+                </Pressable>
+              </Animated.View>
             ) : showMic ? (
               <Pressable
                 onPress={handleMicPress}
@@ -524,6 +582,7 @@ const styles = StyleSheet.create({
   },
   buttonPressed: {
     opacity: 0.7,
+    transform: [{ scale: 0.92 }],
   },
   pasteBar: {
     backgroundColor: "#1c1c1e",
