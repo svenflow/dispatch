@@ -12,7 +12,7 @@ Dispatch runs a daemon that:
 - **Gives Claude full computer control**: browser automation, file management, smart home, messaging
 - **Maintains persistent memory** across conversations with full-text search
 - **Auto-recovers from crashes** via multi-tier health monitoring and watchdog daemon
-- **Records all events** to a Kafka-on-SQLite bus for audit trails and analytics
+- **Records all events** to a Kafka-on-SQLite bus with 9 topics, 8+ consumer groups, FTS5 search, and tiered retention
 
 Each contact gets their own persistent Claude session with conversation history, memories, and tier-appropriate tool access.
 
@@ -28,33 +28,30 @@ Each contact gets their own persistent Claude session with conversation history,
                                 ▼
                     ┌───────────────────────┐
                     │    Manager Daemon     │
-                    │   (event loop)        │
-                    └──────────┬────────────┘
-                               ▼
-                    ┌───────────────────────┐
-                    │   Contact Lookup      │
-                    │   + Tier Check        │
+                    │   (async event loop)  │
                     └──────────┬────────────┘
                                │
                 ┌──────────────┼──────────────┐
                 ▼              ▼              ▼
-     ┌──────────────┐  ┌────────────┐  ┌───────────┐
-     │  SDK Backend  │  │ Event Bus  │  │  Perf     │
-     │  (sessions)   │  │ (audit)    │  │  Metrics  │
-     └──────┬───────┘  └────────────┘  └───────────┘
-            ▼                │
- ┌────────────────────┐      │  Kafka-on-SQLite
- │ Per-Contact SDK    │      │  (bus.db)
- │ Sessions (Opus)    │      │  - records table (7d)
- │ async queues,      │      │  - sdk_events table (3d)
- │ mid-turn injection │      │  - write queue + bg thread
- └────────┬───────────┘      │
-          ▼                  │
- ┌────────────────────┐      │
- │ Tools & Skills     │──────┘ (future: analytics,
- │ Browser, Home,     │        alerting consumers)
- │ Memory, Messaging  │
- └────────────────────┘
+     ┌──────────────┐  ┌─────────────────────────────────┐
+     │  SDK Backend  │  │  Event Bus (Kafka-on-SQLite)    │
+     │  (sessions)   │  │  bus.db · WAL mode · FTS5       │
+     └──────┬───────┘  │                                  │
+            ▼          │  produce() ──→ write queue ──→   │
+ ┌────────────────┐    │  background thread batches to    │
+ │ Per-Contact    │    │  partitioned topic logs          │
+ │ SDK Sessions   │    │                                  │
+ │ (Opus)         │───→│  9 topics · 8+ consumer groups   │
+ │ async queues,  │    │  7-day hot → infinite archive    │
+ │ mid-turn       │    └──────────────┬──────────────────┘
+ │ injection      │                   │
+ └──────┬─────────┘          ┌────────┼─────────┐
+        ▼                    ▼        ▼         ▼
+ ┌────────────────┐    ┌────────┐ ┌──────┐ ┌────────┐
+ │ Tools & Skills │    │message-│ │audit-│ │task-   │
+ │ Browser, Home, │    │router  │ │*     │ │runner  │
+ │ Memory, Msg    │    └────────┘ └──────┘ └────────┘
+ └────────────────┘
 ```
 
 ## Features
@@ -101,12 +98,32 @@ Skills are modular capabilities in `~/.claude/skills/`. Each has:
 - And many more...
 
 ### Event Bus (Kafka-on-SQLite)
-- **Audit trail**: All message, session, and system events recorded to SQLite
-- **Fire-and-forget writes**: In-memory write queue (~microsecond enqueue), background thread batches commits
-- **Multi-consumer fanout**: Independent consumer groups with committed offsets (future: analytics, alerting)
-- **SDK event tracking**: Tool calls, durations, errors in auxiliary `sdk_events` table
-- **Bus CLI**: `stats`, `tail`, `export` commands for inspection
-- **Fully integrated**: `produce_event()` wired throughout manager.py and sdk_backend.py — all events flow through the bus
+
+Every message, session event, health check, and tool call flows through a SQLite-based event bus modeled after Kafka's log architecture.
+
+**Core design:**
+- **Fire-and-forget writes**: In-memory write queue (~microsecond enqueue), background thread batches up to 100 records per transaction
+- **WAL mode**: Concurrent reads during writes, no event loop blocking
+- **Partitioned topics**: 9 topics (`messages`, `system`, `sessions`, `tasks`, `messages.dlq`, `facts`, `reminders`, `imessage.ui`, plus `sdk_events`) with configurable partition counts
+- **Consumer groups**: 8+ active groups (message-router, audit-\*, task-runner, compaction-handler, etc.) with committed offsets, generation tracking, and at-least-once delivery
+- **Two storage tiers**: Hot tables with 7-day retention auto-prune to archive tables with infinite retention
+- **FTS5 full-text search**: BM25-ranked search across all events with smart text extraction per event type
+- **SDK event tracking**: Every tool call from every Claude session traced with duration, error status, and session context
+
+**Schema:**
+- `records` — Business events with composite PK `(topic, partition, offset)`, WITHOUT ROWID
+- `sdk_events` — Tool execution traces with structured columns
+- `records_archive` / `sdk_events_archive` — Pruned records retained indefinitely
+- `records_fts` / `sdk_events_fts` — FTS5 virtual tables with auto-sync triggers
+
+**Bus CLI:**
+```bash
+uv run python -m bus.cli stats          # Event counts, throughput, consumer lag
+uv run python -m bus.cli tail           # Live tail of events
+uv run python -m bus.cli search "query" # Full-text search across all records
+uv run python -m bus.cli groups         # Consumer group status and lag
+uv run python -m bus.cli export         # Export events as JSONL
+```
 
 ### Resource Lifecycle
 - **ResourceRegistry**: Centralized tracking of all persistent FDs, connections, and subprocesses via `AsyncExitStack`
@@ -210,9 +227,10 @@ hue:
 │   ├── cli.py           # Command-line interface
 │   └── config.py        # Configuration loader
 ├── bus/                 # Kafka-on-SQLite message bus
-│   ├── bus.py           # Core: Producer (write queue), Consumer groups
-│   ├── cli.py           # Bus CLI (stats, tail, export)
-│   └── consumers.py     # Consumer framework with declarative configs
+│   ├── bus.py           # Core: Producer (write queue), Consumer groups, FTS5
+│   ├── cli.py           # Bus CLI (stats, tail, search, groups, export)
+│   ├── consumers.py     # Consumer framework with declarative configs
+│   └── search.py        # FTS5 full-text search (BM25, smart text extraction)
 ├── bin/                 # Executable scripts
 │   ├── claude-assistant # Main CLI
 │   ├── watchdog         # Auto-recovery daemon
@@ -256,9 +274,9 @@ uv run ruff check assistant/
 - `tests/test_health_checks.py` - Health monitoring, idle reaping
 - `tests/test_message_routing.py` - Message normalization, file handling
 - `tests/test_performance.py` - Concurrency, throughput, leaks
-- `tests/test_bus.py` - Bus core: producer, consumer, write queue, retention, sdk_events
+- `tests/test_bus.py` - Bus core: producer, consumer, write queue, retention, FTS5, archive
 - `tests/test_bus_helpers.py` - Event production, sanitize/reconstruct, taxonomy
-- `tests/test_consumers.py` - Consumer groups, offsets, commit, fanout
+- `tests/test_consumers.py` - Consumer groups, offsets, commit, fanout, batching
 - `tests/unit/` - Pure function tests
 - `tests/integration/` - Integration tests with fake chatdb
 
@@ -269,8 +287,8 @@ uv run ruff check assistant/
 3. **Mid-turn steering**: New messages injected between tool calls via async queue
 4. **Two-tier health**: Fast regex + slow LLM analysis balances speed vs accuracy
 5. **Skills as modules**: Shared, version-controlled, injected via symlink
-6. **Kafka-on-SQLite event bus**: Fire-and-forget audit trail with write queue (no event loop blocking), multi-consumer fanout for future analytics/alerting
-7. **Tiered event storage**: Business events in main `records` table (7-day retention), SDK traces in `sdk_events` table (3-day retention)
+6. **Kafka-on-SQLite event bus**: Fire-and-forget audit trail with write queue (no event loop blocking), 8+ consumer groups for routing, auditing, and task execution
+7. **Tiered event storage**: Business events in `records` table (7-day hot → infinite archive), SDK traces in `sdk_events` table (7-day hot → infinite archive), both with FTS5 full-text search
 8. **Centralized resource lifecycle**: All FDs, connections, and subprocesses tracked via `ResourceRegistry` (AsyncExitStack wrapper) for structural cleanup and FD leak detection
 
 ## Metrics & Limits
@@ -284,6 +302,10 @@ uv run ruff check assistant/
 | Watchdog cycle | 60 seconds |
 | Max consecutive failures | 5 |
 | Session log size | 10MB (5 backups) |
+| Bus write batch size | 100 records |
+| Bus hot retention | 7 days (auto-prune to archive) |
+| Bus archive retention | Infinite |
+| Bus prune interval | Every 1000 produces |
 
 ## Documentation
 
