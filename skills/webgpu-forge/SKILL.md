@@ -36,6 +36,17 @@ Given a model file (ONNX, GGUF, or TFLite), this skill guides you through genera
 
 The output is NOT a generic runtime. Every generated file is model-specific, readable, and modifiable. The shaders are hand-written WGSL — not auto-generated from a graph compiler. Claude writes each shader understanding the exact tensor shapes, strides, and data flow for this specific model.
 
+
+## Core Priorities
+
+**In order of importance:**
+
+1. **Accuracy to reference** — The WebGPU port must produce numerically identical (or near-identical, <1% deviation) output compared to the original model's reference runtime. Every design decision — shader precision, coordinate math, normalization order, NMS variant — is driven by matching the reference. If accuracy and performance conflict, accuracy wins.
+
+2. **Performance** — Once accuracy is validated, optimize aggressively: fuse dispatches, batch GPU submissions, minimize readbacks, tile matmuls, use f16 compute where the reference does. Target real-time on iPhone (the hardest constraint). Desktop performance follows naturally.
+
+3. **Everything else** — Bundle size, code readability, API ergonomics, documentation. These matter but never at the cost of #1 or #2.
+
 ## When to Use
 
 - User wants to run an ML model in the browser via WebGPU
