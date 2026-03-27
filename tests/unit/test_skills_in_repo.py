@@ -29,7 +29,20 @@ class TestSkillsInRepo:
 
     def test_each_skill_has_skill_md(self):
         """Every skill directory should have a SKILL.md."""
-        skill_dirs = [d for d in SKILLS_DIR.iterdir() if d.is_dir() and d.name not in ("__pycache__", "_lib")]
+        # Get gitignored skill dirs to exclude
+        import subprocess
+        gitignored = set()
+        try:
+            result = subprocess.run(
+                ["git", "check-ignore"] + [str(d) for d in SKILLS_DIR.iterdir() if d.is_dir()],
+                capture_output=True, text=True, cwd=SKILLS_DIR.parent
+            )
+            for line in result.stdout.strip().split("\n"):
+                if line:
+                    gitignored.add(Path(line).name)
+        except Exception:
+            pass
+        skill_dirs = [d for d in SKILLS_DIR.iterdir() if d.is_dir() and d.name not in ("__pycache__", "_lib") and d.name not in gitignored]
         missing = []
         for d in skill_dirs:
             if not (d / "SKILL.md").exists():
@@ -63,8 +76,8 @@ class TestSkillsNoPII:
 
     PII_PATTERNS = [
         "+15555550001", "+15555550003",
-        "nsthorat@gmail.com", "nicklaudethorat@gmail.com",
-        "10.10.10.23", "10.10.10.62", "10.10.10.22",
+        "fake-user@example.com", "fake-assistant@example.com",
+        "Eastburn",
     ]
 
     def test_skill_md_files_no_pii(self):

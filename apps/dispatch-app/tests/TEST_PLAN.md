@@ -131,13 +131,13 @@ A Playwright route handler intercepts all API requests and returns canned respon
 - `POST /chats/:id/open` - Returns `{ status: "ok" }`
 - `DELETE /messages` - Returns `{ status: "ok", message: "cleared" }`
 - `POST /restart-session` - Returns `{ status: "ok", message: "restarted" }`
-- `GET /api/agents/sessions` - Returns mock sessions (various tiers, sources, statuses)
-- `POST /api/agents/sessions` - Returns new session
-- `PATCH /api/agents/sessions/:id` - Returns renamed session
-- `DELETE /api/agents/sessions/:id` - Returns `{ ok: true }`
-- `GET /api/agents/messages` - Returns mock agent messages
-- `POST /api/agents/messages` - Returns `{ ok: true }`
-- `GET /api/agents/sdk-events` - Returns mock SDK events (tool_use, tool_result, error)
+- `GET /api/app/sessions` - Returns mock sessions (various tiers, sources, statuses)
+- `POST /api/app/sessions` - Returns new session
+- `PATCH /api/app/sessions/:id` - Returns renamed session
+- `DELETE /api/app/sessions/:id` - Returns `{ ok: true }`
+- `GET /api/app/messages` - Returns mock agent messages
+- `POST /api/app/messages` - Returns `{ ok: true }`
+- `GET /api/app/sdk-events` - Returns mock SDK events (tool_use, tool_result, error)
 - `GET /api/dashboard/logs` - Returns mock log lines
 - `GET /health` - Returns `{ status: "ok" }`
 - `GET /audio/*` - Returns a minimal WAV file (44 bytes)

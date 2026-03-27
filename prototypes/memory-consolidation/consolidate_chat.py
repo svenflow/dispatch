@@ -46,9 +46,8 @@ STALE_DAYS = 14  # Prune items not mentioned in 14+ days
 # ============================================================
 # CRITICAL: PROPOSAL LEAK PROTECTION
 # ============================================================
-# Hardcoded protection against leaking Nikhil's proposal to Caroline.
-# This is a safety net - exclusions.txt should catch these too, but
-# this hardcoded check ensures nothing slips through.
+# Protection against leaking proposal info to the partner.
+# Partner name is read from config.local.yaml at startup.
 
 PROPOSAL_LEAK_PATTERNS = [
     "proposal", "propose", "engagement", "ring", "marry",
@@ -56,15 +55,32 @@ PROPOSAL_LEAK_PATTERNS = [
     "surprise", "secret", "don't tell", "top secret",
 ]
 
+def _load_partner_name() -> str:
+    """Load partner name from config.local.yaml."""
+    try:
+        import yaml
+        config_path = Path.home() / "dispatch" / "config.local.yaml"
+        if config_path.exists():
+            with open(config_path) as f:
+                config = yaml.safe_load(f)
+            return config.get("partner", {}).get("name", "").split()[0].lower()
+    except Exception:
+        pass
+    return ""
+
+_PARTNER_FIRST_NAME = _load_partner_name()
+
 def is_proposal_leak_risk(text: str) -> bool:
     """Check if text contains proposal-related content."""
     text_lower = text.lower()
     return any(pattern in text_lower for pattern in PROPOSAL_LEAK_PATTERNS)
 
-def is_caroline_chat(contact_name: str, chat_id: str) -> bool:
-    """Check if this chat involves Caroline."""
+def is_partner_chat(contact_name: str, chat_id: str) -> bool:
+    """Check if this chat involves the partner (from config.local.yaml)."""
+    if not _PARTNER_FIRST_NAME:
+        return False
     name_lower = contact_name.lower() if contact_name else ""
-    return "caroline" in name_lower or "caro" in name_lower
+    return _PARTNER_FIRST_NAME in name_lower
 
 
 # ============================================================
@@ -583,15 +599,15 @@ Verify quotes and merge with existing context."""
     # Prune stale items
     final_ongoing = prune_stale_items(final_ongoing)
 
-    # CRITICAL: Filter out proposal-related content if this is Caroline's chat
-    if is_caroline_chat(contact_name, chat_id):
-        log(f"⚠️ Caroline's chat - filtering proposal-related content")
+    # CRITICAL: Filter out proposal-related content if this is the partner's chat
+    if is_partner_chat(contact_name, chat_id):
+        log(f"⚠️ Partner's chat - filtering proposal-related content")
         for category_list in [final_ongoing, final_pending, final_topics, final_preferences]:
             original_len = len(category_list)
             category_list[:] = [item for item in category_list if not is_proposal_leak_risk(item.get("item", ""))]
             filtered = original_len - len(category_list)
             if filtered > 0:
-                log(f"⚠️ FILTERED {filtered} proposal-related item(s) from Caroline's context")
+                log(f"⚠️ FILTERED {filtered} proposal-related item(s) from partner's context")
 
     if verbose:
         print(f"  [PASS B] Final: {len(final_ongoing)} ongoing, {len(final_pending)} pending, {len(final_topics)} topics, {len(final_preferences)} preferences")
@@ -666,7 +682,7 @@ def has_new_messages_since_last_consolidation(chat_id: str, transcript_dir: Path
             return True  # Can't determine, process it
 
         # Parse the most recent message timestamp
-        # Format: "2026-03-13 07:35:39 | +16175969496 | IN | message text"
+        # Format: "2026-03-13 07:35:39 | +15555550100 | IN | message text"
         for line in result.stdout.strip().split("\n"):
             line = line.strip()
             if not line or line.startswith("#"):

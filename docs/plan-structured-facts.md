@@ -2,12 +2,12 @@
 
 ## Goal
 
-When Nikhil texts "flying to SF March 20-25" or gets a flight confirmation email, the system:
+When the admin texts "flying to SF March 20-25" or gets a flight confirmation email, the system:
 1. Extracts a structured fact during nightly consolidation
 2. Stores it in a queryable table with provenance
 3. Publishes `fact.created` event to the bus
 4. Downstream consumers react (e.g., a FactReminder consumer sets weather/tips reminders)
-5. Any session can answer "where is Nikhil?" from the facts table
+5. Any session can answer "where is the admin?" from the facts table
 
 ## Non-Goals
 
@@ -149,7 +149,7 @@ The extraction prompt instructs the LLM to infer timezone from context (active t
 | travel | "Flying to SF Mar 20-25" | Yes (starts_at, ends_at) | Yes (ends_at < now) | 1 |
 | event | "Dinner at Oleana 7pm Saturday" | Yes (starts_at) | Yes (starts_at + 1 day) | 1 |
 | preference | "Prefers bun over npm" | No | No (time-decay staleness) | 1 |
-| deadline | "Caroline's 30th birthday April 11" | Yes (starts_at) | Yes (starts_at + 1 day) | 2 |
+| deadline | "Partner User's 30th birthday April 11" | Yes (starts_at) | Yes (starts_at + 1 day) | 2 |
 | relationship | "Sam McGrail is a friend/collaborator" | No | No (time-decay staleness) | 2 |
 | project | "Working on WebGPU Qwen3.5 engine" | No | No (time-decay staleness) | 2 |
 
@@ -340,7 +340,7 @@ Format in CLAUDE.md:
 - 🎂 Dinner at Oleana 7pm Saturday (event)
 - 💻 Prefers bun over npm (preference)
 
-*15 of 23 active facts shown. Run `fact list --contact "+16175969496"` for all.*
+*15 of 23 active facts shown. Run `fact list --contact "+15555550100"` for all.*
 ```
 
 The nightly pass **regenerates** this section each night. Ordering: temporal facts with upcoming dates first, then most recent non-temporal facts.
@@ -350,7 +350,7 @@ The nightly pass **regenerates** this section each night. Ordering: temporal fac
 ### 2. CLI Queries (On-Demand)
 
 For deeper queries, sessions call the `fact` CLI:
-- "Where is Nikhil?" → `fact list --contact "+16175969496" --type travel --active`
+- "Where is the admin?" → `fact list --contact "+15555550100" --type travel --active`
 - "What's coming up?" → `fact upcoming --days 14`
 
 The memory SKILL.md is updated to teach sessions about `fact` CLI commands. Access is tier-gated: admin gets full CRUD, favorites/family get read-only (`fact list`, `fact search`, `fact upcoming`).
@@ -362,7 +362,7 @@ Every nightly run logs to `~/dispatch/logs/fact-extraction.jsonl`:
 ```json
 {
   "timestamp": "2026-03-19T02:00:00Z",
-  "contact": "+16175969496",
+  "contact": "+15555550100",
   "wall_clock_ms": 3200,
   "sources": {"messages": 47, "emails": 0, "calendar_events": 0},
   "existing_facts_shown": 12,
@@ -451,7 +451,7 @@ Queries facts table daily (not event-driven — just reads active facts):
 ```bash
 # Save a fact (validates details schema, coerces types)
 ~/dispatch/scripts/fact save \
-  --contact "+16175969496" \
+  --contact "+15555550100" \
   --type travel \
   --summary "Flying to SF March 20-25" \
   --details '{"destination": "San Francisco", "depart": "2026-03-20", "return": "2026-03-25"}' \
@@ -466,8 +466,8 @@ Queries facts table daily (not event-driven — just reads active facts):
   --details '{"hotel": "Marriott"}'
 
 # Query facts for a contact
-~/dispatch/scripts/fact list --contact "+16175969496"
-~/dispatch/scripts/fact list --contact "+16175969496" --type travel --active
+~/dispatch/scripts/fact list --contact "+15555550100"
+~/dispatch/scripts/fact list --contact "+15555550100" --type travel --active
 
 # Search facts
 ~/dispatch/scripts/fact search "california"
@@ -479,10 +479,10 @@ Queries facts table daily (not event-driven — just reads active facts):
 ~/dispatch/scripts/fact deactivate 42
 
 # Get context for a contact (for session injection / CLAUDE.md)
-~/dispatch/scripts/fact context --contact "+16175969496"
+~/dispatch/scripts/fact context --contact "+15555550100"
 
 # Inject facts into CLAUDE.md on-demand (not just nightly)
-~/dispatch/scripts/fact inject --contact "+16175969496"
+~/dispatch/scripts/fact inject --contact "+15555550100"
 
 # Expire temporal facts where ends_at < now
 ~/dispatch/scripts/fact expire
@@ -507,9 +507,9 @@ Queries facts table daily (not event-driven — just reads active facts):
 
 Any session can query facts to answer questions:
 
-- "Where is Nikhil?" → `fact list --contact "+16175969496" --type travel --active`
+- "Where is the admin?" → `fact list --contact "+15555550100" --type travel --active`
 - "What's coming up?" → `fact upcoming --days 14`
-- "What do we know about Caroline's birthday?" → `fact search "caroline birthday"`
+- "What do we know about the partner's birthday?" → `fact search "partner birthday"`
 
 Additionally, active facts are in CLAUDE.md, so sessions can answer simple factual questions without CLI calls.
 

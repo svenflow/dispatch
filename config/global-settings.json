@@ -1,5 +1,4 @@
 {
-  "skipDangerousModePermissionPrompt": true,
   "hooks": {
     "PreToolUse": [
       {
@@ -14,5 +13,6 @@
       }
     ],
     "PostToolUseFailure": []
-  }
+  },
+  "skipDangerousModePermissionPrompt": true
 }

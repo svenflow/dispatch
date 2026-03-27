@@ -2,8 +2,10 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Alert, Animated, Pressable, Share, StyleSheet, Text, View } from "react-native";
 import { Image } from "expo-image";
 import { useRouter } from "expo-router";
+import * as Clipboard from "expo-clipboard";
 import * as FileSystem from "expo-file-system/legacy";
 import * as WebBrowser from "expo-web-browser";
+import type { BubbleMenuItem } from "./BubbleMenu";
 import type { DisplayMessage } from "../hooks/useMessages";
 import { branding } from "../config/branding";
 import { buildImageUrl, buildVideoUrl } from "../api/images";
@@ -88,29 +90,44 @@ interface MessageBubbleProps {
     resume: () => void;
   };
   onRetry?: (messageId: string) => void;
-  onLongPress?: (message: DisplayMessage, pageY: number) => void;
+  onLongPress?: (items: BubbleMenuItem[], pageY: number) => void;
+  /** Show "Delivered" indicator under this message */
+  showDelivered?: boolean;
 }
 
-export function MessageBubble({ message, audioState, onRetry, onLongPress }: MessageBubbleProps) {
+export function MessageBubble({ message, audioState, onRetry, onLongPress, showDelivered }: MessageBubbleProps) {
   const { role, content, timestamp, isPending, sendFailed, audioUrl, imageUrl, videoUrl, localImageUri, status } = message;
   const isUser = role === "user";
   const isGenerating = status === "generating";
   const isFailed = status === "failed";
   const router = useRouter();
 
-  // Animated opacity for pending → delivered transition
-  const opacityAnim = useRef(new Animated.Value(isPending ? 0.55 : 1)).current;
-  const prevPendingRef = useRef(isPending);
-
+  // Entry animation for user bubbles — slide up + fade in
+  const entryAnim = useRef(new Animated.Value(isUser ? 0 : 1)).current;
+  const hasAnimated = useRef(!isUser);
   useEffect(() => {
-    if (prevPendingRef.current && !isPending && !sendFailed) {
-      // Smoothly animate from pending opacity to full
-      Animated.timing(opacityAnim, { toValue: 1, duration: 300, useNativeDriver: true }).start();
-    } else if (sendFailed) {
-      Animated.timing(opacityAnim, { toValue: 0.7, duration: 200, useNativeDriver: true }).start();
+    if (!hasAnimated.current) {
+      hasAnimated.current = true;
+      Animated.spring(entryAnim, {
+        toValue: 1,
+        tension: 200,
+        friction: 18,
+        useNativeDriver: true,
+      }).start();
     }
-    prevPendingRef.current = isPending;
-  }, [isPending, sendFailed, opacityAnim]);
+  }, [entryAnim]);
+
+  // Delivered indicator animation — fade in
+  const deliveredAnim = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (showDelivered) {
+      Animated.timing(deliveredAnim, {
+        toValue: 1,
+        duration: 300,
+        useNativeDriver: true,
+      }).start();
+    }
+  }, [showDelivered, deliveredAnim]);
 
   // Detect if the local attachment is a video by extension
   const videoExts = [".mp4", ".mov", ".m4v", ".avi", ".mkv"];
@@ -208,24 +225,86 @@ export function MessageBubble({ message, audioState, onRetry, onLongPress }: Mes
     }
   };
 
+  const handleBubbleLongPress = useCallback((e: { nativeEvent: { pageY: number } }) => {
+    if (!onLongPress) return;
+    const items: BubbleMenuItem[] = [];
+
+    // Copy is always available if there's text
+    if (content) {
+      items.push({
+        label: "Copy",
+        icon: "doc.on.doc",
+        onPress: () => Clipboard.setStringAsync(content),
+      });
+    }
+
+    // Play/Pause for assistant messages
+    if (canPlayAudio) {
+      if (isPlayingThis) {
+        items.push({
+          label: "Pause",
+          icon: "pause.fill",
+          onPress: () => audioState?.pause(),
+        });
+      } else {
+        items.push({
+          label: "Play",
+          icon: "play.fill",
+          onPress: handleAudioPress,
+        });
+      }
+    }
+
+    // Save image
+    if (imageSource && !isUser && !isPending) {
+      items.push({
+        label: "Save Image",
+        icon: "square.and.arrow.down",
+        onPress: handleSaveImage,
+      });
+    }
+
+    if (items.length > 0) {
+      onLongPress(items, e.nativeEvent.pageY);
+    }
+  }, [content, canPlayAudio, isPlayingThis, audioState, imageSource, isUser, isPending, handleSaveImage, onLongPress, handleAudioPress]);
+
   return (
     <Animated.View
       style={[
         styles.wrapper,
         isUser ? styles.wrapperUser : styles.wrapperAssistant,
-        (isPending || sendFailed) ? { opacity: opacityAnim } : undefined,
+        isUser && {
+          opacity: entryAnim,
+          transform: [{
+            translateY: entryAnim.interpolate({
+              inputRange: [0, 1],
+              outputRange: [20, 0],
+            }),
+          }],
+        },
       ]}
     >
-      <View style={[styles.bubbleRow, isUser && styles.bubbleRowUser]}>
+      <View style={[styles.bubbleRow, isUser && styles.bubbleRowUser, !isUser && displayText && displayText.includes("\n") && styles.bubbleRowMultiLine]}>
+        {sendFailed && (
+          <Pressable
+            onPress={() => onRetry?.(message.id)}
+            hitSlop={8}
+            style={styles.failedIconInline}
+          >
+            <View style={styles.failedIcon}>
+              <Text style={styles.failedIconText}>!</Text>
+            </View>
+          </Pressable>
+        )}
         <Pressable
           onPress={() => setShowTimestamp((v) => !v)}
-          onLongPress={(e) => {
-            onLongPress?.(message, e.nativeEvent.pageY);
-          }}
+          onLongPress={(e) => handleBubbleLongPress({ nativeEvent: { pageY: e.nativeEvent.pageY } })}
           delayLongPress={400}
           style={[
             styles.bubble,
             isUser ? styles.bubbleUser : styles.bubbleAssistant,
+            !isUser && displayText && displayText.includes("\n") && styles.bubbleMultiLine,
             isFailed && styles.bubbleGenerationFailed,
             isPlayingThis && styles.bubblePlaying,
             (imageSource || videoSource) && !displayText && styles.bubbleMediaOnly,
@@ -292,8 +371,8 @@ export function MessageBubble({ message, audioState, onRetry, onLongPress }: Mes
               </Text>
             </Pressable>
           )}
-          {/* Inline audio player for user-uploaded audio */}
-          {isUser && audioUrl && audioState ? (
+          {/* Inline audio player for uploaded audio (user or assistant) */}
+          {audioUrl && audioState ? (
             <Pressable
               onPress={handleAudioPress}
               style={styles.inlineAudioPlayer}
@@ -311,7 +390,7 @@ export function MessageBubble({ message, audioState, onRetry, onLongPress }: Mes
                 )}
               </View>
               <View style={styles.inlineAudioWaveform}>
-                {[0.3, 0.6, 1, 0.7, 0.4, 0.8, 0.5, 0.9, 0.6, 0.3, 0.7, 0.5].map((h, i) => (
+                {[0.3, 0.6, 1, 0.7, 0.4, 0.8, 0.5, 0.9, 0.6, 0.3, 0.7, 0.5, 0.8, 0.4, 0.9, 0.6, 0.3, 0.7, 0.5, 1, 0.6, 0.4, 0.8, 0.3].map((h, i) => (
                   <View
                     key={i}
                     style={[
@@ -326,53 +405,10 @@ export function MessageBubble({ message, audioState, onRetry, onLongPress }: Mes
             </Pressable>
           ) : null}
         </Pressable>
-        {/* Side action buttons — stacked vertically so save sits above play */}
-        {(imageSource && !isUser && !isPending) || canPlayAudio ? (
-          <View style={styles.sideButtons}>
-            {imageSource && !isUser && !isPending && (
-              <Pressable
-                onPress={handleSaveImage}
-                hitSlop={8}
-                style={styles.audioButton}
-                disabled={isSavingImage}
-              >
-                {isSavingImage ? (
-                  <ActivityIndicator size={14} color="#71717a" />
-                ) : (
-                  <SaveIcon />
-                )}
-              </Pressable>
-            )}
-            {canPlayAudio && (
-              <Pressable
-                onPress={handleAudioPress}
-                hitSlop={8}
-                style={styles.audioButton}
-                disabled={isGeneratingAudio}
-              >
-                {isGeneratingAudio ? (
-                  <ActivityIndicator size={14} color="#71717a" />
-                ) : isPlayingThis ? (
-                  <PauseIcon />
-                ) : (
-                  <PlayIcon />
-                )}
-              </Pressable>
-            )}
-          </View>
-        ) : null}
+        {/* Side buttons removed — actions now in long-press context menu */}
       </View>
-      {sendFailed && (
-        <Pressable
-          onPress={() => onRetry?.(message.id)}
-          style={styles.failedRow}
-          hitSlop={8}
-        >
-          <View style={styles.failedIcon}>
-            <Text style={styles.failedIconText}>!</Text>
-          </View>
-          <Text style={styles.failedText}>Not Delivered</Text>
-        </Pressable>
+      {showDelivered && !sendFailed && (
+        <Animated.Text style={[styles.deliveredText, { opacity: deliveredAnim }]}>Delivered</Animated.Text>
       )}
       {showTimestamp && (
         <Text
@@ -495,23 +531,27 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "flex-end",
     gap: 6,
-    maxWidth: "85%",
+    maxWidth: "90%",
   },
   bubbleRowUser: {
     flexDirection: "row-reverse",
+    maxWidth: "75%",
+  },
+  bubbleRowMultiLine: {
+    width: "90%",
   },
   bubble: {
     flexShrink: 1,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
     borderRadius: 18,
     overflow: "hidden",
     borderWidth: 1,
     borderColor: "transparent", // Prevents layout shift when bubblePlaying adds border
   },
   imageContainer: {
-    marginHorizontal: -14,
-    marginTop: -10,
+    marginHorizontal: -12,
+    marginTop: -7,
   },
   imageContainerWithText: {
     marginBottom: 8,
@@ -571,37 +611,38 @@ const styles = StyleSheet.create({
   bubbleAssistant: {
     backgroundColor: "#27272a",
     borderBottomLeftRadius: 4,
+  },
+  bubbleMultiLine: {
     flexGrow: 1,
   },
   bubbleGenerationFailed: {
     borderLeftWidth: 2,
     borderLeftColor: "#ef4444",
   },
-  failedRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    marginTop: 4,
-    alignSelf: "flex-end",
+  failedIconInline: {
+    alignSelf: "center",
   },
   failedIcon: {
-    width: 18,
-    height: 18,
-    borderRadius: 9,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
     backgroundColor: "#ef4444",
     alignItems: "center",
     justifyContent: "center",
   },
   failedIconText: {
     color: "#ffffff",
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: "700",
     marginTop: -1,
   },
-  failedText: {
-    color: "#ef4444",
-    fontSize: 12,
-    fontWeight: "500",
+  deliveredText: {
+    color: "#71717a",
+    fontSize: 11,
+    fontWeight: "400",
+    textAlign: "right",
+    marginTop: 2,
+    marginRight: 4,
   },
   bubblePlaying: {
     borderWidth: 1,
@@ -610,9 +651,9 @@ const styles = StyleSheet.create({
   inlineAudioPlayer: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 10,
+    gap: 8,
     paddingTop: 8,
-    minWidth: 180,
+    alignSelf: "stretch",
   },
   inlineAudioPlayBtn: {
     width: 32,
@@ -650,7 +691,9 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   inlineAudioBar: {
-    width: 3,
+    flex: 1,
+    maxWidth: 4,
+    minWidth: 2,
     borderRadius: 1.5,
     backgroundColor: "rgba(255, 255, 255, 0.5)",
   },
@@ -660,7 +703,7 @@ const styles = StyleSheet.create({
     fontWeight: "500",
   },
   text: {
-    fontSize: 16,
+    fontSize: 17,
     lineHeight: 22,
   },
   textUser: {

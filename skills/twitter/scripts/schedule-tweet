@@ -1,0 +1,73 @@
+#!/usr/bin/env -S uv run --script
+"""
+Schedule a tweet to be posted at a specific time.
+
+Creates a one-shot reminder that fires at the given time and produces
+a tweet.scheduled bus event. The tweet consumer then posts immediately.
+
+Usage:
+    schedule-tweet "tweet text" "2026-03-24T14:30:00-04:00"
+    schedule-tweet "tweet text" "2026-03-24T14:30:00-04:00" --source tweet-planner
+"""
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+
+import argparse
+import sys
+from datetime import datetime
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+sys.path.insert(0, str(Path.home() / "dispatch"))
+
+from assistant.reminders import create_reminder, load_reminders, save_reminders, reminders_lock
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Schedule a tweet for later posting")
+    parser.add_argument("text", help="Tweet text")
+    parser.add_argument("post_at", help="ISO 8601 datetime for when to post (e.g. 2026-03-24T14:30:00-04:00)")
+    parser.add_argument("--source", default="tweet-planner", help="Source tag for the bus event")
+    args = parser.parse_args()
+
+    # Validate the time
+    try:
+        post_at = datetime.fromisoformat(args.post_at)
+        if post_at.tzinfo is None:
+            post_at = post_at.replace(tzinfo=ZoneInfo("America/New_York"))
+    except ValueError as e:
+        print(f"Error: invalid datetime '{args.post_at}': {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Create a one-shot reminder that produces a tweet.scheduled bus event
+    reminder_kwargs = {
+        "title": f"Post tweet: {args.text[:50]}",
+        "schedule_type": "once",
+        "schedule_value": post_at.isoformat(),
+        "tz_name": "America/New_York",
+        "event": {
+            "topic": "tweets",
+            "type": "tweet.scheduled",
+            "key": "svenflowai",
+            "source": args.source,
+            "payload": {
+                "text": args.text,
+                "scheduled_for": post_at.isoformat(),
+            },
+        },
+    }
+
+    with reminders_lock():
+        data = load_reminders()
+        r = create_reminder(**reminder_kwargs)
+        data["reminders"].append(r)
+        save_reminders(data)
+
+    print(f"Scheduled tweet for {post_at.strftime('%I:%M %p %Z')} (id={r['id']})")
+    print(f"Text: {args.text}")
+
+
+if __name__ == "__main__":
+    main()

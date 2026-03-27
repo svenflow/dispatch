@@ -599,7 +599,7 @@ def produce_imessage_ui_event(producer, chat_id: str, event_type: str,
     """Produce an event to the imessage.ui topic.
 
     Args:
-        chat_id: Bare phone number (e.g. "+16175969496") or group hex ID.
+        chat_id: Bare phone number (e.g. "+15555550100") or group hex ID.
         event_type: One of "tapback", "read", "typing.start", "typing.stop".
         payload: Must include "chat_id" at minimum.
         source: Origin component (e.g. "daemon", "reply-cli", "sdk").

@@ -52,7 +52,7 @@ Each folder can have its own ACL:
 
 ### System 1: sven-pages-worker (Cloudflare Workers KV)
 
-- **URL**: `https://sven-pages-worker.nicklaudethorat.workers.dev/{folder}/`
+- **URL**: `https://<worker-subdomain>.workers.dev/{folder}/`
 - **Storage**: Cloudflare KV namespace `SVEN_PAGES`
 - **CLI**: `~/.claude/skills/sven-pages/scripts/publish`
 - ACLs managed per-folder via the CLI
@@ -82,7 +82,7 @@ When publishing a report in a group chat, always share with participants:
 
 - **Worker**: `sven-pages-worker` on Cloudflare Workers
 - **Storage**: Cloudflare KV namespace `SVEN_PAGES`
-- **URL**: `https://sven-pages-worker.nicklaudethorat.workers.dev/{folder}/`
+- **URL**: `https://<worker-subdomain>.workers.dev/{folder}/`
 
 ## Admin Notes
 

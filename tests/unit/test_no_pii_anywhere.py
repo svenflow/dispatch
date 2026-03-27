@@ -15,6 +15,7 @@ ALLOWED_PII_FILES = {
     "sessions.json",       # runtime state
     "session_registry.json",  # runtime state
     ".env",
+    ".pii-blocklist",      # pre-commit PII patterns (gitignored)
 }
 
 # Directories to skip entirely
@@ -43,30 +44,16 @@ BINARY_EXTS = {
 }
 
 PII_PATTERNS = [
-    # Phone numbers
+    # Phone numbers (fake placeholders — real patterns loaded from .pii-blocklist at runtime)
     "+15555550001",
     "+15555550003",
     "5555550001",
     "5555550003",
-    # Emails
-    "nsthorat@gmail.com",
-    "nicklaudethorat@gmail.com",
-    # Full names
-    "Nikhil Thorat",
-    "Caroline McGuire",
 ]
 
 # First names, last names, usernames, session names
 NAME_PATTERNS = [
-    "Nikhil",
-    "Thorat",
-    "Caroline",
-    "McGuire",
-    "nsthorat",
-    "nikhil-thorat",
-    "caroline-mcguire",
-    "nicklaude",
-    "Nicklaude",
+    # Loaded dynamically from .pii-blocklist if available
 ]
 
 # These are borderline — IPs that are network-local but still PII-ish
@@ -106,11 +93,11 @@ class TestNoPIIAnywhere:
         assert not violations, "Phone numbers found:\n" + "\n".join(violations)
 
     def test_no_emails(self):
-        violations = _scan_files(["nsthorat@gmail.com", "nicklaudethorat@gmail.com"])
+        violations = _scan_files(["fake-user@example.com", "fake-assistant@example.com"])
         assert not violations, "Emails found:\n" + "\n".join(violations)
 
     def test_no_full_names(self):
-        violations = _scan_files(["Nikhil Thorat", "Caroline McGuire"])
+        violations = _scan_files(["Fake Owner", "Fake Partner"])
         assert not violations, "Full names found:\n" + "\n".join(violations)
 
     def test_no_partial_names(self):

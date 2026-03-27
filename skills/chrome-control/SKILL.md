@@ -398,6 +398,23 @@ echo '{"command": "_reload_extension"}' | nc -U /tmp/chrome_control_*.sock
 - **`iframe-type` double-typing bug (fixed):** The `iframeType` function previously sent a `keyDown` event with `text` properties AND a separate `char` event, both of which caused character insertion. This resulted in every character being typed twice. Fixed by changing `keyDown` to `rawKeyDown` and removing `text`/`unmodifiedText` from it, so only the `char` event inserts text.
 - **Prefer `insert-text` for cross-origin payment iframes:** When typing into cross-origin iframes (e.g., payment forms), use `chrome insert-text` instead of `iframe-type`. The `insert-text` command uses `Input.insertText` which is more reliable for these contexts.
 
+## File Uploads
+
+The native messaging protocol has an **~8KB message size limit**, which means there is no built-in file upload command.
+
+**Workarounds:**
+
+1. **Chunked base64 upload (JS injection):** Encode the file as base64, split into <5KB chunks, and send each chunk via `chrome js` to reconstruct the file in the page's JS context. This works but is slow and token-heavy.
+
+2. **axctl drag-and-drop:** Use the accessibility automation tool to simulate a file drop onto file input elements:
+   ```bash
+   ~/.claude/skills/axctl/scripts/axctl ...
+   ```
+
+3. **Direct form submission:** If the site has a standard `<input type="file">`, you may be able to set its value via Chrome Debugger protocol or use `chrome js` to create a `DataTransfer` object.
+
+**Recommendation:** For simple file uploads, try axctl first. For complex multi-file uploads, use the chunked base64 approach. Both are significantly more work than a simple command — plan accordingly.
+
 ## Notes
 
 - Tab IDs are integers shown by `chrome tabs`

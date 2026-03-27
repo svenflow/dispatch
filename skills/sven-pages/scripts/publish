@@ -46,7 +46,18 @@ import httpx
 from rich.console import Console
 from rich.table import Table
 
-WORKER_URL = "https://sven-pages-worker.nicklaudethorat.workers.dev"
+WORKER_URL = os.environ.get("SVEN_PAGES_URL", "").rstrip("/")
+if not WORKER_URL:
+    # Read from config.local.yaml if env var not set
+    try:
+        import yaml as _yaml
+        _cfg = _yaml.safe_load(open(Path.home() / "dispatch" / "config.local.yaml"))
+        WORKER_URL = _cfg.get("sven_pages", {}).get("url", "")
+    except Exception:
+        pass
+if not WORKER_URL:
+    print("Error: Set SVEN_PAGES_URL env var or add sven_pages.url to config.local.yaml")
+    sys.exit(1)
 API_KEY_FILE = Path.home() / ".claude" / "skills" / "sven-pages" / ".api-key"
 console = Console()
 

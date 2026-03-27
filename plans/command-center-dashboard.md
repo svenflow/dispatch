@@ -127,7 +127,7 @@ Returns recent bus events with optional filtering.
       "timestamp": 1710950400000,
       "type": "message.received",
       "source": "imessage",
-      "key": "+16175969496",
+      "key": "+15555550100",
       "payload_preview": "{\"text\": \"Hey what's up\", ...}",
       "age_seconds": 3.2
     }
@@ -181,8 +181,8 @@ Returns all sessions with enriched metadata.
 {
   "sessions": [
     {
-      "chat_id": "+16175969496",
-      "session_name": "imessage/_16175969496",
+      "chat_id": "+15555550100",
+      "session_name": "imessage/_15555550100",
       "contact_name": "Admin User",
       "tier": "admin",
       "type": "individual",
@@ -228,8 +228,8 @@ Returns SDK tool call events.
     {
       "id": 38254,
       "timestamp": 1710950400000,
-      "session_name": "imessage/_16175969496",
-      "chat_id": "+16175969496",
+      "session_name": "imessage/_15555550100",
+      "chat_id": "+15555550100",
       "event_type": "tool_use",
       "tool_name": "Bash",
       "duration_ms": 1523.4,
@@ -257,7 +257,7 @@ Returns tool usage analytics.
     {"tool": "Read", "count": 8982, "avg_ms": 346.2, "error_rate": 0.01}
   ],
   "by_session": [
-    {"session": "imessage/_16175969496", "count": 5000}
+    {"session": "imessage/_15555550100", "count": 5000}
   ],
   "by_hour": [
     {"hour": "2026-03-20T17:00:00", "count": 89}
@@ -422,7 +422,7 @@ Returns structured contact facts.
   "facts": [
     {
       "id": 1,
-      "contact": "+16175969496",
+      "contact": "+15555550100",
       "fact_type": "travel",
       "summary": "Flying to SF March 20-25",
       "confidence": "high",

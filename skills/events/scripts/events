@@ -1,0 +1,279 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#   "httpx>=0.27",
+#   "rich>=13.0",
+# ]
+# ///
+"""Events CLI — search upcoming events via Ticketmaster Discovery API."""
+
+import argparse
+import json
+import os
+import sys
+from datetime import datetime, timedelta, timezone
+
+import httpx
+from rich.console import Console
+from rich.table import Table
+
+console = Console()
+
+TICKETMASTER_BASE = "https://app.ticketmaster.com/discovery/v2"
+
+
+def get_api_key() -> str:
+    """Load Ticketmaster API key from secrets.env."""
+    secrets_path = os.path.expanduser("~/.claude/secrets.env")
+    if os.path.exists(secrets_path):
+        with open(secrets_path) as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("TICKETMASTER_API_KEY="):
+                    return line.split("=", 1)[1].strip().strip('"').strip("'")
+    # Also check env var directly
+    key = os.environ.get("TICKETMASTER_API_KEY")
+    if key:
+        return key
+    console.print("[red]Error: TICKETMASTER_API_KEY not found in ~/.claude/secrets.env or environment[/red]")
+    console.print("Get a free key at https://developer.ticketmaster.com/")
+    sys.exit(1)
+
+
+def score_demand(event: dict) -> int:
+    """Score sellout likelihood 0-100 based on available signals."""
+    score = 50  # baseline
+
+    # Venue capacity signal
+    venues = event.get("_embedded", {}).get("venues", [])
+    if venues:
+        venue = venues[0]
+        # Small venues sell out faster
+        # Ticketmaster doesn't always expose capacity, but we can infer from type
+        venue_type = venue.get("type", "")
+        if "club" in venue_type.lower() or "theater" in venue_type.lower():
+            score += 10
+
+    # Date proximity — events sooner are more urgent
+    start = event.get("dates", {}).get("start", {})
+    date_str = start.get("localDate")
+    if date_str:
+        try:
+            event_date = datetime.strptime(date_str, "%Y-%m-%d")
+            days_away = (event_date - datetime.now()).days
+            if days_away < 7:
+                score += 20
+            elif days_away < 30:
+                score += 10
+            elif days_away > 180:
+                score -= 10
+        except ValueError:
+            pass
+
+    # Sales status
+    sales = event.get("dates", {}).get("status", {}).get("code", "")
+    if sales == "offsale":
+        score -= 20
+    elif sales == "onsale":
+        score += 5
+
+    # Price range signal — high min price suggests high demand
+    price_ranges = event.get("priceRanges", [])
+    if price_ranges:
+        min_price = price_ranges[0].get("min", 0)
+        if min_price > 200:
+            score += 15
+        elif min_price > 100:
+            score += 10
+        elif min_price > 50:
+            score += 5
+
+    # Clamp
+    return max(0, min(100, score))
+
+
+def score_emoji(score: int) -> str:
+    if score >= 80:
+        return "🔴"
+    elif score >= 50:
+        return "🟡"
+    else:
+        return "🟢"
+
+
+def format_event(event: dict, include_score: bool = True) -> dict:
+    """Extract display fields from a Ticketmaster event."""
+    name = event.get("name", "Unknown")
+    event_id = event.get("id", "")
+
+    start = event.get("dates", {}).get("start", {})
+    date_str = start.get("localDate", "")
+    time_str = start.get("localTime", "")
+
+    venues = event.get("_embedded", {}).get("venues", [])
+    venue_name = venues[0].get("name", "") if venues else ""
+    city = venues[0].get("city", {}).get("name", "") if venues else ""
+    state = venues[0].get("state", {}).get("stateCode", "") if venues else ""
+    location = f"{city}, {state}" if city else ""
+
+    price_ranges = event.get("priceRanges", [])
+    price = ""
+    if price_ranges:
+        pr = price_ranges[0]
+        lo = pr.get("min")
+        hi = pr.get("max")
+        currency = pr.get("currency", "USD")
+        if lo and hi:
+            price = f"${lo:.0f}-${hi:.0f}"
+        elif lo:
+            price = f"${lo:.0f}+"
+
+    url = event.get("url", "")
+    status = event.get("dates", {}).get("status", {}).get("code", "")
+
+    result = {
+        "id": event_id,
+        "name": name,
+        "date": date_str,
+        "time": time_str,
+        "venue": venue_name,
+        "location": location,
+        "price": price,
+        "status": status,
+        "url": url,
+    }
+
+    if include_score:
+        s = score_demand(event)
+        result["score"] = s
+        result["demand"] = f"{score_emoji(s)} {s}"
+
+    return result
+
+
+def cmd_search(args):
+    """Search for events."""
+    api_key = get_api_key()
+    params = {
+        "apikey": api_key,
+        "size": args.limit,
+        "sort": "date,asc",
+    }
+
+    if args.keyword:
+        params["keyword"] = args.keyword
+
+    if args.location:
+        # Use Ticketmaster's market/DMA lookup or just city keyword
+        params["city"] = args.location.split(",")[0].strip()
+
+    if args.genre:
+        # Map common genres to Ticketmaster genre IDs or use keyword
+        params["classificationName"] = args.genre
+
+    if args.venue:
+        params["venueId"] = args.venue  # or use keyword search
+        # If it looks like a name, search by keyword instead
+        if not args.venue.startswith("KovZ"):
+            params.pop("venueId")
+            params["keyword"] = (params.get("keyword", "") + " " + args.venue).strip()
+
+    days = args.days or 90
+    start_dt = datetime.now(timezone.utc)
+    end_dt = start_dt + timedelta(days=days)
+    params["startDateTime"] = start_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    params["endDateTime"] = end_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    try:
+        resp = httpx.get(f"{TICKETMASTER_BASE}/events.json", params=params, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+    except httpx.HTTPError as e:
+        console.print(f"[red]API error: {e}[/red]")
+        sys.exit(1)
+
+    events = data.get("_embedded", {}).get("events", [])
+    if not events:
+        console.print("[yellow]No events found.[/yellow]")
+        return
+
+    table = Table(title=f"Events ({len(events)} results)")
+    table.add_column("Date", style="cyan", width=12)
+    table.add_column("Event", style="white", max_width=40)
+    table.add_column("Venue", style="green", max_width=25)
+    table.add_column("Location", style="blue", width=15)
+    table.add_column("Price", style="yellow", width=12)
+    table.add_column("Demand", width=8)
+    table.add_column("ID", style="dim", width=16)
+
+    for event in events:
+        info = format_event(event)
+        table.add_row(
+            info["date"],
+            info["name"],
+            info["venue"],
+            info["location"],
+            info["price"],
+            info["demand"],
+            info["id"],
+        )
+
+    console.print(table)
+
+    # Also output JSON for programmatic use
+    if args.json:
+        formatted = [format_event(e) for e in events]
+        print(json.dumps(formatted, indent=2))
+
+
+def cmd_details(args):
+    """Get details for a specific event by ID."""
+    api_key = get_api_key()
+    try:
+        resp = httpx.get(
+            f"{TICKETMASTER_BASE}/events/{args.event_id}.json",
+            params={"apikey": api_key},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        event = resp.json()
+    except httpx.HTTPError as e:
+        console.print(f"[red]API error: {e}[/red]")
+        sys.exit(1)
+
+    info = format_event(event)
+    for k, v in info.items():
+        console.print(f"[bold]{k}:[/bold] {v}")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Events CLI — search and track events")
+    sub = parser.add_subparsers(dest="command")
+
+    # search
+    sp = sub.add_parser("search", help="Search for events")
+    sp.add_argument("keyword", nargs="?", help="Artist, event, or keyword")
+    sp.add_argument("--location", "-l", help="City/location (e.g. 'Boston, MA')")
+    sp.add_argument("--genre", "-g", help="Genre/classification (e.g. 'rock', 'electronic')")
+    sp.add_argument("--venue", "-v", help="Venue name or ID")
+    sp.add_argument("--days", "-d", type=int, default=90, help="Lookahead days (default: 90)")
+    sp.add_argument("--limit", "-n", type=int, default=20, help="Max results (default: 20)")
+    sp.add_argument("--json", action="store_true", help="Output JSON")
+
+    # details
+    dp = sub.add_parser("details", help="Get event details by ID")
+    dp.add_argument("event_id", help="Ticketmaster event ID")
+
+    args = parser.parse_args()
+
+    if args.command == "search":
+        cmd_search(args)
+    elif args.command == "details":
+        cmd_details(args)
+    else:
+        parser.print_help()
+
+
+if __name__ == "__main__":
+    main()

@@ -44,4 +44,4 @@ Generate a visualization of dispatch bus events from `~/dispatch/state/bus.db`.
 
 ## Published URL
 
-Default publish location: `https://sven-pages-worker.nicklaudethorat.workers.dev/bus-dashboard/`
+Default publish location: Published via sven-pages skill (see `/sven-pages` for URL)

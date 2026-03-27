@@ -164,11 +164,19 @@ export default function AgentConversationScreen() {
   // Render messages — reuse MessageBubble (no audioState = no audio controls)
   // -----------------------------------------------------------------------
 
+  const lastDeliveredUserMsgId = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.role === "user" && !m.isPending && !m.sendFailed) return m.id;
+    }
+    return null;
+  }, [messages]);
+
   const renderMessageItem = useCallback(
     ({ item }: { item: DisplayMessage }) => (
-      <MessageBubble message={item} />
+      <MessageBubble message={item} showDelivered={item.id === lastDeliveredUserMsgId} />
     ),
-    [],
+    [lastDeliveredUserMsgId],
   );
 
   const renderSdkItem = useCallback(

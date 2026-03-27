@@ -46,9 +46,10 @@ EXCLUSIONS_FILE = MEMORIES_DIR / "exclusions.txt"
 # ============================================================
 # CRITICAL: PROPOSAL LEAK PROTECTION
 # ============================================================
-# Hardcoded protection against leaking Nikhil's proposal to Caroline.
+# Protection against leaking proposal info to the partner.
+# Partner name is read from config.local.yaml at startup.
 # This is a safety net - exclusions.txt should catch these too, but
-# this hardcoded check ensures nothing slips through.
+# this check ensures nothing slips through.
 
 PROPOSAL_LEAK_PATTERNS = [
     "proposal", "propose", "engagement", "ring", "marry",
@@ -56,15 +57,32 @@ PROPOSAL_LEAK_PATTERNS = [
     "surprise", "secret", "don't tell", "top secret",
 ]
 
+def _load_partner_name() -> str:
+    """Load partner name from config.local.yaml."""
+    try:
+        import yaml
+        config_path = Path.home() / "dispatch" / "config.local.yaml"
+        if config_path.exists():
+            with open(config_path) as f:
+                config = yaml.safe_load(f)
+            return config.get("partner", {}).get("name", "").split()[0].lower()
+    except Exception:
+        pass
+    return ""
+
+_PARTNER_FIRST_NAME = _load_partner_name()
+
 def is_proposal_leak_risk(text: str) -> bool:
     """Check if text contains proposal-related content."""
     text_lower = text.lower()
     return any(pattern in text_lower for pattern in PROPOSAL_LEAK_PATTERNS)
 
-def is_caroline(contact_name: str) -> bool:
-    """Check if this contact is Caroline."""
+def is_partner_contact(contact_name: str) -> bool:
+    """Check if this contact is the partner (from config.local.yaml)."""
+    if not _PARTNER_FIRST_NAME:
+        return False
     name_lower = contact_name.lower() if contact_name else ""
-    return "caroline" in name_lower or "caro" in name_lower
+    return _PARTNER_FIRST_NAME in name_lower
 
 # Format markers
 MANAGED_HEADER = "<!-- CLAUDE-MANAGED:v1 -->"
@@ -144,7 +162,7 @@ Extract ONLY facts that {contact_name} explicitly states about THEMSELVES.
 - In a group chat about X → Does NOT mean they like X
 
 ### ❌ DO NOT EXTRACT - Facts about OTHER people:
-- "Remind Nikhil about Arjun's birthday" → This is about Nikhil/Arjun, NOT about the sender
+- "Remind Admin about someone's birthday" → This is about Admin/someone, NOT about the sender
 - "My cousin just got married" → The marriage is about the cousin, not the sender
 - "Can you tell X that Y" → Passing along info about others
 - Only extract facts where {contact_name} IS the subject, not just the messenger
@@ -618,13 +636,13 @@ Verify each quote exists and fact is accurate."""
             for fact in excluded_facts:
                 print(f"    ✗ {fact}")
 
-    # CRITICAL: Extra protection for Caroline - never leak proposal info
-    if is_caroline(contact_name):
-        log(f"⚠️ Processing Caroline's facts - applying proposal leak protection")
+    # CRITICAL: Extra protection for partner - never leak proposal info
+    if is_partner_contact(contact_name):
+        log(f"⚠️ Processing partner's facts - applying proposal leak protection")
         proposal_leaks = [f for f in final_facts if is_proposal_leak_risk(f)]
         final_facts = [f for f in final_facts if not is_proposal_leak_risk(f)]
         if proposal_leaks:
-            log(f"⚠️ BLOCKED {len(proposal_leaks)} proposal-related facts for Caroline")
+            log(f"⚠️ BLOCKED {len(proposal_leaks)} proposal-related facts for partner")
             if verbose:
                 print(f"  [PROPOSAL PROTECTION] Blocked {len(proposal_leaks)} facts:")
                 for fact in proposal_leaks:

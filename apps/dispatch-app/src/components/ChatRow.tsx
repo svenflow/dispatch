@@ -13,9 +13,11 @@ interface ChatRowProps {
   onLongPress?: () => void;
   /** Pre-computed unread state (from isCurrentlyUnread in useChatList) */
   isUnread: boolean;
+  /** Whether this row is the currently selected chat (desktop sidebar) */
+  isSelected?: boolean;
 }
 
-export function ChatRow({ conversation, onPress, onLongPress, isUnread }: ChatRowProps) {
+export function ChatRow({ conversation, onPress, onLongPress, isUnread, isSelected }: ChatRowProps) {
   const { title, last_message, last_message_at, last_message_role, is_thinking, image_url, image_status } =
     conversation;
 
@@ -64,7 +66,7 @@ export function ChatRow({ conversation, onPress, onLongPress, isUnread }: ChatRo
       accessibilityRole="button"
       accessibilityLabel={`${title}${isUnread ? ", unread" : ""}${preview ? `, ${preview}` : ""}`}
     >
-      <Animated.View style={[styles.row, { transform: [{ scale: pressScale }] }]}>
+      <Animated.View style={[styles.row, isSelected && styles.rowSelected, { transform: [{ scale: pressScale }] }]}>
         {isUnread ? (
           <View style={styles.unreadDot} />
         ) : (
@@ -162,6 +164,9 @@ const styles = StyleSheet.create({
   },
   pressed: {
     backgroundColor: "#1f1f23",
+  },
+  rowSelected: {
+    backgroundColor: "#1e293b",
   },
   unreadDot: {
     width: 10,

@@ -184,3 +184,26 @@ def get_chat_title(chat_id: str) -> str | None:
     row = conn.execute("SELECT title FROM chats WHERE id = ?", (chat_id,)).fetchone()
     conn.close()
     return row[0] if row else None
+
+
+def copy_audio_to_canonical(source_path: str, message_id: str, chat_id: str) -> str | None:
+    """Copy an audio file to the canonical dispatch-audio directory.
+
+    Audio files are organized by chat_id: ~/dispatch/state/dispatch-audio/{chat_id}/{message_id}{ext}
+    Returns the canonical path on success, None on failure.
+    """
+    src = Path(source_path)
+    if not src.exists():
+        return None
+
+    audio_dir = _STATE_DIR / "dispatch-audio" / chat_id
+    audio_dir.mkdir(parents=True, exist_ok=True)
+
+    ext = src.suffix.lower() or ".mp3"
+    dest = audio_dir / f"{message_id}{ext}"
+
+    try:
+        shutil.copy2(src, dest)
+        return str(dest)
+    except Exception:
+        return None

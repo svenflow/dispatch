@@ -1164,6 +1164,19 @@ class ReminderPoller:
         """Check for due reminders and fire them. Called every poll cycle."""
         from datetime import timezone
 
+        # Skip reminders when quota is degraded (>=90%) to conserve tokens.
+        # Cron reminders will catch up on next fire; one-shot reminders are preserved.
+        qm = getattr(self.backend, 'quota_manager', None)
+        if qm and qm.state == "degraded":
+            if not getattr(self, '_reminders_paused_logged', False):
+                log.info("REMINDERS_PAUSED | Quota degraded — skipping reminders to conserve tokens")
+                self._reminders_paused_logged = True
+            return
+        # Reset the log-once flag when quota recovers
+        if getattr(self, '_reminders_paused_logged', False):
+            log.info("REMINDERS_RESUMED | Quota recovered — reminders re-enabled")
+            self._reminders_paused_logged = False
+
         # Only reload if file changed on disk (avoids unnecessary I/O)
         self._load_reminders_if_changed()
 
@@ -1455,6 +1468,54 @@ class IPCServer:
                 return {"ok": False, "error": "Missing chat_id"}
             session = await self.backend.restart_session(chat_id, tier_override=tier, clean=clean)
             return {"ok": session is not None, "message": f"Restarted {chat_id}" if session else "Failed to restart"}
+        elif cmd == "set_global_model":
+            model = request.get("model")
+            if not model:
+                return {"ok": False, "error": "Missing model"}
+            valid = ("opus", "sonnet", "haiku", "--clear", "clear")
+            if model not in valid:
+                return {"ok": False, "error": f"Invalid model: {model}. Use: opus, sonnet, haiku, or --clear"}
+            qm = self.sessions.quota_manager
+            qm.set_global_model(model, trigger="manual_cli")
+            state = qm.state
+            override = qm.get_override_info()
+            # Notify admin
+            from assistant import config
+            admin_phone = config.get("owner.phone")
+            if admin_phone:
+                if model in ("--clear", "clear"):
+                    self._send_sms(admin_phone, "[SVEN] ⚡ Global model override cleared — sessions will use per-session defaults (opus)")
+                else:
+                    self._send_sms(admin_phone, f"[SVEN] ⚡ Global model switched to {model} — new sessions will use {model}")
+            return {
+                "ok": True,
+                "state": state,
+                "override": override,
+                "message": f"Global model set to {model}" if model not in ("--clear", "clear") else "Global model override cleared",
+            }
+
+        elif cmd == "get_global_model":
+            qm = self.sessions.quota_manager
+            state = qm.state
+            override = qm.get_override_info()
+            cb = self.sessions.haiku_circuit_breaker
+            # Get current quota if available
+            try:
+                from assistant.health import fetch_quota_oauth
+                usage = fetch_quota_oauth()
+                quota_5h = (usage.get("five_hour") or {}).get("utilization") if usage else None
+                quota_7d_opus = (usage.get("seven_day_opus") or {}).get("utilization") if usage else None
+            except Exception:
+                quota_5h = quota_7d_opus = None
+            return {
+                "ok": True,
+                "state": state,
+                "override": override,
+                "circuit_breaker": cb.state,
+                "quota_5h_pct": quota_5h,
+                "quota_7d_opus_pct": quota_7d_opus,
+            }
+
         elif cmd == "set_model":
             chat_id = request.get("chat_id")
             model = request.get("model")
@@ -1631,6 +1692,7 @@ class Manager:
         self._task_consumer_task: asyncio.Task | None = None
         self._ephemeral_tasks: Dict[str, dict] = {}  # task_id -> tracking info
         self._running_script_tasks: Dict[str, asyncio.Task] = {}  # task_id -> asyncio.Task
+        self._completed_task_times: Dict[str, float] = {}  # task_id -> completion timestamp
 
         # Initialize bus consumers
         self._consumer_runner = self._init_consumers()
@@ -2050,6 +2112,43 @@ class Manager:
         # Default: treat unknown errors as transient (safer to retry)
         return True
 
+    # Maximum rejoin attempts before giving up on StaleGenerationError recovery.
+    # After this many failures, the consumer stops and the watchdog handles restart.
+    MAX_REJOIN_ATTEMPTS = 5
+
+    async def _handle_stale_generation(
+        self, consumer, executor, label: str, consecutive_errors: int
+    ) -> int:
+        """Handle StaleGenerationError by rejoining the consumer group.
+
+        Returns the updated consecutive_errors count.
+        Raises RuntimeError if max rejoin attempts exceeded.
+        """
+        from bus import StaleGenerationError  # noqa: F811
+        log.warning(f"{label} fenced by rebalance. Rejoining group...")
+        try:
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(executor, consumer._join_group)
+            log.info(f"{label} rejoined group successfully")
+            return 0  # Reset only on success
+        except Exception as rejoin_error:
+            consecutive_errors += 1
+            log.error(f"{label} rejoin failed ({consecutive_errors}/{self.MAX_REJOIN_ATTEMPTS}): {rejoin_error}")
+            if consecutive_errors >= self.MAX_REJOIN_ATTEMPTS:
+                log.critical(f"{label} exceeded max rejoin attempts ({self.MAX_REJOIN_ATTEMPTS}), stopping consumer")
+                # Emit bus event so the incident is recorded
+                try:
+                    produce_event(self._producer, "system", "consumer.rejoin_exhausted", {
+                        "label": label,
+                        "attempts": consecutive_errors,
+                    }, source="daemon")
+                except Exception:
+                    pass  # Best-effort — producer may be broken too
+                raise RuntimeError(f"{label} exceeded max rejoin attempts") from rejoin_error
+            backoff = min(30, 2 ** consecutive_errors)
+            await asyncio.sleep(backoff)
+            return consecutive_errors
+
     async def _run_message_consumer(self):
         """Consume message.received events from bus and route to process_message.
 
@@ -2067,6 +2166,7 @@ class Manager:
         poll() returns, so no concurrent access to the consumer's connection.
         """
         from assistant.bus_helpers import reconstruct_msg_from_bus
+        from bus import StaleGenerationError
 
         consumer = self._bus.consumer(
             group_id="message-router",
@@ -2191,7 +2291,26 @@ class Manager:
             except asyncio.CancelledError:
                 log.info("Message consumer shutting down")
                 break
+            except StaleGenerationError as e:
+                try:
+                    consecutive_errors = await self._handle_stale_generation(
+                        consumer, self._consumer_executor,
+                        "Message consumer", consecutive_errors,
+                    )
+                except RuntimeError:
+                    break  # Max rejoin attempts exceeded, let watchdog handle it
             except Exception as e:
+                # Catch StaleGenerationError that may not match the imported class
+                if "StaleGenerationError" in type(e).__name__ or "stale" in str(e).lower():
+                    log.warning(f"Message consumer stale generation (caught as Exception): {e}")
+                    try:
+                        consecutive_errors = await self._handle_stale_generation(
+                            consumer, self._consumer_executor,
+                            "Message consumer", consecutive_errors,
+                        )
+                    except RuntimeError:
+                        break
+                    continue
                 consecutive_errors += 1
                 log.error(f"Consumer error ({consecutive_errors}): {e}")
                 backoff = min(30, 2 ** consecutive_errors)
@@ -2237,6 +2356,7 @@ class Manager:
             task_started_payload, task_completed_payload,
             task_failed_payload, task_timeout_payload,
         )
+        from bus import StaleGenerationError
 
         consumer = self._bus.consumer(
             group_id="task-runner",
@@ -2298,7 +2418,27 @@ class Manager:
             except asyncio.CancelledError:
                 log.info("Task consumer shutting down")
                 break
+            except StaleGenerationError as e:
+                try:
+                    consecutive_errors = await self._handle_stale_generation(
+                        consumer, self._task_consumer_executor,
+                        "Task consumer", consecutive_errors,
+                    )
+                except RuntimeError:
+                    break  # Max rejoin attempts exceeded, let watchdog handle it
             except Exception as e:
+                # Catch StaleGenerationError that may not match the imported class
+                # (e.g., due to module reload or class identity mismatch)
+                if "StaleGenerationError" in type(e).__name__ or "stale" in str(e).lower():
+                    log.warning(f"Task consumer stale generation (caught as Exception): {e}")
+                    try:
+                        consecutive_errors = await self._handle_stale_generation(
+                            consumer, self._task_consumer_executor,
+                            "Task consumer", consecutive_errors,
+                        )
+                    except RuntimeError:
+                        break
+                    continue
                 consecutive_errors += 1
                 log.error(f"Task consumer error ({consecutive_errors}): {e}")
                 backoff = min(30, 2 ** consecutive_errors)
@@ -2347,11 +2487,38 @@ class Manager:
                          and self.sessions.sessions[session_key].is_alive())
         script_running = (task_id in self._running_script_tasks
                           and not self._running_script_tasks[task_id].done())
-        if agent_running or script_running:
-            log.warning(f"Task {task_id} already running, skipping duplicate")
+        # Also reject tasks that completed recently (prevents restart loops
+        # when the bus consumer re-reads the same task.requested event due
+        # to a failed offset commit, e.g. after a StaleGenerationError).
+        COMPLETED_COOLDOWN = 3600  # 1 hour
+        recently_completed = (
+            task_id in self._completed_task_times
+            and (time.time() - self._completed_task_times[task_id]) < COMPLETED_COOLDOWN
+        )
+        if agent_running or script_running or recently_completed:
+            reason = ("recently_completed" if recently_completed
+                      else "already_running")
+            log.warning(f"Task {task_id} {reason}, skipping duplicate")
             produce_event(self._producer, "tasks", "task.skipped",
-                task_skipped_payload(task_id, "already_running"),
+                task_skipped_payload(task_id, reason),
                 key=requested_by, source="task-runner")
+            # Alert admin when a completed task is being replayed — this means
+            # the consumer failed to commit offsets (sev0 restart loop signal).
+            # Rate-limited: one alert per task per hour (matches cooldown window).
+            if recently_completed:
+                alert_key = f"_replay_alerted_{task_id}"
+                last_alert = getattr(self, alert_key, 0)
+                if time.time() - last_alert > 3600:
+                    setattr(self, alert_key, time.time())
+                    from assistant import config
+                    admin_phone = config.get("owner.phone")
+                    if admin_phone:
+                        self._send_sms(
+                            admin_phone,
+                            f"🚨 Sev0 signal: task '{task_id}' replayed after "
+                            f"completion (cooldown blocked restart). Consumer "
+                            f"offset commit may be failing.",
+                        )
             return
 
         log.info(f"TASK_START | task_id={task_id} | title={title} | "
@@ -2528,6 +2695,10 @@ class Manager:
                     await asyncio.wait_for(proc.wait(), timeout=5)
             except Exception:
                 pass  # Best-effort cleanup
+        finally:
+            # Record completion time to prevent restart loops when the bus
+            # consumer re-reads the same task.requested event (sev0 fix).
+            self._completed_task_times[task_id] = time.time()
 
     async def _periodic_wal_checkpoint(self):
         """Run WAL checkpoint on a separate timer, outside the poll cycle.
@@ -2566,6 +2737,13 @@ class Manager:
             try:
                 await asyncio.sleep(30)
 
+                # Prune expired entries from completed task cooldown tracker
+                now = time.time()
+                expired = [tid for tid, ts in self._completed_task_times.items()
+                           if now - ts > 3600]
+                for tid in expired:
+                    del self._completed_task_times[tid]
+
                 if not self._ephemeral_tasks:
                     continue
 
@@ -2590,7 +2768,8 @@ class Manager:
                                 info["requested_by"], elapsed),
                             key=info["requested_by"], source="task-runner")
 
-                        # Clean up
+                        # Clean up — record completion time to prevent restart loops
+                        self._completed_task_times[task_id] = time.time()
                         await self.sessions.kill_ephemeral_session(task_id)
                         self._ephemeral_tasks.pop(task_id, None)
 
@@ -2626,6 +2805,7 @@ class Manager:
                                     info["requested_by"], elapsed),
                                 key=info["requested_by"], source="task-runner")
 
+                            self._completed_task_times[task_id] = time.time()
                             await self.sessions.kill_ephemeral_session(task_id)
                             self._ephemeral_tasks.pop(task_id, None)
 
@@ -2650,6 +2830,7 @@ class Manager:
                             key=info["requested_by"], source="task-runner")
 
                         # Kill session and clean up
+                        self._completed_task_times[task_id] = time.time()
                         await self.sessions.kill_ephemeral_session(task_id)
                         self._ephemeral_tasks.pop(task_id, None)
 
@@ -2883,6 +3064,32 @@ class Manager:
         self._close_log_fh('_metro_log_fh')
         self._metro_log_fh = open(metro_log_path, "a")
 
+        # Ensure node_modules are in sync before starting metro
+        try:
+            log.info("Running bun install to sync node_modules...")
+            install_result = subprocess.run(
+                ["bun", "install"],
+                cwd=str(DISPATCH_APP_DIR),
+                capture_output=True, text=True, timeout=120,
+            )
+            if install_result.returncode != 0:
+                log.warning(f"bun install failed (rc={install_result.returncode}): {install_result.stderr[:500]}")
+            else:
+                log.info("bun install completed successfully")
+        except FileNotFoundError:
+            # bun not installed, try npm
+            try:
+                log.info("bun not found, falling back to npm install...")
+                subprocess.run(
+                    ["npm", "install"],
+                    cwd=str(DISPATCH_APP_DIR),
+                    capture_output=True, text=True, timeout=120,
+                )
+            except Exception as e:
+                log.warning(f"npm install fallback failed: {e}")
+        except Exception as e:
+            log.warning(f"bun install failed: {e}")
+
         # Kill any orphaned process on the metro port
         try:
             import subprocess as _sp
@@ -3024,6 +3231,10 @@ class Manager:
 
     def _start_discord_listener(self):
         """Start the Discord listener thread."""
+        if os.environ.get("DISPATCH_DISABLE_DISCORD", "").lower() in ("1", "true", "yes"):
+            log.info("Discord disabled via DISPATCH_DISABLE_DISCORD env var")
+            return
+
         if self.discord_listener is not None and self.discord_listener.is_alive():
             log.debug("Discord listener already running")
             return
@@ -3056,9 +3267,15 @@ class Manager:
 
         try:
             from assistant.discord_listener import DiscordListener
-            self.discord_listener = DiscordListener(self.discord_queue, discord_channels, discord_token)
+            bot_role_ids = app_config.get("discord.bot_role_ids", [])
+            bot_names = app_config.get("discord.bot_names", ["sven"])
+            self.discord_listener = DiscordListener(
+                self.discord_queue, discord_channels, discord_token,
+                bot_role_ids=bot_role_ids,
+                bot_names=bot_names,
+            )
             self.discord_listener.start()
-            log.info(f"Started Discord listener for channels: {discord_channels}")
+            log.info(f"Started Discord listener for channels: {discord_channels} (roles={bot_role_ids}, names={bot_names})")
             lifecycle_log.info(f"DISCORD_LISTENER | STARTED | channels={discord_channels}")
         except ImportError as e:
             log.warning(f"Discord not available (discord.py not installed): {e}")
@@ -3277,9 +3494,54 @@ class Manager:
 
                     # Log current utilization for perf tracking
                     for key in ("five_hour", "seven_day"):
-                        util = usage.get(key, {}).get("utilization")
+                        util = (usage.get(key) or {}).get("utilization")
                         if util is not None:
                             perf.gauge(f"quota_{key}_pct", util, component="daemon")
+
+                    # Quota-aware model degradation — check if we need to transition
+                    quota_5h = (usage.get("five_hour") or {}).get("utilization", 0)
+                    quota_7d_opus = (usage.get("seven_day_opus") or {}).get("utilization", 0)
+                    qm = self.sessions.quota_manager
+                    qm_actions = qm.check_and_transition(quota_5h, quota_7d_opus)
+                    admin_phone = config.get("owner.phone")
+                    if admin_phone:
+                        for action in qm_actions:
+                            if action == "sms_degraded":
+                                override = qm.get_override_info()
+                                trigger = override.get("trigger", "unknown") if override else "unknown"
+                                self._send_sms(admin_phone,
+                                    f"[SVEN] ⚠️ Quota at danger level — auto-downgrading all sessions to sonnet.\n"
+                                    f"Trigger: {trigger}\n"
+                                    f"5h={quota_5h:.0f}% | 7d-opus={quota_7d_opus:.0f}%\n"
+                                    f"New sessions will use sonnet. Existing sessions switch on next restart.\n"
+                                    f"Reminders auto-paused to conserve tokens.\n"
+                                    f"Manual override: claude-assistant set-global-model opus")
+                            elif action == "sms_recovered":
+                                self._send_sms(admin_phone,
+                                    f"[SVEN] ✅ Quota recovered — back to opus.\n"
+                                    f"5h={quota_5h:.0f}% | 7d-opus={quota_7d_opus:.0f}%\n"
+                                    f"New sessions will use opus. Reminders re-enabled.")
+                            elif action == "sms_still_degraded":
+                                hours = getattr(qm, "last_degraded_hours", None)
+                                duration = f" ({hours:.1f}h)" if hours else ""
+                                self._send_sms(admin_phone,
+                                    f"[SVEN] ⚠️ Still in degraded mode (sonnet){duration}.\n"
+                                    f"5h={quota_5h:.0f}% | 7d-opus={quota_7d_opus:.0f}%\n"
+                                    f"Run: claude-assistant set-global-model --clear  to force opus")
+
+                    # Log quota manager state
+                    perf.gauge("quota_state_degraded", 1 if qm.state == "degraded" else 0, component="daemon")
+
+                # Process circuit breaker actions from deep_health_check
+                cb_actions = getattr(self.sessions, '_circuit_breaker_actions', [])
+                if cb_actions and admin_phone:
+                    for action in cb_actions:
+                        if action == "sms_circuit_open":
+                            self._send_sms(admin_phone,
+                                "[SVEN] 🚨 Deep heal circuit breaker OPEN — Haiku calls failing.\n"
+                                "API may be down. Haiku health checks paused for 5 min.")
+                    self.sessions._circuit_breaker_actions = []
+
             except Exception as e:
                 log.error(f"Quota check failed: {e}")
 

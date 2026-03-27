@@ -208,7 +208,7 @@ Merges contact sessions (from sessions.json) and agent sessions (from sven-messa
 {
   "sessions": [
     {
-      "id": "+16175969496",
+      "id": "+15555550100",
       "type": "contact",
       "name": "Admin User",
       "tier": "admin",
@@ -525,7 +525,7 @@ def build_sender_map(registry: dict) -> dict:
         sender_map[chat_id] = name
         # For individual sessions, chat_id is the phone number
         # This handles group chat sender resolution too — when a group
-        # message has phone="+16175969496", we find "Admin User"
+        # message has phone="+15555550100", we find "Admin User"
         # from his individual session entry
     return sender_map
 ```

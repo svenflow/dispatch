@@ -61,7 +61,7 @@ The `key` column has 5+ different formats for the same chat_id:
 - `bare_id` (e.g., `f3106ee9...`) — most common
 - `imessage/f3106ee9...` — prefixed with backend
 - `imessage:f3106ee9...` — colon-separated
-- `+16175969496` — raw phone number
+- `+15555550100` — raw phone number
 - `signal/xMuT...` — signal prefixed
 
 **Resolution**: NEVER filter by `key`. Always use `json_extract(payload, '$.chat_id')` which is consistently present (99.8% of records) and always contains the canonical chat_id.
@@ -72,7 +72,7 @@ The `key` column has 5+ different formats for the same chat_id:
 ```json
 {
   "chat_id": "f3106ee9...",        // ✅ always present
-  "phone": "+16175969496",          // sender phone/UUID
+  "phone": "+15555550100",          // sender phone/UUID
   "text": "message content",       // ✅ present in 99.7% of records
   "is_group": true,
   "group_name": "admin-user1-user2",
@@ -138,7 +138,7 @@ Returns all active sessions with last message preview, sorted by recency.
 {
   "conversations": [
     {
-      "chat_id": "+16175969496",
+      "chat_id": "+15555550100",
       "display_name": "Admin User",
       "tier": "admin",
       "source": "imessage",
@@ -195,7 +195,7 @@ Returns message history for a specific chat, with compound cursor pagination.
       "id": "123",
       "text": "hello!",
       "sender": "Admin User",
-      "sender_phone": "+16175969496",
+      "sender_phone": "+15555550100",
       "is_from_me": false,
       "timestamp": "2026-03-20T21:39:46Z",
       "timestamp_ms": 1773441586000,

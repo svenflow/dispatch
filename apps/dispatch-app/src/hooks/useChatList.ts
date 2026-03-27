@@ -4,6 +4,8 @@ import { getChats, createChat, deleteChat, markChatAsUnread as apiMarkChatAsUnre
 import type { Conversation } from "../api/types";
 import { notifyUnreadChatCount } from "../state/unreadChats";
 import { makeLayoutAnim, safeConfigureNext, backoffDelay } from "../utils/animation";
+import { getApiBaseUrl } from "../config/constants";
+import { getDeviceToken } from "../api/client";
 
 /** Smooth reorder animation for chat list updates */
 const chatListAnim = makeLayoutAnim(250);
@@ -76,6 +78,35 @@ export function isCurrentlyUnread(conversation: Conversation): boolean {
   return _isServerUnread(conversation);
 }
 
+// ---------------------------------------------------------------------------
+// SSE helpers
+// ---------------------------------------------------------------------------
+
+interface SSEChatsEvent {
+  type: "chats";
+  chats: Conversation[];
+}
+interface SSEKeepalive {
+  type: "keepalive";
+}
+type SSEEvent = SSEChatsEvent | SSEKeepalive;
+
+function parseSSELine(line: string): SSEEvent | null {
+  if (!line.startsWith("data: ")) return null;
+  const jsonStr = line.slice(6).trim();
+  if (!jsonStr || jsonStr === "[DONE]") return null;
+  try {
+    return JSON.parse(jsonStr) as SSEEvent;
+  } catch {
+    console.warn("[useChatList] Malformed SSE JSON:", jsonStr);
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Hook
+// ---------------------------------------------------------------------------
+
 interface UseChatListReturn {
   conversations: Conversation[];
   isLoading: boolean;
@@ -92,48 +123,59 @@ export function useChatList(): UseChatListReturn {
   const [error, setError] = useState<string | null>(null);
   const mountedRef = useRef(true);
   const prevOrderRef = useRef<string[]>([]);
-  /** Fingerprint of last poll result — skip setState when unchanged to avoid re-renders */
+  /** Fingerprint of last result — skip setState when unchanged to avoid re-renders */
   const prevFingerprintRef = useRef<string>("");
 
-  /** Load conversations. Returns true on success, false on failure (for backoff). */
+  // ---------------------------------------------------------------------------
+  // Shared: apply a chat list update (used by both SSE and polling)
+  // ---------------------------------------------------------------------------
+  const applyChats = useCallback((chats: Conversation[]) => {
+    // Sort by last message time descending (most recent first)
+    chats.sort((a, b) => {
+      const timeA = a.last_message_at || a.created_at;
+      const timeB = b.last_message_at || b.created_at;
+      return timeB.localeCompare(timeA);
+    });
+
+    if (!mountedRef.current) return;
+
+    _updateReadTracking(chats);
+
+    // Build lightweight fingerprint — includes unread-relevant fields
+    const fingerprint = chats
+      .map((c) => `${c.id}:${c.last_message_at ?? ""}:${c.is_thinking}:${c.marked_unread}:${c.image_status}:${c.last_opened_at ?? ""}`)
+      .join("|");
+
+    // Skip state update AND badge notification when nothing changed
+    if (fingerprint === prevFingerprintRef.current) return;
+    prevFingerprintRef.current = fingerprint;
+
+    // Count unread chats for tab badge (only on actual changes)
+    const unreadCount = chats.filter((c) => isCurrentlyUnread(c)).length;
+    notifyUnreadChatCount(unreadCount);
+
+    // Animate if order or count changed
+    const newOrder = chats.map((c) => c.id);
+    const orderChanged =
+      newOrder.length !== prevOrderRef.current.length ||
+      newOrder.some((id, i) => id !== prevOrderRef.current[i]);
+    if (orderChanged && prevOrderRef.current.length > 0) {
+      safeConfigureNext(chatListAnim);
+    }
+    prevOrderRef.current = newOrder;
+
+    setConversations(chats);
+    setError(null);
+    setIsLoading(false);
+  }, []);
+
+  // ---------------------------------------------------------------------------
+  // Polling fallback (same as before)
+  // ---------------------------------------------------------------------------
   const loadConversations = useCallback(async (): Promise<boolean> => {
     try {
       const chats = await getChats();
-      // Sort by last message time descending (most recent first)
-      chats.sort((a, b) => {
-        const timeA = a.last_message_at || a.created_at;
-        const timeB = b.last_message_at || b.created_at;
-        return timeB.localeCompare(timeA);
-      });
-      if (mountedRef.current) {
-        _updateReadTracking(chats);
-
-        // Build lightweight fingerprint — includes unread-relevant fields
-        const fingerprint = chats
-          .map((c) => `${c.id}:${c.last_message_at ?? ""}:${c.is_thinking}:${c.marked_unread}:${c.image_status}:${c.last_opened_at ?? ""}`)
-          .join("|");
-
-        // Skip state update AND badge notification when nothing changed
-        if (fingerprint === prevFingerprintRef.current) return true;
-        prevFingerprintRef.current = fingerprint;
-
-        // Count unread chats for tab badge (only on actual changes)
-        const unreadCount = chats.filter((c) => isCurrentlyUnread(c)).length;
-        notifyUnreadChatCount(unreadCount);
-
-        // Animate if order or count changed
-        const newOrder = chats.map((c) => c.id);
-        const orderChanged =
-          newOrder.length !== prevOrderRef.current.length ||
-          newOrder.some((id, i) => id !== prevOrderRef.current[i]);
-        if (orderChanged && prevOrderRef.current.length > 0) {
-          safeConfigureNext(chatListAnim);
-        }
-        prevOrderRef.current = newOrder;
-
-        setConversations(chats);
-        setError(null);
-      }
+      applyChats(chats);
       return true;
     } catch (err) {
       if (mountedRef.current) {
@@ -147,7 +189,204 @@ export function useChatList(): UseChatListReturn {
         setIsLoading(false);
       }
     }
+  }, [applyChats]);
+
+  // ---------------------------------------------------------------------------
+  // SSE connection
+  // ---------------------------------------------------------------------------
+  const sseAbortRef = useRef<AbortController | null>(null);
+  const sseActiveRef = useRef(false);
+  const sseReconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sseFailCountRef = useRef(0);
+
+  const stopSSE = useCallback(() => {
+    sseActiveRef.current = false;
+    sseAbortRef.current?.abort();
+    sseAbortRef.current = null;
+    if (sseReconnectTimerRef.current) {
+      clearTimeout(sseReconnectTimerRef.current);
+      sseReconnectTimerRef.current = null;
+    }
   }, []);
+
+  const connectSSE = useCallback(() => {
+    if (!mountedRef.current) return;
+
+    const token = getDeviceToken();
+    if (!token) {
+      // No token — fall back to polling
+      return false;
+    }
+
+    sseActiveRef.current = true;
+    const abortController = new AbortController();
+    sseAbortRef.current = abortController;
+
+    const url = `${getApiBaseUrl()}/chats/stream?token=${encodeURIComponent(token)}`;
+
+    (async () => {
+      try {
+        const response = await fetch(url, {
+          signal: abortController.signal,
+          headers: { Accept: "text/event-stream" },
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        const reader = response.body?.getReader();
+        if (!reader) throw new Error("No response body");
+
+        // Connected successfully — reset fail count
+        sseFailCountRef.current = 0;
+
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+
+          for (const line of lines) {
+            const event = parseSSELine(line);
+            if (!event) continue;
+
+            if (event.type === "chats") {
+              applyChats(event.chats);
+            }
+            // keepalive — nothing to do
+          }
+        }
+
+        // Stream ended cleanly — reconnect
+        if (mountedRef.current && sseActiveRef.current) {
+          scheduleSSEReconnect();
+        }
+      } catch (err: unknown) {
+        if (abortController.signal.aborted) return; // Intentional abort
+
+        console.warn("[useChatList] SSE error, will reconnect:", err);
+        sseFailCountRef.current += 1;
+
+        if (mountedRef.current && sseActiveRef.current) {
+          // Do one poll immediately so we don't miss data during reconnect gap
+          loadConversations();
+          scheduleSSEReconnect();
+        }
+      }
+    })();
+
+    return true;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [applyChats, loadConversations]);
+
+  const scheduleSSEReconnect = useCallback(() => {
+    if (!mountedRef.current || !sseActiveRef.current) return;
+    if (sseReconnectTimerRef.current) return;
+
+    const delay = backoffDelay(2000, sseFailCountRef.current);
+    sseReconnectTimerRef.current = setTimeout(() => {
+      sseReconnectTimerRef.current = null;
+      if (mountedRef.current && sseActiveRef.current) {
+        connectSSE();
+      }
+    }, delay);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connectSSE]);
+
+  // ---------------------------------------------------------------------------
+  // Polling fallback (used when SSE is not active)
+  // ---------------------------------------------------------------------------
+  const pollFailCountRef = useRef(0);
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const stopPolling = useCallback(() => {
+    if (pollTimerRef.current) {
+      clearTimeout(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+  }, []);
+
+  const schedulePoll = useCallback(() => {
+    if (pollTimerRef.current) return;
+    if (sseActiveRef.current) return; // SSE is handling updates
+    const delay = backoffDelay(3000, pollFailCountRef.current);
+    pollTimerRef.current = setTimeout(async () => {
+      pollTimerRef.current = null;
+      const ok = await loadConversations();
+      if (ok) {
+        pollFailCountRef.current = 0;
+      } else {
+        pollFailCountRef.current += 1;
+      }
+      if (mountedRef.current && !sseActiveRef.current) schedulePoll();
+    }, delay);
+  }, [loadConversations]);
+
+  // ---------------------------------------------------------------------------
+  // Lifecycle: try SSE first, fall back to polling
+  // ---------------------------------------------------------------------------
+
+  // Initial load + start SSE or polling
+  useEffect(() => {
+    loadConversations();
+
+    const sseStarted = connectSSE();
+    if (!sseStarted) {
+      // No token or SSE failed to start — use polling
+      schedulePoll();
+    }
+
+    return () => {
+      stopSSE();
+      stopPolling();
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Refresh on app foreground
+  useEffect(() => {
+    const handleAppStateChange = (nextState: AppStateStatus) => {
+      if (nextState === "active") {
+        loadConversations();
+        // Reconnect SSE if it was dropped while backgrounded
+        if (sseActiveRef.current && !sseAbortRef.current) {
+          connectSSE();
+        } else if (!sseActiveRef.current) {
+          // Restart SSE attempt on foreground
+          const sseStarted = connectSSE();
+          if (sseStarted) {
+            stopPolling();
+          }
+        }
+      }
+    };
+
+    const subscription = AppState.addEventListener(
+      "change",
+      handleAppStateChange,
+    );
+
+    return () => {
+      subscription.remove();
+    };
+  }, [loadConversations, connectSSE, stopPolling]);
+
+  // Cleanup
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  // ---------------------------------------------------------------------------
+  // Mutations
+  // ---------------------------------------------------------------------------
 
   const createConversation = useCallback(
     async (title?: string): Promise<Conversation | null> => {
@@ -222,65 +461,6 @@ export function useChatList(): UseChatListReturn {
     },
     [loadConversations],
   );
-
-  // Initial load
-  useEffect(() => {
-    loadConversations();
-  }, [loadConversations]);
-
-  // Poll for updates with exponential backoff on failures
-  const pollFailCountRef = useRef(0);
-  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const schedulePoll = useCallback(() => {
-    if (pollTimerRef.current) return;
-    const delay = backoffDelay(3000, pollFailCountRef.current);
-    pollTimerRef.current = setTimeout(async () => {
-      pollTimerRef.current = null;
-      const ok = await loadConversations();
-      if (ok) {
-        pollFailCountRef.current = 0;
-      } else {
-        pollFailCountRef.current += 1;
-      }
-      if (mountedRef.current) schedulePoll();
-    }, delay);
-  }, [loadConversations]);
-
-  useEffect(() => {
-    schedulePoll();
-    return () => {
-      if (pollTimerRef.current) {
-        clearTimeout(pollTimerRef.current);
-        pollTimerRef.current = null;
-      }
-    };
-  }, [schedulePoll]);
-
-  // Refresh on app foreground
-  useEffect(() => {
-    const handleAppStateChange = (nextState: AppStateStatus) => {
-      if (nextState === "active") {
-        loadConversations();
-      }
-    };
-
-    const subscription = AppState.addEventListener(
-      "change",
-      handleAppStateChange,
-    );
-
-    return () => {
-      subscription.remove();
-    };
-  }, [loadConversations]);
-
-  // Cleanup
-  useEffect(() => {
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
 
   return {
     conversations,

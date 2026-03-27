@@ -2,7 +2,7 @@
 
 > **Note:** The native SwiftUI Sven app has been deprecated. It has been moved to `~/dispatch/apps/sven-ios-deprecated/`. The active app is the Expo/React Native app at `~/dispatch/apps/dispatch-app/`.
 
-Implementation plan for adding push notifications so Nikhil gets notified when Sven responds.
+Implementation plan for adding push notifications so the admin gets notified when Sven responds.
 
 ## Overview
 

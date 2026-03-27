@@ -5,6 +5,13 @@ description: Post photos, follow/unfollow, like, comment, search, and manage Ins
 
 # Instagram Skill
 
+## Account
+
+The assistant's Instagram account username is configured in `config.local.yaml` under `instagram.username`. Access via the identity system:
+```bash
+!`identity instagram.username`
+```
+
 Control Instagram via authenticated API calls. Uses Chrome session cookies — no API keys needed.
 
 ## CLI

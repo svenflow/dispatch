@@ -48,6 +48,9 @@ FACT_TYPES = {
     "travel": {"required": {"destination"}, "optional": {"depart", "return", "airline", "flight", "hotel", "purpose"}},
     "event": {"required": set(), "optional": {"location", "attendees", "description", "starts_at_local", "local_time", "inferred_tz"}},
     "preference": {"required": {"domain"}, "optional": {"context"}},
+    "project": {"required": set(), "optional": {"description", "tech_stack", "status", "repo"}},
+    "relationship": {"required": set(), "optional": {"description", "relation", "name"}},
+    "deadline": {"required": set(), "optional": {"description", "due_date"}},
 }
 
 # Staleness thresholds (days) per fact type
@@ -57,6 +60,7 @@ STALENESS_THRESHOLDS = {
     "project": 90,
     "travel": 30,
     "event": 30,
+    "deadline": 14,
 }
 
 # Emoji per fact type for CLAUDE.md injection

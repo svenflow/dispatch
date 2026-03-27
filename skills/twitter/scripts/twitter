@@ -319,6 +319,11 @@ def cmd_unfollow(args, cookies, headers):
         print(f"Failed to unfollow: {resp.status_code} {resp.text[:300]}", file=sys.stderr)
 
 
+def cmd_delete(args, cookies, headers):
+    graphql_post("DeleteTweet", {"tweet_id": args.tweet_id}, cookies, headers)
+    print(f"Deleted tweet {args.tweet_id}")
+
+
 def cmd_like(args, cookies, headers):
     graphql_post("FavoriteTweet", {"tweet_id": args.tweet_id}, cookies, headers)
     print(f"Liked tweet {args.tweet_id}")
@@ -594,6 +599,9 @@ def main():
     p = subparsers.add_parser("update-banner", help="Update banner")
     p.add_argument("file")
 
+    p = subparsers.add_parser("delete", help="Delete a tweet")
+    p.add_argument("tweet_id", help="Tweet ID to delete")
+
     subparsers.add_parser("refresh-ids", help="Refresh GraphQL query IDs")
 
     args = parser.parse_args()
@@ -606,7 +614,7 @@ def main():
     headers = make_headers(cookies)
 
     commands = {
-        "post": cmd_post, "timeline": cmd_timeline, "user-tweets": cmd_user_tweets,
+        "delete": cmd_delete, "post": cmd_post, "timeline": cmd_timeline, "user-tweets": cmd_user_tweets,
         "follow": cmd_follow, "unfollow": cmd_unfollow, "like": cmd_like, "unlike": cmd_unlike,
         "retweet": cmd_retweet, "unretweet": cmd_unretweet, "search": cmd_search,
         "notifications": cmd_notifications, "user": cmd_user, "upload": cmd_upload,

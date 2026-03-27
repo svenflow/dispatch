@@ -1,0 +1,91 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["httpx"]
+# ///
+"""
+discord-react - Add an emoji reaction to a Discord message
+
+Usage:
+    discord-react <channel_id> <message_id> <emoji>
+
+Examples:
+    discord-react 1484079826166874162 1234567890 "🦀"
+    discord-react 1484079826166874162 1234567890 "👍"
+    discord-react 1484079826166874162 1234567890 "custom_emoji:123456789"
+"""
+import sys
+import os
+import subprocess
+import argparse
+import urllib.parse
+import httpx
+
+DISCORD_API = "https://discord.com/api/v10"
+
+
+def get_token() -> str:
+    """Get Discord bot token from keychain (primary), then env var, then secrets file."""
+    try:
+        result = subprocess.run(
+            ["security", "find-generic-password", "-s", "discord_bot_token", "-w"],
+            capture_output=True, text=True
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except Exception:
+        pass
+
+    token = os.environ.get("DISCORD_BOT_TOKEN")
+    if token:
+        return token
+
+    secrets_path = os.path.expanduser("~/.claude/secrets.env")
+    if os.path.exists(secrets_path):
+        for line in open(secrets_path):
+            if line.startswith("DISCORD_BOT_TOKEN="):
+                return line.strip().split("=", 1)[1].strip('"').strip("'")
+
+    print("Error: DISCORD_BOT_TOKEN not found in keychain, env, or secrets", file=sys.stderr)
+    sys.exit(1)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Add an emoji reaction to a Discord message")
+    parser.add_argument("channel_id", help="Discord channel ID")
+    parser.add_argument("message_id", help="Discord message ID to react to")
+    parser.add_argument("emoji", help="Emoji to react with (Unicode emoji or custom_name:id)")
+    args = parser.parse_args()
+
+    token = get_token()
+    emoji_encoded = urllib.parse.quote(args.emoji)
+
+    resp = httpx.put(
+        f"{DISCORD_API}/channels/{args.channel_id}/messages/{args.message_id}/reactions/{emoji_encoded}/@me",
+        headers={"Authorization": f"Bot {token}"},
+        timeout=10.0,
+    )
+
+    if resp.status_code == 204:
+        print("OK")
+    elif resp.status_code == 429:
+        import time
+        retry_after = resp.json().get("retry_after", 1)
+        time.sleep(retry_after)
+        resp = httpx.put(
+            f"{DISCORD_API}/channels/{args.channel_id}/messages/{args.message_id}/reactions/{emoji_encoded}/@me",
+            headers={"Authorization": f"Bot {token}"},
+            timeout=10.0,
+        )
+        if resp.status_code == 204:
+            print("OK")
+        else:
+            print(f"Error: {resp.status_code} {resp.text}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        print(f"Error: {resp.status_code} {resp.text}", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

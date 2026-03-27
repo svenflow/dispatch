@@ -35,6 +35,7 @@ DISPATCH_DIR = HOME / "dispatch"
 DB_PATH = DISPATCH_DIR / "state" / "bus.db"
 LOGS_DIR = DISPATCH_DIR / "logs"
 EXTRACTION_LOG = LOGS_DIR / "fact-extraction.jsonl"
+FACT_CHECKPOINTS = HOME / "memories" / "fact_checkpoints.json"
 CONTACTS_CLI = HOME / ".claude/skills/contacts/scripts/contacts"
 READ_SMS_CLI = HOME / ".claude/skills/sms-assistant/scripts/read-sms"
 SEND_SMS_CLI = HOME / ".claude/skills/sms-assistant/scripts/send-sms"
@@ -43,19 +44,22 @@ FACT_CLI = DISPATCH_DIR / "scripts" / "fact"
 sys.path.insert(0, str(DISPATCH_DIR))
 
 # ── Feature flag ──────────────────────────────────────────────
-FACTS_ENABLED = os.environ.get("FACTS_ENABLED", "0") == "1"
+FACTS_ENABLED = os.environ.get("FACTS_ENABLED", "1") == "1"
 
 # ── Circuit breaker thresholds ────────────────────────────────
 MAX_NEW_FACTS_PER_CONTACT = 20
 MAX_NEW_FACTS_TOTAL = 50
 
-# ── Phase 1 fact types ───────────────────────────────────────
-VALID_FACT_TYPES = {"travel", "event", "preference"}
+# ── Fact types ─────────────────────────────────────────────
+VALID_FACT_TYPES = {"travel", "event", "preference", "project", "relationship", "deadline"}
 
 REQUIRED_DETAIL_KEYS = {
     "travel": {"destination"},
     "event": set(),
     "preference": {"domain"},
+    "project": set(),
+    "relationship": set(),
+    "deadline": set(),
 }
 
 
@@ -68,13 +72,23 @@ EXTRACTION_SYSTEM_PROMPT = """You are extracting structured facts from today's c
 Output JSON with new_facts, updated_facts, and expired_fact_ids.
 
 RULES:
-- Only extract facts that are concrete and actionable (travel plans, events, preferences)
+- Extract facts that are concrete and worth remembering across sessions
 - Do NOT extract small talk, opinions about weather, or transient statements
+- Do NOT extract meta-conversation about the assistant system itself (e.g. "restart session", "fix the skill")
+- Do NOT extract anything related to proposals, engagement rings, or surprise plans — these are sensitive and must stay private
 - If a message updates an existing fact, use updated_facts with the existing_fact_id
 - Only expire facts when you see EXPLICIT contradiction ("trip canceled", "changed my mind")
 - Resolve relative dates ("next Saturday", "tomorrow") against MESSAGE timestamps, not current time
 - Assign confidence based on evidence (see rules below)
 - To invalidate a sub-key in an update, set it to null: {"flight": null, "airline": "Delta"}
+
+FACT TYPES:
+- travel: Trips, flights, vacations (details MUST include "destination")
+- event: Upcoming events, appointments, gatherings (birthdays, dinners, parties)
+- preference: Stated likes/dislikes, tool preferences (details MUST include "domain")
+- project: Active projects, things being built or worked on (details should include "description")
+- relationship: Facts about people they mention (family, friends, coworkers)
+- deadline: Due dates, submission deadlines, time-sensitive commitments
 
 CONFIDENCE RULES (evidence-based, not your judgment):
 - high: Direct first-person statement with specific details ("I'm flying to SF March 20-25")
@@ -105,6 +119,18 @@ Output:
 {"new_facts": [{"fact_type": "preference", "summary": "Prefers bun over npm for package management", "confidence": "medium", "details": {"domain": "tooling"}}], "updated_facts": [], "expired_fact_ids": []}
 
 Input messages:
+  [2026-03-18 14:00] "Working on the hand-pose WebGPU model, trying to match MediaPipe accuracy"
+Existing facts: []
+Output:
+{"new_facts": [{"fact_type": "project", "summary": "Building hand-pose model on WebGPU, targeting MediaPipe accuracy parity", "confidence": "high", "details": {"description": "Hand-pose detection model using WebGPU compute shaders, benchmarking against MediaPipe reference"}}], "updated_facts": [], "expired_fact_ids": []}
+
+Input messages:
+  [2026-03-18 09:00] "Partner User's 30th birthday is April 11, planning a party bus bar crawl"
+Existing facts: []
+Output:
+{"new_facts": [{"fact_type": "event", "summary": "Partner User's 30th birthday party bus bar crawl", "confidence": "high", "details": {"description": "Party bus bar crawl across Boston for Partner User's 30th birthday"}, "starts_at": "2026-04-11T00:00:00Z", "ends_at": "2026-04-11T23:59:59Z"}], "updated_facts": [], "expired_fact_ids": []}
+
+Input messages:
   [2026-03-18 12:00] "Grabbed coffee today, weather was nice"
 Existing facts: []
 Output:
@@ -112,7 +138,7 @@ Output:
 
 IMPORTANT:
 - Output ONLY valid JSON. No markdown fences, no explanation text.
-- fact_type must be one of: travel, event, preference
+- fact_type must be one of: travel, event, preference, project, relationship, deadline
 - For travel: details MUST include "destination" (string)
 - For preference: details MUST include "domain" (string)
 - All dates in details should be ISO 8601 (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SSZ)
@@ -184,13 +210,52 @@ def get_all_contacts() -> list[dict]:
     return contacts
 
 
+DEFAULT_LOOKBACK_HOURS = 168  # 7 days default when no checkpoint exists
+
+
+def _load_fact_checkpoints() -> dict:
+    """Load fact extraction checkpoints."""
+    if FACT_CHECKPOINTS.exists():
+        return json.loads(FACT_CHECKPOINTS.read_text())
+    return {}
+
+
+def _save_fact_checkpoints(checkpoints: dict):
+    """Save fact extraction checkpoints."""
+    FACT_CHECKPOINTS.parent.mkdir(parents=True, exist_ok=True)
+    FACT_CHECKPOINTS.write_text(json.dumps(checkpoints, indent=2) + "\n")
+
+
+def _get_since_for_contact(phone: str) -> str:
+    """Get the 'since' timestamp for a contact based on last checkpoint.
+
+    Falls back to DEFAULT_LOOKBACK_HOURS if no checkpoint exists.
+    """
+    checkpoints = _load_fact_checkpoints()
+    cp = checkpoints.get(phone, {})
+    if cp.get("last_processed_ts"):
+        # Use last checkpoint timestamp
+        return cp["last_processed_ts"]
+    # No checkpoint — use default lookback
+    return (datetime.now() - timedelta(hours=DEFAULT_LOOKBACK_HOURS)).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _update_fact_checkpoint(phone: str, contact_name: str):
+    """Update the checkpoint for a contact after successful extraction."""
+    checkpoints = _load_fact_checkpoints()
+    checkpoints[phone] = {
+        "last_processed_ts": datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f"),
+        "contact_name": contact_name,
+    }
+    _save_fact_checkpoints(checkpoints)
+
+
 def get_todays_messages(phone: str, verbose: bool = False) -> str:
-    """Read today's messages for a contact using read-sms CLI.
+    """Read messages since last checkpoint for a contact using read-sms CLI.
 
     Returns formatted messages with timestamps for the extraction prompt.
     """
-    # Get messages from the last ~24 hours
-    since = (datetime.now() - timedelta(hours=24)).strftime("%Y-%m-%d %H:%M:%S")
+    since = _get_since_for_contact(phone)
     result = subprocess.run(
         [str(READ_SMS_CLI), "--chat", phone, "--since", since, "--limit", "500"],
         capture_output=True, text=True, timeout=30,
@@ -783,6 +848,13 @@ def extract_contact_facts(
         msg_lines = [l for l in messages_text.split('\n') if l.strip() and ('|' in l or re.match(r'\[\d{4}-', l))]
         result["sources"]["messages"] = len(msg_lines)
 
+        # Skip LLM call if there are no actual messages (just header lines)
+        if len(msg_lines) == 0:
+            result["status"] = "skipped"
+            result["error"] = "No messages in last 24h (header only)"
+            result["wall_clock_ms"] = int((time.monotonic() - start_time) * 1000)
+            return result
+
         if verbose:
             print(f"  Messages: {len(msg_lines)} lines", file=sys.stderr)
 
@@ -892,6 +964,10 @@ def extract_contact_facts(
 
         # 10. Update last_confirmed for all active facts (contact had activity today)
         update_last_confirmed(phone, existing_facts, dry_run=dry_run)
+
+        # 11. Update checkpoint so next run picks up where we left off
+        if not dry_run:
+            _update_fact_checkpoint(phone, contact_name)
 
         result["status"] = "success"
 

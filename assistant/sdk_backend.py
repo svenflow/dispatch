@@ -32,8 +32,9 @@ from assistant.common import (
     format_message_body,
     get_reply_chain,
 )
-from assistant.health import get_transcript_entries_since, check_fatal_regex, check_deep_haiku
+from assistant.health import get_transcript_entries_since, check_fatal_regex, check_deep_haiku, HaikuCallFailed
 from assistant.sdk_session import SDKSession
+from assistant.quota_manager import QuotaManager, HaikuCircuitBreaker
 from assistant import perf
 from assistant.bus_helpers import (
     produce_event, produce_session_event,
@@ -331,6 +332,11 @@ class SDKBackend:
         self.sessions: Dict[str, SDKSession] = {}  # chat_id -> SDKSession
         self._lock = asyncio.Lock()
 
+        # Quota-aware model degradation
+        state_dir = Path(__file__).parent.parent / "state"
+        self.quota_manager = QuotaManager(state_dir)
+        self.haiku_circuit_breaker = HaikuCircuitBreaker()
+
         # Two-tier healing state
         self._last_fast_check: Dict[str, datetime] = {}  # chat_id -> last scan timestamp
         self._recently_healed: Dict[str, datetime] = {}  # chat_id -> heal timestamp
@@ -609,11 +615,12 @@ class SDKBackend:
                 f"tier={tier} chat_id={chat_id} source={source} resume_id={resume_id}"
             )
 
-            # Resolve model: check registry for explicit override, else default to opus
-            # Discord sessions use sonnet by default (higher volume, cost management)
+            # Resolve model: global override > per-session registry > default
             existing_entry = self.registry.get(chat_id)
             default_model = "sonnet" if source == "discord" else "opus"
-            model = existing_entry.get("model", default_model) if existing_entry else default_model
+            registry_model = existing_entry.get("model", default_model) if existing_entry else default_model
+            model, model_source = self.quota_manager.get_effective_model(chat_id, registry_model, default_model)
+            log.info(f"SESSION_MODEL | chat_id={chat_id} | model={model} | source={model_source}")
 
             session = SDKSession(
                 chat_id=chat_id,
@@ -634,7 +641,7 @@ class SDKBackend:
             session._system_prompt_args = (session_name, contact_name, tier, chat_id, source)
             session._restart_role = restart_role
 
-            # Register in persistent registry (preserve model if already set)
+            # Register in persistent registry (preserve registry model, not overridden model)
             self.registry.register(
                 chat_id=chat_id,
                 session_name=session_name,
@@ -643,7 +650,7 @@ class SDKBackend:
                 contact_name=contact_name,
                 tier=tier,
                 source=source,
-                model=model,
+                model=registry_model,
             )
 
             lifecycle_log.info(
@@ -694,11 +701,12 @@ class SDKBackend:
             f"tier={tier} chat_id={chat_id} source={source}"
         )
 
-        # Resolve model: check registry for explicit override, else default to opus
-        # Discord sessions use sonnet by default (higher volume, cost management)
+        # Resolve model: global override > per-session registry > default
         existing_entry = self.registry.get(chat_id)
         default_model = "sonnet" if source == "discord" else "opus"
-        model = existing_entry.get("model", default_model) if existing_entry else default_model
+        registry_model = existing_entry.get("model", default_model) if existing_entry else default_model
+        model, model_source = self.quota_manager.get_effective_model(chat_id, registry_model, default_model)
+        log.info(f"SESSION_MODEL | chat_id={chat_id} | model={model} | source={model_source}")
 
         session = SDKSession(
             chat_id=chat_id,
@@ -825,6 +833,13 @@ class SDKBackend:
 
         # Inject system prompt outside lock (includes slow subprocess for memory)
         await self._inject_system_prompt_if_needed(session)
+
+        # Block limit suppression: if session already notified user about a block limit,
+        # silently drop further messages until the limit resets. This prevents spamming
+        # the user with repeated "You've hit your limit" messages for every incoming text.
+        if session.is_block_limited:
+            log.info(f"BLOCK_LIMIT_SUPPRESSED | {chat_id} | message dropped (limit active until {session._block_limit_until})")
+            return True  # Return True to prevent upstream error handling
 
         wrapped = wrap_sms(
             msg_body, contact_name, tier, chat_id,
@@ -1162,6 +1177,11 @@ Gemini analyzed the attached image:
             session_name = self.get_group_session_name(chat_id, display_name, source)
             transcript_dir = ensure_transcript_dir(session_name)
 
+            # Resolve model: global override > source-aware default for groups
+            default_model = "sonnet" if source == "discord" else "opus"
+            model, model_source = self.quota_manager.get_effective_model(chat_id, "", default_model)
+            log.info(f"SESSION_MODEL | chat_id={chat_id} | model={model} | source={model_source} | type=group")
+
             session = SDKSession(
                 chat_id=chat_id,
                 contact_name=display_name or chat_id,
@@ -1169,6 +1189,7 @@ Gemini analyzed the attached image:
                 cwd=str(transcript_dir),
                 session_type="group",
                 source=source,
+                model=model,
                 producer=self._producer,
                 resume_id=resume_id,
             )
@@ -1229,6 +1250,11 @@ Gemini analyzed the attached image:
         session_name = self.get_group_session_name(chat_id, display_name, source)
         transcript_dir = ensure_transcript_dir(session_name)
 
+        # Resolve model: global override > source-aware default for groups
+        default_model = "sonnet" if source == "discord" else "opus"
+        model, model_source = self.quota_manager.get_effective_model(chat_id, "", default_model)
+        log.info(f"SESSION_MODEL | chat_id={chat_id} | model={model} | source={model_source} | type=group")
+
         session = SDKSession(
             chat_id=chat_id,
             contact_name=display_name or chat_id,
@@ -1236,6 +1262,7 @@ Gemini analyzed the attached image:
             cwd=str(transcript_dir),
             session_type="group",
             source=source,
+            model=model,
             producer=self._producer,
         )
         await session.start(resume_session_id=None)
@@ -1304,6 +1331,11 @@ Gemini analyzed the attached image:
 
         # Inject system prompt outside lock if session was just created
         await self._inject_system_prompt_if_needed(session)
+
+        # Block limit suppression (same as inject_message)
+        if session.is_block_limited:
+            log.info(f"BLOCK_LIMIT_SUPPRESSED | {chat_id} | group message dropped (limit active until {session._block_limit_until})")
+            return True
 
         wrapped = wrap_group_message(
             chat_id, display_name, sender_name, sender_tier,
@@ -1527,6 +1559,8 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
             # Save session_id before stopping
             if session.session_id:
                 self.registry.update_session_id(chat_id, session.session_id)
+            # Clear was_active so killed sessions don't resurrect on restart
+            self.registry.clear_was_active(chat_id)
             uptime = (datetime.now() - session.created_at).total_seconds()
             produce_session_event(self._producer, chat_id, "session.killed", {
                 "contact_name": session.contact_name, "tier": session.tier,
@@ -1689,6 +1723,11 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
 
             # For stuck sessions, investigate with Haiku before restarting
             if reason.startswith("stuck("):
+                # Skip Haiku investigation if circuit breaker is open
+                if self.haiku_circuit_breaker.is_open():
+                    log.info(f"STUCK_CHECK | {session.chat_id} | Skipped (circuit breaker open)")
+                    return True  # treat as healthy to avoid restart without Haiku confirmation
+
                 from assistant.common import get_session_name
                 session_name = get_session_name(session.chat_id, session.source)
                 # last_inject_at is guaranteed non-None here (stuck detection requires it)
@@ -1701,6 +1740,8 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
                             session.cwd, session.session_id,
                             session_name, stuck_minutes,
                         )
+                        # Haiku call succeeded — record success for circuit breaker
+                        self.haiku_circuit_breaker.record_success()
                         if is_stuck:
                             lifecycle_log.info(
                                 f"STUCK_CONFIRMED | {session_name} | Haiku says stuck, restarting"
@@ -1723,8 +1764,20 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
                                 "stuck_minutes": stuck_minutes,
                                 "haiku_verdict": "working",
                             }, source="daemon")
+                            # Clear recently_healed so future health checks can re-examine
+                            self._recently_healed.pop(cid, None)
+                    except HaikuCallFailed:
+                        # Haiku API failed — feed circuit breaker
+                        cb_actions = self.haiku_circuit_breaker.record_failure()
+                        if "sms_circuit_open" in cb_actions:
+                            self._circuit_breaker_actions = cb_actions
+                        log.warning(f"Stuck investigation Haiku call failed for {cid}")
+                        # Clear recently_healed on failure so session isn't shielded
+                        self._recently_healed.pop(cid, None)
                     except Exception as e:
                         log.error(f"Stuck investigation failed for {cid}: {e}")
+                        # Clear recently_healed on failure so session isn't shielded
+                        self._recently_healed.pop(cid, None)
 
                 self._recently_healed[chat_id] = datetime.now()
                 _fire_and_forget(
@@ -1748,6 +1801,8 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
                     await self.restart_session(cid)
                 except Exception as e:
                     log.error(f"Health check restart failed for {cid}: {e}")
+                    # Clear recently_healed on failure so session isn't shielded
+                    self._recently_healed.pop(cid, None)
 
             _fire_and_forget(_isolated_restart(chat_id), name=f"health-restart-{chat_id}")
             return False
@@ -1854,6 +1909,8 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
                         await self.restart_session(cid, clean=clean)
                     except Exception as e:
                         log.error(f"Fast heal restart failed for {cid}: {e}")
+                        # Clear recently_healed on failure so session isn't shielded
+                        self._recently_healed.pop(cid, None)
 
                 _fire_and_forget(
                     _isolated_restart(chat_id, clean=needs_clean),
@@ -1906,6 +1963,8 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
                         await self.restart_session(cid, clean=clean)
                     except Exception as e:
                         log.error(f"Fast heal restart failed for {cid}: {e}")
+                        # Clear recently_healed on failure so session isn't shielded
+                        self._recently_healed.pop(cid, None)
 
                 _fire_and_forget(
                     _isolated_restart(chat_id, clean=needs_clean),
@@ -1913,9 +1972,27 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
                 )
                 restarted.append(chat_id)
 
+        # Periodic persistence: flush session_id and was_active to registry.
+        # This ensures crash recovery can resume sessions even if shutdown() never ran.
+        # Runs as part of the 60s health check loop — writes are immediate but guarded
+        # by equality checks, so typically 0 writes per cycle after first persistence.
+        persisted = 0
+        for chat_id, session in list(self.sessions.items()):
+            if chat_id == MASTER_SESSION or chat_id.startswith("ephemeral-"):
+                continue
+            if session.session_id:
+                entry = self.registry.get(chat_id)
+                if entry and entry.get("session_id") != session.session_id:
+                    self.registry.update_session_id(chat_id, session.session_id)
+                    persisted += 1
+                # Mark was_active eagerly so crash recovery knows to recreate
+                if entry and not entry.get("was_active"):
+                    self.registry.mark_was_active(chat_id)
+
         lifecycle_log.info(
             f"FAST_HEAL | SCAN | {len(self.sessions)} sessions checked | "
             f"{len(restarted)} fatal"
+            f"{f' | {persisted} session_ids persisted' if persisted else ''}"
         )
         produce_event(self._producer, "system", "health.fast_check_completed", {
             "sessions_checked": len(self.sessions),
@@ -1952,12 +2029,26 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
                 continue
 
             checked += 1
+
+            # Circuit breaker: skip Haiku calls when API is down
+            if self.haiku_circuit_breaker.is_open():
+                continue
+
             entries = get_transcript_entries_since(session.cwd, session.session_id, since)
             if not entries:
                 continue
 
             session_name = get_session_name(session.chat_id, session.source)
-            diagnosis = await check_deep_haiku(entries, session_name)
+            try:
+                diagnosis = await check_deep_haiku(entries, session_name)
+                # Haiku call succeeded — record success for circuit breaker
+                self.haiku_circuit_breaker.record_success()
+            except HaikuCallFailed:
+                # Haiku API call failed — record failure for circuit breaker
+                cb_actions = self.haiku_circuit_breaker.record_failure()
+                if "sms_circuit_open" in cb_actions:
+                    self._circuit_breaker_actions = cb_actions
+                continue  # skip this session, move to next
 
             if diagnosis:
                 lifecycle_log.info(
@@ -2340,6 +2431,19 @@ Quick reference:
                 f"without announcing yourself."
             )
 
+        # Discord-specific: instruct session to read channel history for context
+        discord_context_block = ""
+        if source == "discord":
+            discord_context_block = f"""
+**IMPORTANT — Discord Context Rule:**
+You only receive messages where you are @mentioned, role-pinged, or named. You do NOT see the full channel.
+**Before responding to ANY message**, FIRST run:
+```
+~/.claude/skills/discord/scripts/read-discord "{bare_chat_id}" --limit 25
+```
+This gives you the recent channel context so your reply makes sense. Without this, you'll miss the conversation flow.
+"""
+
         return f"""SESSION START - GROUP CHAT: {shown_name}
 Chat ID: {chat_id}
 
@@ -2348,7 +2452,7 @@ Participants:
 {soul_section}
 {participant_context_section}{chat_context_section}
 {action_block}
-
+{discord_context_block}
 **To send a message to this group using heredoc (no temp files - avoids race conditions between sessions):**
 {send_cmd} "$(cat <<'ENDMSG'
 your message here
@@ -2403,6 +2507,17 @@ Full guidelines: ~/.claude/skills/sms-assistant/SKILL.md
 **NEVER use {default_send} in {backend.label} sessions** - it will send via {default_backend.label} instead of {backend.label}, causing duplicate responses and confusion.
 
 All other system documentation applies normally (see ~/.claude/CLAUDE.md via symlink).
+"""
+
+        # Add markdown rendering note for backends that support it
+        if backend.supports_markdown:
+            content += """
+## Markdown Rendering
+
+**Your messages are rendered as markdown in the app.** Use markdown formatting in your responses:
+- **Bold**, *italic*, `inline code`, code blocks, headers, lists, links, blockquotes
+- The renderer handles: bold, italic, bold+italic, inline code, fenced code blocks, headers (H1-H6), blockquotes, bullet/ordered lists, horizontal rules, and links
+- Use markdown intentionally to make responses clear and scannable
 """
 
         # Substitute {chat_id} placeholder with actual chat ID from transcript dir name

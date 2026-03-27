@@ -246,6 +246,19 @@ Location: `~/.claude/skills/dispatch-app/scripts/reply-app`
 
 Called by Claude to send responses. Stores message in SQLite, generates TTS audio on demand, and sends push notification. (`reply-sven` exists as a backward-compat wrapper.)
 
+```bash
+# Basic text message
+reply-app <chat_id> "message"
+
+# With image attachment
+reply-app <chat_id> "message" --image /path/to/image.jpg
+
+# With audio attachment (mp3, wav, etc.)
+reply-app <chat_id> "message" --audio /path/to/audio.mp3
+```
+
+**Audio attachments** are stored in `~/dispatch/state/dispatch-audio/{chat_id}/` via `copy_audio_to_canonical()` in `dispatch_db.py`. The app renders them with an inline waveform player (works for both user and assistant messages).
+
 ### Sessions (Multi-Chat)
 
 Each chat in the app gets its own dedicated SDK session:
@@ -312,7 +325,7 @@ cd ios && pod install && cd ..
 pkill -f metro; pkill -f "expo start"; pkill -f "expo run"
 
 # 4. Rebuild native + start fresh metro
-npx expo run:ios --device "Nikhil iPhone 16"
+npx expo run:ios --device "Owner's iPhone"
 ```
 
 **Key insight**: If pods are missing but node_modules has the package, the native build will succeed but metro will fail to resolve the module at JS bundle time. Old metro processes with stale caches make this worse — always kill them before rebuilding.
@@ -758,29 +771,9 @@ This ensures the phone picks up changes via fast refresh automatically.
 
 ## OTA Updates (EAS Update)
 
-### Prerequisites
+### Deploying Updates (OTA / Device Build)
 
-**EAS CLI must be authenticated.** This is a recurring issue — EAS auth is NOT persisted across sessions.
-
-```bash
-# Check if logged in
-npx eas whoami
-
-# If "Not logged in", you need an EXPO_TOKEN
-export EXPO_TOKEN="your-token-here"
-```
-
-### Getting an EXPO_TOKEN
-
-1. Go to https://expo.dev → Account Settings → Access Tokens
-2. Create a "Robot" token (or personal token)
-3. Store it persistently:
-   ```bash
-   # Add to secrets.env so all sessions can use it
-   echo 'EXPO_TOKEN=your-token-here' >> ~/.claude/secrets.env
-   ```
-
-### Pushing an OTA Update
+**NO EXPO_TOKEN is configured. EAS OTA is NOT available. Always use local device builds.**
 
 ```bash
 cd ~/dispatch/apps/dispatch-app
@@ -788,24 +781,22 @@ cd ~/dispatch/apps/dispatch-app
 # 1. Verify build passes first
 npx expo export --platform ios
 
-# 2. Push update
-EXPO_TOKEN=$(grep EXPO_TOKEN ~/.claude/secrets.env 2>/dev/null | cut -d= -f2) \
-  eas update --branch production --message "Description of changes"
+# 2. Find connected devices
+xcrun xctrace list devices 2>&1 | grep -i iphone
+
+# 3. Deploy directly to device (use UDID from step 2)
+npx expo run:ios --device "<UDID>" --configuration Release --no-bundler
 ```
 
-### When EAS Isn't Available (Workaround)
+**Device UDIDs** (for reference):
+- Nicklaude's iPhone: `00008140-001A75A936E8801C`
+- Nikhil iPhone 16: `00008150-000C31AA2E52401C`
 
-If no EXPO_TOKEN exists and the admin can't provide one, fall back to local device builds:
-
+If EAS OTA is ever set up in the future, store the token:
 ```bash
-cd ~/dispatch/apps/dispatch-app
-npx expo run:ios --device "Nikhil iPhone 16"
-
-# For release builds:
-npx expo run:ios --device --configuration Release --no-bundler
+echo 'EXPO_TOKEN=your-token-here' >> ~/.claude/secrets.env
 ```
-
-**IMPORTANT**: Always tell the admin when EAS auth is missing so they can set up the token. Don't silently fall back without mentioning it.
+Then use: `EXPO_TOKEN=$(grep EXPO_TOKEN ~/.claude/secrets.env | cut -d= -f2) eas update --branch production --message "desc"`
 
 ### Web compatibility for native modules
 

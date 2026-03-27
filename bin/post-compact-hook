@@ -21,7 +21,7 @@ CWD=$(echo "$INPUT" | jq -r '.cwd // empty' 2>/dev/null || echo "")
 COMPACT_SUMMARY=$(echo "$INPUT" | jq -r '.compact_summary // empty' 2>/dev/null || echo "")
 SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || echo "")
 
-# Derive session_name from cwd: ~/transcripts/imessage/_16175969496 -> imessage/_16175969496
+# Derive session_name from cwd: ~/transcripts/imessage/_15555550100 -> imessage/_15555550100
 SESSION_NAME=""
 if [[ "$CWD" == *"/transcripts/"* ]]; then
   SESSION_NAME="${CWD#*transcripts/}"
@@ -33,7 +33,7 @@ CHAT_ID=""
 if [[ -n "$SESSION_NAME" ]]; then
   SOURCE="${SESSION_NAME%%/*}"
   RAW_CHAT_ID="${SESSION_NAME#*/}"
-  # Convert _16175969496 back to +16175969496
+  # Convert _15555550100 back to +15555550100
   CHAT_ID="${RAW_CHAT_ID/#_/+}"
 fi
 
@@ -72,4 +72,31 @@ if [[ -n "$SESSION_NAME" ]]; then
     --key "$SESSION_NAME" \
     --source compaction \
     2>/dev/null || true
+
+  # 5. Inject "continue" prompt so session resumes after compaction.
+  # Without this, the session stops after compaction because the ResultMessage
+  # ends the current turn and the queue is empty — session waits for user input.
+  # Build the reply command based on backend, matching what wrap_sms() does.
+  case "$SOURCE" in
+    imessage|signal)
+      REPLY_CMD='~/.claude/skills/sms-assistant/scripts/reply "message"'
+      ;;
+    dispatch-app|sven-app)
+      REPLY_CMD="~/.claude/skills/dispatch-app/scripts/reply-app \"$CHAT_ID\" \"message\""
+      ;;
+    dispatch-api)
+      REPLY_CMD="~/.claude/skills/dispatch-app/scripts/reply-dispatch-api \"$CHAT_ID\" \"message\""
+      ;;
+    discord)
+      REPLY_CMD="~/.claude/skills/discord/scripts/send-discord \"$CHAT_ID\" \"message\""
+      ;;
+    *)
+      REPLY_CMD='~/.claude/skills/sms-assistant/scripts/reply "message"'
+      ;;
+  esac
+
+  "$HOME_DIR/dispatch/bin/claude-assistant" inject-prompt "$SESSION_NAME" --admin \
+    "Context was just compacted. If you were mid-task, continue where you left off. If you owe the user a reply, send it now.
+**Important:** You are in a text message session. Communicate back with: $REPLY_CMD" \
+    2>/dev/null &
 fi

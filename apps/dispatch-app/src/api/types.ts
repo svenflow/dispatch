@@ -82,12 +82,12 @@ export interface ChatsResponse {
   chats: Conversation[];
 }
 
-/** Response from GET /api/agents/sessions */
+/** Response from GET /api/app/sessions */
 export interface AgentSessionsResponse {
   sessions: AgentSession[];
 }
 
-/** Response from GET /api/agents/messages */
+/** Response from GET /api/app/messages */
 export interface AgentMessagesResponse {
   messages: AgentMessage[];
   has_more: boolean;
@@ -109,7 +109,7 @@ export interface SdkEvent {
   num_turns: number | null;
 }
 
-/** Response from GET /api/agents/sdk-events */
+/** Response from GET /api/app/sdk-events */
 export interface SdkEventsResponse {
   events: SdkEvent[];
 }

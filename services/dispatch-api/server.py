@@ -99,7 +99,8 @@ logging.basicConfig(
     handlers=[
         logging.FileHandler(LOG_FILE),
         logging.StreamHandler()
-    ]
+    ],
+    force=True  # Clear pre-existing handlers to prevent duplicate log entries
 )
 logger = logging.getLogger("dispatch-api")
 
@@ -158,6 +159,7 @@ for old_path, new_path in _LEGACY_RENAMES.items():
             pass  # Best-effort migration
 CLAUDE_ASSISTANT_CLI = str(Path.home() / "dispatch" / "bin" / "claude-assistant")
 NANO_BANANA_PATH = Path.home() / ".claude" / "skills" / "nano-banana" / "scripts" / "nano-banana"
+MFLUX_PATH = Path.home() / ".local" / "bin" / "mflux-generate-flux2"
 RATE_LIMIT_WINDOW = 60  # seconds
 RATE_LIMIT_MAX = 30  # requests per window
 
@@ -539,35 +541,13 @@ async def inject_prompt_to_app_session(transcript: str, chat_id: str = "voice", 
 
 @app.get("/")
 async def root():
-    """Landing page with links to app pages"""
+    """Serve dispatch-app index.html at root"""
+    _app_dist = Path(__file__).parent.parent.parent / "apps" / "dispatch-app" / "dist"
+    if _app_dist.is_dir():
+        from starlette.responses import FileResponse as _FR
+        return _FR(_app_dist / "index.html")
     from fastapi.responses import HTMLResponse
-    return HTMLResponse("""<!DOCTYPE html>
-<html><head>
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Dispatch</title>
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #000; color: #fff;
-         display: flex; align-items: center; justify-content: center; min-height: 100vh; }
-  .container { text-align: center; }
-  h1 { font-size: 2rem; margin-bottom: 2rem; font-weight: 600; }
-  .links { display: flex; gap: 1rem; flex-wrap: wrap; justify-content: center; }
-  a { display: block; padding: 1rem 2rem; background: #1a1a1a; border: 1px solid #333;
-      border-radius: 12px; color: #fff; text-decoration: none; font-size: 1.1rem;
-      transition: background 0.2s, border-color 0.2s; min-width: 160px; }
-  a:hover { background: #2a2a2a; border-color: #555; }
-  .label { font-weight: 500; }
-  .sub { color: #888; font-size: 0.85rem; margin-top: 4px; }
-</style>
-</head><body>
-<div class="container">
-  <h1>Dispatch</h1>
-  <div class="links">
-    <a href="/app/"><div class="label">App</div><div class="sub">Messages &amp; Settings</div></a>
-    <a href="/agents"><div class="label">Agents</div><div class="sub">Session Management</div></a>
-  </div>
-</div>
-</body></html>""")
+    return HTMLResponse("<h1>Dispatch</h1><p>App not built yet. Run: npx expo export --platform web</p>")
 
 
 @app.get("/health")
@@ -1732,9 +1712,8 @@ def _build_chat_image_url(chat_id: str, image_path_str: str | None) -> str | Non
         return None
 
 
-@app.get("/chats")
-async def list_chats(token: str = None):
-    """List all chats with last message previews."""
+def _fetch_chat_list() -> list[dict]:
+    """Fetch the full chat list from DB. Shared by /chats and /chats/stream."""
     conn = get_db()
     cursor = conn.execute("""
         SELECT c.id, c.title, c.created_at, c.updated_at,
@@ -1775,7 +1754,58 @@ async def list_chats(token: str = None):
             "image_status": row[12],
         })
     conn.close()
-    return {"chats": chats}
+    return chats
+
+
+def _chat_list_fingerprint(chats: list[dict]) -> str:
+    """Build a lightweight fingerprint of the chat list for change detection."""
+    import hashlib
+    parts = []
+    for c in chats:
+        parts.append(
+            f"{c['id']}:{c['last_message_at'] or ''}:{c['is_thinking']}:"
+            f"{c['marked_unread']}:{c['image_status']}:{c['last_opened_at'] or ''}:"
+            f"{c['title'] or ''}:{c['last_message'] or ''}"
+        )
+    return hashlib.md5("|".join(parts).encode()).hexdigest()
+
+
+@app.get("/chats")
+async def list_chats(token: str = None):
+    """List all chats with last message previews."""
+    return {"chats": _fetch_chat_list()}
+
+
+@app.get("/chats/stream")
+async def stream_chats(token: str = None):
+    """SSE stream of chat list updates. Sends full list on change, keepalive every 15s."""
+    from sse_starlette.sse import EventSourceResponse
+
+    validate_token(token)
+
+    async def event_stream():
+        last_fingerprint = ""
+        last_event_time = 0.0
+
+        while True:
+            try:
+                chats = _fetch_chat_list()
+                fp = _chat_list_fingerprint(chats)
+
+                if fp != last_fingerprint:
+                    last_fingerprint = fp
+                    last_event_time = time.time()
+                    yield {"data": json.dumps({"type": "chats", "chats": chats})}
+                elif time.time() - last_event_time >= 15:
+                    last_event_time = time.time()
+                    yield {"data": json.dumps({"type": "keepalive"})}
+
+            except Exception as e:
+                logger.error(f"chats/stream: error fetching chats: {e}")
+
+            await asyncio.sleep(2)
+
+    return EventSourceResponse(event_stream())
 
 
 @app.post("/chats/{chat_id}/open")
@@ -2405,7 +2435,7 @@ async def dashboard_events_stats():
         all_chats = set()
         for r in chat_rows:
             ts = datetime.fromtimestamp(r["bucket_ms"] / 1000).strftime("%Y-%m-%dT%H:%M:%S")
-            # Extract contact name from key (e.g. "imessage/+16175969496" -> short form)
+            # Extract contact name from key (e.g. "imessage/+15555550100" -> short form)
             chat_key = r["key"] or "unknown"
             all_chats.add(chat_key)
             if ts not in chat_map:
@@ -2419,7 +2449,7 @@ async def dashboard_events_stats():
         registry = _load_sessions()
         chat_names = {}
         for chat_key in all_chats_list:
-            # chat_key is like "imessage/+16175969496" or "discord/1234"
+            # chat_key is like "imessage/+15555550100" or "discord/1234"
             parts = chat_key.split("/", 1)
             if len(parts) == 2:
                 backend, chat_id = parts
@@ -3244,7 +3274,7 @@ def _usage_fetch(since: str | None = None):
 
         # Build reverse map: ccusage sessionId → registry info
         # ccusage sessionId encodes the project path with - as separator:
-        #   -Users-sven-transcripts-imessage--16175969496
+        #   -Users-sven-transcripts-imessage--15555550100
         # This is lossy (hyphens in real paths like "dispatch-app" get merged)
         # So we match by checking if the transcript_dir, when encoded the same way, matches
         sid_to_info = {}
@@ -3646,16 +3676,14 @@ class RenameAgentRequest(BaseModel):
 
 # --- Agent endpoints ---
 
-@app.get("/agents", response_class=HTMLResponse)
-async def agents_page():
-    """Serve the agents command center HTML page."""
-    html_path = Path(__file__).parent / "agents.html"
-    if not html_path.exists():
-        raise HTTPException(status_code=404, detail="Agents page not found")
-    return HTMLResponse(content=html_path.read_text())
+@app.get("/agents")
+async def agents_page_redirect():
+    """Legacy redirect: /agents → /app/agents"""
+    from starlette.responses import RedirectResponse
+    return RedirectResponse(url="/app/agents", status_code=301)
 
 
-@app.get("/api/agents/sessions")
+@app.get("/api/app/sessions")
 async def agents_sessions():
     """List all sessions — contact sessions from sessions.json + agent sessions from dispatch-messages.db.
 
@@ -3866,7 +3894,7 @@ async def agents_sessions():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/agents/sdk-events")
+@app.get("/api/app/sdk-events")
 async def agents_sdk_events(
     session_id: str,
     limit: int = 100,
@@ -3936,7 +3964,7 @@ async def agents_sdk_events(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/agents/messages")
+@app.get("/api/app/messages")
 async def agents_messages(
     session_id: str,
     limit: int = 100,
@@ -4134,7 +4162,7 @@ async def agents_messages(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/agents/sessions")
+@app.post("/api/app/sessions")
 async def create_agent_session(request: CreateAgentRequest):
     """Create a new agent session.
 
@@ -4194,7 +4222,7 @@ async def create_agent_session(request: CreateAgentRequest):
     return {"id": chat_id, "name": name, "status": "active"}
 
 
-@app.post("/api/agents/messages")
+@app.post("/api/app/messages")
 async def send_agent_message(request: SendAgentMessageRequest):
     """Send a message to any session (agent or contact).
 
@@ -4258,7 +4286,7 @@ async def send_agent_message(request: SendAgentMessageRequest):
         raise HTTPException(status_code=403, detail="Messaging contact sessions from agents tab is disabled")
 
 
-@app.patch("/api/agents/sessions/{session_id:path}")
+@app.patch("/api/app/sessions/{session_id:path}")
 async def rename_agent_session(session_id: str, request: RenameAgentRequest):
     """Rename an agent session. Only works for dispatch-api sessions (dispatch-api: prefix)."""
     if not session_id.startswith("dispatch-api:"):
@@ -4286,7 +4314,7 @@ async def rename_agent_session(session_id: str, request: RenameAgentRequest):
     return {"ok": True, "id": session_id, "name": name}
 
 
-@app.delete("/api/agents/sessions/{session_id:path}")
+@app.delete("/api/app/sessions/{session_id:path}")
 async def delete_agent_session(session_id: str, delete_messages: bool = False):
     """Kill and optionally delete an agent session.
 
@@ -4325,7 +4353,7 @@ async def delete_agent_session(session_id: str, delete_messages: bool = False):
     return {"ok": True}
 
 
-@app.post("/api/agents/sessions/{session_id:path}/fork-to-chat")
+@app.post("/api/app/sessions/{session_id:path}/fork-to-chat")
 async def fork_agent_to_chat(session_id: str, request: ForkAgentToChatRequest):
     """Fork an agent/contact session into a new dispatch-app chat.
 
@@ -4505,7 +4533,28 @@ async def fork_agent_to_chat(session_id: str, request: ForkAgentToChatRequest):
 
 
 # ---------------------------------------------------------------------------
-# Serve dispatch-app web build at /app (static files)
+# Backward-compat: /api/agents/* → /api/app/* (for native apps during transition)
+# ---------------------------------------------------------------------------
+
+from starlette.responses import RedirectResponse as _RedirectResponse
+
+
+@app.api_route("/api/agents/{path:path}", methods=["GET", "POST", "PATCH", "DELETE"])
+async def agents_compat_redirect(request: Request, path: str):
+    """Redirect old /api/agents/* to /api/app/* preserving method, query, and body."""
+    new_url = f"/api/app/{path}"
+    if request.url.query:
+        new_url += f"?{request.url.query}"
+    # For GET, 301 redirect. For mutating methods, use 307 to preserve method+body.
+    if request.method == "GET":
+        return _RedirectResponse(url=new_url, status_code=301)
+    return _RedirectResponse(url=new_url, status_code=307)
+
+
+# ---------------------------------------------------------------------------
+# Serve dispatch-app web build at / (static files)
+# NOTE: All explicit API routes (/api/*, /chats/*, /health, /dashboard, etc.)
+# are registered above and take priority. The catch-all below MUST remain last.
 # ---------------------------------------------------------------------------
 
 DISPATCH_APP_DIST = Path(__file__).parent.parent.parent / "apps" / "dispatch-app" / "dist"
@@ -4514,29 +4563,34 @@ if DISPATCH_APP_DIST.is_dir():
     from starlette.staticfiles import StaticFiles
     from starlette.responses import FileResponse as StarletteFileResponse
 
+    # Backward compat: /app/* → / (redirect old URLs)
     @app.get("/app")
-    async def app_index():
-        """Serve dispatch-app index.html for root route"""
-        return StarletteFileResponse(DISPATCH_APP_DIST / "index.html")
+    async def app_legacy_root():
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(url="/", status_code=301)
 
     @app.get("/app/{path:path}")
-    async def app_catchall(path: str):
-        """Catch-all for client-side routing — serve index.html for all /app/* routes"""
-        # Try to serve a static file first (e.g. favicon.ico)
+    async def app_legacy_catchall(path: str):
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(url=f"/{path}", status_code=301)
+
+    # Mount static assets at root-level paths (baseUrl="/")
+    app.mount("/_expo", StaticFiles(directory=str(DISPATCH_APP_DIST / "_expo")), name="dispatch-app-expo")
+
+    if (DISPATCH_APP_DIST / "assets").is_dir():
+        app.mount("/assets", StaticFiles(directory=str(DISPATCH_APP_DIST / "assets")), name="dispatch-app-assets")
+
+    # SPA catch-all: serve static files or index.html for client-side routing
+    # This MUST be the last route/mount registered.
+    @app.get("/{path:path}")
+    async def spa_catchall(path: str):
+        """Catch-all for client-side routing — serve static file or index.html"""
         static_path = DISPATCH_APP_DIST / path
-        if static_path.is_file():
+        if static_path.is_file() and ".." not in path:
             return StarletteFileResponse(static_path)
-        # Otherwise serve index.html for client-side routing
         return StarletteFileResponse(DISPATCH_APP_DIST / "index.html")
 
-    # Mount _expo static assets under /app/_expo (Expo baseUrl="/app")
-    app.mount("/app/_expo", StaticFiles(directory=str(DISPATCH_APP_DIST / "_expo")), name="dispatch-app-expo")
-
-    # Mount other static assets
-    if (DISPATCH_APP_DIST / "assets").is_dir():
-        app.mount("/app/assets", StaticFiles(directory=str(DISPATCH_APP_DIST / "assets")), name="dispatch-app-assets")
-
-    logger.info(f"Serving dispatch-app from {DISPATCH_APP_DIST}")
+    logger.info(f"Serving dispatch-app from {DISPATCH_APP_DIST} at /")
 else:
     logger.info(f"dispatch-app dist not found at {DISPATCH_APP_DIST} — skipping static mount")
 

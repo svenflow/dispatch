@@ -21,8 +21,11 @@ import {
 } from "@/src/hooks/useMessages";
 import { MessageBubble } from "@/src/components/MessageBubble";
 import { InputBar } from "@/src/components/InputBar";
+import { DraftBubble } from "@/src/components/DraftBubble";
 import { ThinkingIndicator } from "@/src/components/ThinkingIndicator";
 import { EmptyState } from "@/src/components/EmptyState";
+import { BubbleMenu, type BubbleMenuItem } from "@/src/components/BubbleMenu";
+import { Toast } from "@/src/components/Toast";
 import { useAudioPlayer } from "@/src/hooks/useAudioPlayer";
 import { useSdkEvents } from "@/src/hooks/useSdkEvents";
 import { updateChat, markChatAsOpened, deleteChat } from "@/src/api/chats";
@@ -48,6 +51,9 @@ export function ChatDetailPanel({ chatId, chatTitle, onTitleChange, onDelete }: 
 
   const audioPlayer = useAudioPlayer();
   const [imageSendError, setImageSendError] = useState<string | null>(null);
+  const [dictationDraft, setDictationDraft] = useState<string | null>(null);
+  const [menuState, setMenuState] = useState<{ items: BubbleMenuItem[]; anchorY: number } | null>(null);
+  const [toastMsg, setToastMsg] = useState<string | null>(null);
 
   // Sync title prop changes
   useEffect(() => {
@@ -117,11 +123,35 @@ export function ChatDetailPanel({ chatId, chatTitle, onTitleChange, onDelete }: 
     }
   }, [chatId, currentTitle, onDelete]);
 
+  const lastDeliveredUserMsgId = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.role === "user" && !m.isPending && !m.sendFailed) return m.id;
+    }
+    return null;
+  }, [messages]);
+
+  const handleBubbleLongPress = useCallback((items: BubbleMenuItem[], pageY: number) => {
+    // Wrap "Copy" actions to show toast
+    const wrappedItems = items.map((item) =>
+      item.label === "Copy"
+        ? { ...item, onPress: () => { item.onPress(); setToastMsg("Copied!"); } }
+        : item,
+    );
+    setMenuState({ items: wrappedItems, anchorY: pageY });
+  }, []);
+
   const renderItem = useCallback(
     ({ item }: { item: DisplayMessage }) => (
-      <MessageBubble message={item} audioState={audioPlayer} onRetry={retryMessage} />
+      <MessageBubble
+        message={item}
+        audioState={audioPlayer}
+        onRetry={retryMessage}
+        onLongPress={handleBubbleLongPress}
+        showDelivered={item.id === lastDeliveredUserMsgId}
+      />
     ),
-    [audioPlayer, retryMessage],
+    [audioPlayer, retryMessage, handleBubbleLongPress, lastDeliveredUserMsgId],
   );
 
   const keyExtractor = useCallback((item: DisplayMessage) => item.id, []);
@@ -183,12 +213,27 @@ export function ChatDetailPanel({ chatId, chatTitle, onTitleChange, onDelete }: 
           />
         )}
         <ThinkingIndicator events={sdkEvents} visible={showThinking} />
+        {dictationDraft !== null && <DraftBubble text={dictationDraft} />}
         <InputBar
           onSend={handleSend}
           onSendWithImage={handleSendWithImage}
           chatId={`${sessionPrefix}:${chatId}`}
+          onDictationDraft={setDictationDraft}
         />
       </View>
+      {menuState && (
+        <BubbleMenu
+          items={menuState.items}
+          anchorY={menuState.anchorY}
+          onClose={() => setMenuState(null)}
+        />
+      )}
+      <Toast
+        message={toastMsg || ""}
+        icon="checkmark"
+        visible={!!toastMsg}
+        onHide={() => setToastMsg(null)}
+      />
     </View>
   );
 }

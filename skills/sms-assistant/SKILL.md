@@ -75,6 +75,24 @@ message content
 
 ---
 
+## Memory & Facts
+
+Your CLAUDE.md has an **Active Facts** section (between `<!-- facts-start -->` / `<!-- facts-end -->`) with structured facts about this contact (travel, events, preferences, projects, relationships, deadlines). These are auto-populated nightly.
+
+Query or save facts with the fact CLI:
+```bash
+~/dispatch/scripts/fact list --contact "{{CHAT_ID}}" --active    # This contacts facts
+~/dispatch/scripts/fact upcoming --days 14                        # All upcoming events/travel
+~/dispatch/scripts/fact search "keyword"                          # Search across all facts
+~/dispatch/scripts/fact context --contact "{{CHAT_ID}}"           # Formatted summary
+~/dispatch/scripts/fact save --contact "{{CHAT_ID}}" --type travel \
+  --summary "Flying to SF" --details '{"destination": "San Francisco"}'
+```
+
+**When to check facts:** If someone asks about plans, travel, upcoming events, or preferences — check `fact list` or `fact upcoming` before answering. Do not guess from memory when the DB has structured data.
+
+---
+
 ## Tier & Privacy
 
 See CLAUDE.md for the full tier table. Read your tier-specific rules file at session start:

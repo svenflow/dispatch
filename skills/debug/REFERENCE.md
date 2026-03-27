@@ -34,7 +34,7 @@ macOS uses an epoch of 2001-01-01 00:00:00 UTC = Unix timestamp 978307200.
 | `~/dispatch/logs/memory-consolidation.log` | Memory consolidation runs | Text |
 | `~/dispatch/logs/chat-context-consolidation.log` | Chat context consolidation | Text |
 
-Session log names: session_name with `/` replaced by `-` (e.g., `imessage/_16175969496` -> `imessage-_16175969496.log`).
+Session log names: session_name with `/` replaced by `-` (e.g., `imessage/_15555550100` -> `imessage-_15555550100.log`).
 
 ## Bus Topics & Event Types
 
@@ -91,7 +91,7 @@ Session log names: session_name with `/` replaced by `-` (e.g., `imessage/_16175
 CREATE TABLE sdk_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     timestamp INTEGER NOT NULL,        -- Unix milliseconds
-    session_name TEXT NOT NULL,         -- e.g. "imessage/+16175969496"
+    session_name TEXT NOT NULL,         -- e.g. "imessage/+15555550100"
     chat_id TEXT,
     event_type TEXT NOT NULL,           -- "tool_use", "tool_result", "result", "error"
     tool_name TEXT,                     -- e.g. "Bash", "Read", "Edit"
@@ -169,12 +169,12 @@ LaunchAgent at `~/Library/LaunchAgents/com.sven.dispatch-watchdog.plist`:
 # Recent bus events for a chat_id
 sqlite3 ~/dispatch/state/bus.db \
   "SELECT datetime(timestamp/1000,'unixepoch','localtime'), type, source, payload
-   FROM records WHERE key='+16175969496' ORDER BY timestamp DESC LIMIT 10"
+   FROM records WHERE key='+15555550100' ORDER BY timestamp DESC LIMIT 10"
 
 # Recent SDK tool calls for a session
 sqlite3 ~/dispatch/state/bus.db \
   "SELECT datetime(timestamp/1000,'unixepoch','localtime'), event_type, tool_name, duration_ms, is_error
-   FROM sdk_events WHERE session_name='imessage/+16175969496' ORDER BY timestamp DESC LIMIT 20"
+   FROM sdk_events WHERE session_name='imessage/+15555550100' ORDER BY timestamp DESC LIMIT 20"
 
 # Failed messages in last hour
 sqlite3 ~/dispatch/state/bus.db \

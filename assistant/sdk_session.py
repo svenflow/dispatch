@@ -16,7 +16,7 @@ import re
 import subprocess
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import uuid4
 from pathlib import Path
 from typing import Any, NamedTuple, Optional
@@ -210,6 +210,11 @@ class SDKSession:
         self._system_prompt_type: str | None = None  # "individual" or "group"
         self._restart_role: str | None = None  # "initiator", "passive", or None (fresh)
 
+        # Block limit suppression: when the API returns a "You've hit your limit" message,
+        # we send ONE notification and suppress further responses until the limit resets.
+        self._block_limit_notified: bool = False
+        self._block_limit_until: Optional[datetime] = None  # When the limit resets
+
         # Tool execution timing: maps tool_use_id -> (start_time, tool_input, tool_name)
         self._pending_tools: dict[str, tuple[float, dict, str]] = {}
 
@@ -225,18 +230,23 @@ class SDKSession:
         return _find_transcript(self.cwd, self.session_id)
 
     def check_compacting(self) -> bool:
-        """Check if session is compacting, with 5-min safety auto-clear.
+        """Check if session is compacting, with 2-min safety auto-clear.
 
         NOTE: This is a method, not a property, because it has side effects
         (logging, bus event) on auto-clear. Called from inject_message path
         to determine if user should be notified about ongoing compaction.
+
+        Timeout rationale: real compactions complete in seconds. 2 minutes is
+        generous enough to avoid false clears while keeping sessions from
+        staying degraded if the PostCompact bus event is lost (e.g., post-compact-hook
+        bash script fails silently, uv unavailable, bus write error).
         """
         if self.compacting_since is not None:
             elapsed = time.monotonic() - self.compacting_since
-            if elapsed > 300:
+            if elapsed > 120:
                 from assistant.common import get_session_name
                 session_name = get_session_name(self.chat_id, self.source)
-                self._log.warning(f"COMPACTION_AUTO_CLEAR | session={session_name} | stale flag ({elapsed:.0f}s >5min)")
+                self._log.warning(f"COMPACTION_AUTO_CLEAR | session={session_name} | stale flag ({elapsed:.0f}s >2min)")
                 log.warning(f"[{self.contact_name}] Compaction auto-cleared after {elapsed:.0f}s")
                 produce_event(self._producer, "system", "compaction.auto_cleared",
                     {"session_name": session_name, "chat_id": self.chat_id,
@@ -359,6 +369,47 @@ class SDKSession:
     def is_busy(self) -> bool:
         return self._pending_queries > 0
 
+    @property
+    def is_block_limited(self) -> bool:
+        """Check if session is in block-limit suppression mode.
+
+        Returns True if we've already notified the user about a block limit
+        and the limit hasn't expired yet.
+        """
+        if not self._block_limit_notified:
+            return False
+        if self._block_limit_until and datetime.now() >= self._block_limit_until:
+            # Limit has expired, clear the flag
+            self._block_limit_notified = False
+            self._block_limit_until = None
+            self._log.info("BLOCK_LIMIT | expired, resuming normal operation")
+            return False
+        return True
+
+    # How long to suppress messages after detecting a block limit.
+    # 2 hours is generous — API block limits typically reset every 5 hours.
+    # Using a fixed duration avoids fragile parsing of the API's reset time text,
+    # which is not a stable contract and varies by timezone.
+    BLOCK_LIMIT_SUPPRESS_SECONDS = 7200  # 2 hours
+
+    def _detect_block_limit(self, text: str):
+        """Detect block limit messages from the API and set suppression flag.
+
+        Uses simple keyword matching — no time parsing. The API message format
+        (e.g., "You've hit your limit · resets 10am") is not a stable contract,
+        so we suppress for a fixed duration instead of trying to parse reset times.
+        """
+        if not text:
+            return
+        # Match patterns like "hit your limit", "hit the limit", "reached your limit"
+        if not re.search(r"(hit|reached)\s+(your|the)\s+limit", text, re.IGNORECASE):
+            return
+
+        self._log.info(f"BLOCK_LIMIT | detected: {text}")
+        self._block_limit_until = datetime.now() + timedelta(seconds=self.BLOCK_LIMIT_SUPPRESS_SECONDS)
+        self._block_limit_notified = True
+        self._log.info(f"BLOCK_LIMIT | suppressing for {self.BLOCK_LIMIT_SUPPRESS_SECONDS}s until {self._block_limit_until.isoformat()}")
+
     def is_alive(self) -> bool:
         return self.running and self._task is not None and not self._task.done()
 
@@ -383,9 +434,14 @@ class SDKSession:
         # Catches silent SDK connection hangs where process is alive but not responding.
         # When this triggers, check_session_health() launches a Haiku investigation
         # to determine if the session is genuinely stuck or just running a long operation.
+        #
+        # Sessions that have never completed a turn (turn_count == 0) are still
+        # initializing (processing system prompt, compacting large resume context).
+        # Use a longer timeout (30 min) to avoid false-positive kills during init.
         if self.last_inject_at and self.last_inject_at > self.last_response_at:
             stuck_seconds = (datetime.now() - self.last_inject_at).total_seconds()
-            if stuck_seconds > 600:
+            stuck_threshold = 1800 if self.turn_count == 0 else 600  # 30 min for init, 10 min otherwise
+            if stuck_seconds > stuck_threshold:
                 # If tools are still completing, the session is actively working
                 # (e.g. Agent subagents, long Bash commands). Don't flag as stuck
                 # unless tool activity also stalled for 10+ min.
@@ -610,17 +666,10 @@ class SDKSession:
             ]
             perm_mode = "bypassPermissions"
 
-        # Per-turn limit prevents unbounded costs (bug #15 fix)
-        # Each inject gets up to max_turns before stopping.
-        # Admin/partner get generous limits; restricted tiers get tighter limits.
-        if self.tier in ("admin", "partner"):
-            turn_limit = 200
-        elif self.tier == "family":
-            turn_limit = 50
-        elif self.tier == "favorite":
-            turn_limit = 30
-        else:
-            turn_limit = 30
+        # No per-turn limit — quota monitoring system handles cost protection.
+        # Previously had tiered limits (bug #15) but they caused sessions to
+        # silently stop responding when turns ran out mid-task.
+        turn_limit = None
 
         opts = ClaudeAgentOptions(
             cli_path=Path.home() / ".local" / "bin" / "claude",  # Use system CLI (not bundled) for OAuth compat
@@ -909,6 +958,10 @@ class SDKSession:
             for block in message.content:
                 if isinstance(block, TextBlock):
                     self._log.info(f"OUT | {block.text}")
+
+                    # Detect block limit messages from the API
+                    self._detect_block_limit(block.text)
+
                     # Emit text event so thinking indicator shows "Responding"
                     if self._producer and hasattr(self._producer, 'send_sdk_event'):
                         preview = block.text if block.text else None

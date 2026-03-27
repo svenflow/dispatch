@@ -55,10 +55,13 @@ Write a tweet that matches the TWITTER-SOUL.md voice. Remember:
 Choose a random-ish time between 9am and 9pm ET today. Vary it — don't always pick the same time.
 Format as ISO 8601: e.g. 2026-03-24T14:30:00-04:00
 
-## Step 5: Produce the bus event
-If you have a good tweet, produce it to the bus:
+## Step 5: Schedule the tweet
+Use the schedule-tweet CLI to create a one-shot reminder that will post at the chosen time:
 
-cd ~/dispatch && uv run python -m bus.cli produce tweets '{"text": "your tweet here", "scheduled_for": "2026-03-24T14:30:00-04:00"}' --type tweet.scheduled --source tweet-planner --key svenflowai
+~/.claude/skills/twitter/scripts/schedule-tweet "your tweet here" "2026-03-24T14:30:00-04:00"
+
+This creates a reminder that fires at the specified time and produces a tweet.scheduled bus event,
+which the consumer then posts immediately. Do NOT produce bus events directly.
 
 ## Step 6: Confirm
 Print what you planned and when it will post. If you skipped, say why.

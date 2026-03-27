@@ -17,7 +17,7 @@ Add versioned schema migrations and FTS5 full-text search across all bus and arc
 - v2 (lightweight runner + FTS): Claude 6.4/10 — flagged DELETE collision during prune, CASE/WHEN duplication
 - v3 (MIN(rowid) fix): Claude 8.2/10 — flagged fts_rebuild concurrency, sdk text extraction not centralized
 - v3.1: Claude 9.0/10 — fixed all remaining issues
-- v4: Switched back to SQLAlchemy + Alembic per Nikhil's preference. Claude 8.6/10 — flagged connection API mismatch, missing env.py CLI fallback
+- v4: Switched back to SQLAlchemy + Alembic per the admin's preference. Claude 8.6/10 — flagged connection API mismatch, missing env.py CLI fallback
 - v4.1 (this version): Fixed connection API (raw DBAPI for executescript), dual-path env.py, default sqlalchemy.url. Claude 9.1/10 ✓
 
 ## Architecture Decisions
@@ -1118,8 +1118,8 @@ def handle_search(args):
 # Search messages about WebGPU
 bus search "WebGPU matmul" --topic messages
 
-# Search what Nikhil said
-bus search "deploy" --key "+16175969496" --since 7
+# Search what the admin said
+bus search "deploy" --key "+15555550100" --since 7
 
 # Phrase search
 bus search '"buffer pooling"' --topic messages
@@ -1128,7 +1128,7 @@ bus search '"buffer pooling"' --topic messages
 bus search-sdk "error" --event-type error
 
 # Search specific session's tool usage
-bus search-sdk "send-sms" --session "imessage/_16175969496" --since 3
+bus search-sdk "send-sms" --session "imessage/_15555550100" --since 3
 
 # Check FTS health
 bus fts-status

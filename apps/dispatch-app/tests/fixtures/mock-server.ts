@@ -242,7 +242,7 @@ function handleRoute(state: MockState, route: Route) {
   // -----------------------------------------------------------------------
   // Agent sessions
   // -----------------------------------------------------------------------
-  if (path === "/api/agents/sessions" && method === "GET") {
+  if (path === "/api/app/sessions" && method === "GET") {
     if (state.sessions === "error") {
       return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "Server error" }) });
     }
@@ -254,7 +254,7 @@ function handleRoute(state: MockState, route: Route) {
     });
   }
 
-  if (path === "/api/agents/sessions" && method === "POST") {
+  if (path === "/api/app/sessions" && method === "POST") {
     return route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -262,7 +262,7 @@ function handleRoute(state: MockState, route: Route) {
     });
   }
 
-  // PATCH /api/agents/sessions/:id
+  // PATCH /api/app/sessions/:id
   if (path.match(/^\/api\/agents\/sessions\/[^/]+$/) && method === "PATCH") {
     let body: { name?: string } = {};
     try {
@@ -277,7 +277,7 @@ function handleRoute(state: MockState, route: Route) {
     });
   }
 
-  // DELETE /api/agents/sessions/:id
+  // DELETE /api/app/sessions/:id
   if (path.match(/^\/api\/agents\/sessions\/[^/]+$/) && method === "DELETE") {
     return route.fulfill({
       status: 200,
@@ -289,7 +289,7 @@ function handleRoute(state: MockState, route: Route) {
   // -----------------------------------------------------------------------
   // Agent messages
   // -----------------------------------------------------------------------
-  if (path === "/api/agents/messages" && method === "GET") {
+  if (path === "/api/app/messages" && method === "GET") {
     if (state.agentMessages === "error") {
       return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "Server error" }) });
     }
@@ -302,7 +302,7 @@ function handleRoute(state: MockState, route: Route) {
     });
   }
 
-  if (path === "/api/agents/messages" && method === "POST") {
+  if (path === "/api/app/messages" && method === "POST") {
     return route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -313,7 +313,7 @@ function handleRoute(state: MockState, route: Route) {
   // -----------------------------------------------------------------------
   // SDK events
   // -----------------------------------------------------------------------
-  if (path === "/api/agents/sdk-events" && method === "GET") {
+  if (path === "/api/app/sdk-events" && method === "GET") {
     if (state.sdkEvents === "error") {
       return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "Server error" }) });
     }

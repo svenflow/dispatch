@@ -92,7 +92,7 @@ Fallback steps:
 
 **Payment**: PayPal account ($(security find-generic-password -s "assistant" -a "email" -w)) linked to Privacy.com Mastercard. Direct card payment does NOT work (Spreedly rejects Privacy.com BINs).
 
-**Billing address**: 02135 (Brighton, MA)
+**Billing address**: Look up in config.local.yaml or keychain
 
 ### CSP Warning
 
@@ -372,7 +372,7 @@ Close the Chrome tabs when done.
 security find-generic-password -s "amazon-password" -w
 ```
 
-**Payment**: Privacy.com Mastercard (ending 8061, exp 02/2032). Billing address: 1 Eastburn St, Brighton MA 02135.
+**Payment**: Privacy.com Mastercard (details in keychain: `privacy-card-number`). Billing address in keychain.
 
 ### Pre-flight checks
 
@@ -472,7 +472,7 @@ CARD_CVV=$(security find-generic-password -s "privacy-card-cvv" -w)
 
 # Fill text fields
 axctl type "Google Chrome" --title "Card number" "$CARD_NUM"
-axctl type "Google Chrome" --title "Name on card" "Sven Thorat"
+axctl type "Google Chrome" --title "Name on card" "$(security find-generic-password -s 'privacy-card-name' -w)"
 axctl type "Google Chrome" --role AXTextField --index 4 "$CARD_CVV"  # CVV (unnamed field)
 ```
 5. **Expiration dropdowns require precise coordinate clicking**:
@@ -488,7 +488,7 @@ axctl get "Google Chrome" --role AXMenuItem --index <N> AXPosition  # Get exact 
 cliclick c:<item_center_x>,<item_center_y>  # Click the menu item
 ```
 6. Click "Add your card" button (use `axctl get` for position, `cliclick` to click)
-7. **Set billing address**: Edit card → "Choose or add a billing address" → use 1 Eastburn St address → Save
+7. **Set billing address**: Edit card → "Choose or add a billing address" → use the billing address from keychain → Save
 
 ### Amazon account hold recovery
 

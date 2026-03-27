@@ -33,14 +33,14 @@ twitter timeline --limit 10
 
 #### Read a user's tweets
 ```bash
-twitter user-tweets nsthorat
-twitter user-tweets nsthorat --limit 5
+twitter user-tweets admin-user
+twitter user-tweets admin-user --limit 5
 ```
 
 #### Follow/Unfollow
 ```bash
-twitter follow nsthorat
-twitter unfollow nsthorat
+twitter follow admin-user
+twitter unfollow admin-user
 ```
 
 #### Like/Unlike
@@ -58,7 +58,7 @@ twitter unretweet 1234567890
 #### Search
 ```bash
 twitter search "machine learning"
-twitter search "from:nsthorat" --limit 10
+twitter search "from:admin-user" --limit 10
 ```
 
 #### Notifications
@@ -76,7 +76,7 @@ twitter update-banner /path/to/image.png
 
 #### Lookup user
 ```bash
-twitter user nsthorat
+twitter user admin-user
 ```
 
 #### Upload media

@@ -24,7 +24,7 @@ Search across all bus events using FTS5:
 cd ~/dispatch && uv run -m bus.cli search "WebGPU matmul" --topic messages
 
 # Search what a specific contact said
-cd ~/dispatch && uv run -m bus.cli search "deploy" --key "+16175969496" --since 7
+cd ~/dispatch && uv run -m bus.cli search "deploy" --key "+15555550100" --since 7
 
 # Search with FTS5 operators
 cd ~/dispatch && uv run -m bus.cli search "matmul OR shader" --topic messages
@@ -44,7 +44,7 @@ cd ~/dispatch && uv run -m bus.cli fts-rebuild
 
 **When to use bus search:**
 - "find when we discussed X" → `bus search "X" --topic messages`
-- "what did Nikhil say about Y" → `bus search "Y" --key "+16175969496"`
+- "what did [owner] say about Y" → `bus search "Y" --key "<owner-phone>"`
 - "search for Z in the last 3 days" → `bus search "Z" --since 3`
 - "when did we work on A" → `bus search "A" --topic messages`
 
@@ -103,33 +103,33 @@ Structured facts store concrete, actionable knowledge about contacts (travel, ev
 
 ```bash
 # Query facts
-~/dispatch/scripts/fact list --contact "+16175969496" --active
-~/dispatch/scripts/fact list --contact "+16175969496" --type travel --active
+~/dispatch/scripts/fact list --contact "+15555550100" --active
+~/dispatch/scripts/fact list --contact "+15555550100" --type travel --active
 ~/dispatch/scripts/fact search "california"
 ~/dispatch/scripts/fact upcoming --days 14
 
 # Save a fact manually
-~/dispatch/scripts/fact save --contact "+16175969496" --type travel \
+~/dispatch/scripts/fact save --contact "+15555550100" --type travel \
   --summary "Flying to SF March 20-25" \
   --details '{"destination": "San Francisco", "depart": "2026-03-20"}' \
   --starts "2026-03-20" --ends "2026-03-25"
 
 # Get formatted context for a contact
-~/dispatch/scripts/fact context --contact "+16175969496"
+~/dispatch/scripts/fact context --contact "+15555550100"
 
 # JSON output for programmatic use
 ~/dispatch/scripts/fact list --active --json
 ~/dispatch/scripts/fact upcoming --days 7 --json
 ```
 
-**Contact normalization:** The `fact` CLI normalizes contact identifiers to phone numbers on save (resolves display names via the contacts CLI). Queries search both phone number and display name formats, so `--contact "Nikhil"` and `--contact "+16175969496"` both work.
+**Contact normalization:** The `fact` CLI normalizes contact identifiers to phone numbers on save (resolves display names via the contacts CLI). Queries search both phone number and display name formats, so `--contact "Admin User"` and `--contact "+15555550100"` both work.
 
-**Fact types (Phase 1):** travel, event, preference
+**Fact types:** travel, event, preference, project, relationship, deadline
 **Confidence levels:** high, medium, low (only high/medium shown in CLAUDE.md)
 **Bus events:** fact.created, fact.updated, fact.expired on `facts` topic
 
 **When to use facts vs other memory layers:**
-- "Where is Nikhil?" → `fact list --contact "+16175969496" --type travel --active`
+- "Where is [contact]?" → `fact list --contact "<phone>" --type travel --active`
 - "What's coming up?" → `fact upcoming --days 14`
 - "When did we discuss X?" → `bus search "X" --topic messages` (use bus FTS, not facts)
 - "What do I know about them?" → Check CLAUDE.md + Contacts.app notes

@@ -43,6 +43,8 @@ export function ThinkingIndicator({ events = [], visible = true }: ThinkingIndic
   const scaleAnim = useRef(new Animated.Value(0.8)).current;
 
   const exitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showTimeRef = useRef<number>(0); // When the indicator became visible
+  const MIN_SHOW_MS = 2000; // Don't hide within this window — prevents flicker from rapid is_thinking toggling
 
   useEffect(() => {
     if (visible) {
@@ -51,6 +53,7 @@ export function ThinkingIndicator({ events = [], visible = true }: ThinkingIndic
         clearTimeout(exitTimerRef.current);
         exitTimerRef.current = null;
       }
+      showTimeRef.current = Date.now();
       setShouldRender(true);
       setExpanded(false); // Reset expanded state on new thinking
       if (isReduceMotionEnabled()) {
@@ -73,18 +76,17 @@ export function ThinkingIndicator({ events = [], visible = true }: ThinkingIndic
         ]).start();
       }
     } else {
-      if (isReduceMotionEnabled()) {
-        // Instant hide — no animation
-        exitTimerRef.current = setTimeout(() => {
-          exitTimerRef.current = null;
+      // Ensure minimum display time to prevent flicker
+      const elapsed = Date.now() - showTimeRef.current;
+      const delay = Math.max(100, MIN_SHOW_MS - elapsed);
+
+      const doExit = () => {
+        exitTimerRef.current = null;
+        if (isReduceMotionEnabled()) {
           fadeAnim.setValue(0);
           scaleAnim.setValue(0.8);
           setShouldRender(false);
-        }, 100);
-      } else {
-        // Small delay before exit to prevent flicker on rapid visible toggling
-        exitTimerRef.current = setTimeout(() => {
-          exitTimerRef.current = null;
+        } else {
           Animated.parallel([
             Animated.timing(fadeAnim, {
               toValue: 0,
@@ -99,8 +101,10 @@ export function ThinkingIndicator({ events = [], visible = true }: ThinkingIndic
           ]).start(({ finished }) => {
             if (finished) setShouldRender(false);
           });
-        }, 100);
-      }
+        }
+      };
+
+      exitTimerRef.current = setTimeout(doExit, delay);
     }
     return () => {
       if (exitTimerRef.current) clearTimeout(exitTimerRef.current);

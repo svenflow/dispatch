@@ -23,7 +23,7 @@ Usage:
 
     # Produce
     producer = bus.producer()
-    producer.send("messages", key="+16175969496", value={"type": "message.in", "text": "hello"})
+    producer.send("messages", key="+15555550100", value={"type": "message.in", "text": "hello"})
 
     # Consume
     consumer = bus.consumer(group_id="message-router", topics=["messages"])
@@ -1399,6 +1399,19 @@ class Consumer:
 
         Mirrors: KafkaConsumer.poll()
         """
+        # Validate generation BEFORE reading records to prevent stale consumers
+        # from processing events they can never commit (zombie fencing at poll time).
+        cursor = self._conn.execute(
+            "SELECT generation FROM consumer_groups WHERE group_id = ?",
+            (self.group_id,),
+        )
+        row = cursor.fetchone()
+        if row and row[0] != self._generation:
+            raise StaleGenerationError(
+                f"Consumer generation {self._generation} is stale (current: {row[0]}). "
+                "This consumer has been fenced by a rebalance."
+            )
+
         deadline = _now_ms() + timeout_ms
         records: list[Record] = []
 

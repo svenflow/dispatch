@@ -24,6 +24,11 @@ from typing import Any, Optional
 log = logging.getLogger(__name__)
 lifecycle_log = logging.getLogger("lifecycle")
 
+
+class HaikuCallFailed(Exception):
+    """Raised when a Haiku health check call fails (API error)."""
+    pass
+
 # ──────────────────────────────────────────────────────────────
 # Tier 1: Regex-based fatal error detection
 # ──────────────────────────────────────────────────────────────
@@ -229,7 +234,7 @@ async def check_deep_haiku(entries: list[dict[str, Any]], session_name: str) -> 
 
     except Exception as e:
         log.warning(f"DEEP_HEAL | {session_name} | Haiku call failed: {e}")
-        return None
+        raise HaikuCallFailed(str(e)) from e
 
 
 # ──────────────────────────────────────────────────────────────
@@ -329,8 +334,7 @@ async def check_stuck_haiku(session_cwd: str, session_id: str | None,
 
     except Exception as e:
         log.warning(f"STUCK_CHECK | {session_name} | Haiku investigation failed: {e}")
-        # On failure, don't restart — avoid false positives
-        return False
+        raise HaikuCallFailed(str(e)) from e
 
 
 # ──────────────────────────────────────────────────────────────
@@ -493,7 +497,38 @@ QUOTA_THRESHOLDS = [80, 90, 95]
 
 # Track which thresholds have been alerted per quota type per reset cycle.
 # Key: (quota_type, resets_at_iso) → set of thresholds already alerted
+# Persisted to disk so alerts survive process restarts.
 _quota_alerts_sent: dict[tuple[str, str], set[int]] = {}
+_QUOTA_ALERTS_FILE = Path("~/dispatch/state/quota_alerts_sent.json").expanduser()
+
+
+def _load_quota_alerts() -> None:
+    """Load persisted quota alert state from disk."""
+    global _quota_alerts_sent
+    try:
+        if _QUOTA_ALERTS_FILE.exists():
+            raw = json.loads(_QUOTA_ALERTS_FILE.read_text())
+            # JSON keys are strings — convert back to tuples and sets
+            _quota_alerts_sent = {
+                tuple(k.split("|", 1)): set(v)
+                for k, v in raw.items()
+            }
+    except Exception as e:
+        log.warning(f"QUOTA_ALERTS | Failed to load state: {e}")
+        _quota_alerts_sent = {}
+
+
+def _save_quota_alerts() -> None:
+    """Persist quota alert state to disk."""
+    try:
+        # Convert tuple keys to strings for JSON serialization
+        raw = {
+            f"{k[0]}|{k[1]}": sorted(v)
+            for k, v in _quota_alerts_sent.items()
+        }
+        _QUOTA_ALERTS_FILE.write_text(json.dumps(raw))
+    except Exception as e:
+        log.warning(f"QUOTA_ALERTS | Failed to save state: {e}")
 
 
 def _get_oauth_token() -> str | None:
@@ -510,8 +545,25 @@ def _get_oauth_token() -> str | None:
         return None
 
 
+_quota_cache: dict | None = None
+_quota_cache_ts: float = 0.0
+_QUOTA_CACHE_TTL: float = 60.0  # seconds
+
+
 def fetch_quota_oauth() -> dict | None:
-    """Fetch usage quota via OAuth API. Returns raw usage dict or None."""
+    """Fetch usage quota via OAuth API. Returns raw usage dict or None.
+
+    Results are cached in-memory for 60 seconds to avoid excessive HTTP requests
+    when multiple callers poll frequently.
+    """
+    import time
+
+    global _quota_cache, _quota_cache_ts
+
+    now = time.monotonic()
+    if _quota_cache is not None and (now - _quota_cache_ts) < _QUOTA_CACHE_TTL:
+        return _quota_cache
+
     token = _get_oauth_token()
     if not token:
         log.warning("QUOTA_CHECK | No OAuth token available")
@@ -527,7 +579,10 @@ def fetch_quota_oauth() -> dict | None:
 
     try:
         resp = urllib.request.urlopen(req, context=ctx, timeout=15)
-        return json.loads(resp.read().decode())
+        result = json.loads(resp.read().decode())
+        _quota_cache = result
+        _quota_cache_ts = now
+        return result
     except Exception as e:
         log.warning(f"QUOTA_CHECK | OAuth fetch failed: {e}")
         return None
@@ -541,6 +596,10 @@ def check_quota_thresholds(usage: dict) -> list[dict[str, Any]]:
     Only returns alerts that haven't been sent yet for this reset cycle.
     """
     global _quota_alerts_sent
+
+    # Load persisted state on first call or after restart
+    if not _quota_alerts_sent:
+        _load_quota_alerts()
 
     alerts: list[dict[str, Any]] = []
 
@@ -560,7 +619,18 @@ def check_quota_thresholds(usage: dict) -> list[dict[str, Any]]:
             continue
         resets_at = block.get("resets_at", "unknown")
 
-        cache_key = (quota_type, resets_at)
+        # Normalize resets_at to minute precision for stable cache keys.
+        # The API returns varying microseconds (e.g., .358340 vs .014720)
+        # which would defeat dedup if used as-is.
+        normalized_resets = resets_at
+        if resets_at != "unknown":
+            try:
+                _rt = datetime.fromisoformat(resets_at)
+                normalized_resets = _rt.replace(second=0, microsecond=0).isoformat()
+            except (ValueError, TypeError):
+                pass
+
+        cache_key = (quota_type, normalized_resets)
 
         # Clean up old entries: if resets_at has passed, remove from cache
         if resets_at != "unknown":
@@ -611,6 +681,9 @@ def check_quota_thresholds(usage: dict) -> list[dict[str, Any]]:
             stale_keys.append(key)
     for k in stale_keys:
         _quota_alerts_sent.pop(k, None)
+
+    # Persist state to disk so it survives process restarts
+    _save_quota_alerts()
 
     return alerts
 

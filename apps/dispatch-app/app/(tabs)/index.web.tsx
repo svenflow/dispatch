@@ -6,7 +6,7 @@
  *
  * Selected chat ID is stored in the URL hash (#chatId) so it persists across refresh.
  */
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Animated,
@@ -14,6 +14,7 @@ import {
   Pressable,
   StyleSheet,
   Text,
+  TextInput,
   View,
   useWindowDimensions,
 } from "react-native";
@@ -61,6 +62,18 @@ export default function ChatListWebScreen() {
     createConversation,
     deleteConversation,
   } = useChatList();
+
+  // Search
+  const [searchQuery, setSearchQuery] = useState("");
+  const filteredConversations = useMemo(() => {
+    if (!searchQuery.trim()) return conversations;
+    const q = searchQuery.toLowerCase();
+    return conversations.filter(
+      (c) =>
+        c.title.toLowerCase().includes(q) ||
+        (c.last_message ?? "").toLowerCase().includes(q),
+    );
+  }, [conversations, searchQuery]);
 
   // Desktop split view state — initialize from URL hash
   const [selectedChatId, setSelectedChatId] = useState<string | null>(getHashChatId);
@@ -169,6 +182,7 @@ export default function ChatListWebScreen() {
             onPress={() => handleOpenChat(item)}
             onLongPress={() => handleDeleteChat(item)}
             isUnread={unread}
+            isSelected={isSelected}
           />
           {isSelected && <View style={styles.selectedIndicator} />}
         </Pressable>
@@ -216,7 +230,15 @@ export default function ChatListWebScreen() {
       {/* Left panel: chat list */}
       <View style={[styles.sidebar, { width: SIDEBAR_WIDTH }]}>
         <View style={styles.sidebarHeader}>
-          <Text style={styles.sidebarTitle}>Chats</Text>
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search…"
+            placeholderTextColor="#71717a"
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
           <Pressable onPress={handleNewChat} style={styles.newChatButton}>
             <Text style={styles.newChatButtonText}>+ New</Text>
           </Pressable>
@@ -227,14 +249,18 @@ export default function ChatListWebScreen() {
           </View>
         ) : null}
         <FlatList
-          data={conversations}
+          data={filteredConversations}
           keyExtractor={(item) => item.id}
           renderItem={renderItem}
           refreshing={isLoading}
           onRefresh={loadConversations}
-          contentContainerStyle={conversations.length === 0 ? styles.emptyContainer : undefined}
+          contentContainerStyle={filteredConversations.length === 0 ? styles.emptyContainer : undefined}
           ListEmptyComponent={
-            <EmptyState title="No conversations yet" subtitle='Click "+ New" to start a chat' />
+            searchQuery ? (
+              <EmptyState title="No matches" subtitle="Try a different search" />
+            ) : (
+              <EmptyState title="No conversations yet" subtitle='Click "+ New" to start a chat' />
+            )
           }
         />
       </View>
@@ -338,6 +364,16 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     fontSize: 20,
     fontWeight: "700",
+  },
+  searchInput: {
+    flex: 1,
+    height: 34,
+    backgroundColor: "#27272a",
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    color: colors.textPrimary,
+    fontSize: 14,
+    marginRight: 10,
   },
   newChatButton: {
     paddingHorizontal: 14,

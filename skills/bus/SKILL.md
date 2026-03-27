@@ -73,7 +73,7 @@ Table is `WITHOUT ROWID` with composite primary key.
 | partition | INTEGER | Partition number within topic. NOT NULL |
 | offset | INTEGER | Per-partition sequence number. NOT NULL |
 | timestamp | INTEGER | Unix epoch milliseconds. NOT NULL |
-| key | TEXT | Routing key (e.g. "imessage/+16175969496"). Nullable |
+| key | TEXT | Routing key (e.g. "imessage/+15555550100"). Nullable |
 | type | TEXT | Event type (e.g. "message.received", "session.heartbeat"). Nullable |
 | source | TEXT | Producer source (e.g. "imessage", "sdk", "health"). Nullable |
 | payload | TEXT | JSON payload. NOT NULL |

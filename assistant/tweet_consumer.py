@@ -1,22 +1,17 @@
 """
-Tweet Consumer: watches tweets topic for scheduled tweets and posts them at the right time.
+Tweet Consumer: watches tweets topic and posts tweets immediately.
 
-When a tweet.scheduled event arrives, this consumer checks if it's time to post.
-If the scheduled time has passed, it posts immediately. If it's in the future,
-it re-produces the event with a delay (via a simple sleep-and-retry approach).
+Design: The consumer posts immediately when it sees a tweet.scheduled event.
+Time-delay logic lives in the planner, which creates a one-shot reminder
+for the chosen posting time. When that reminder fires, it produces the
+tweet.scheduled bus event, and this consumer posts it right away.
 
-Since the ConsumerRunner polls continuously, we use a simple approach:
-- On each poll, check if scheduled_for <= now → post it
-- If scheduled_for > now → skip (don't commit), it'll come back next poll
-
-Actually, the bus consumer commits after processing, so we need a different approach.
-We'll post immediately if it's time, or sleep until the scheduled time in the action handler.
-Since each tweet is independent and rare (1/day max), sleeping in the handler is fine.
+This avoids sleeping in the consumer handler (which blocks the thread and
+is fragile across restarts/rebalances).
 """
 
 import logging
 import subprocess
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -26,40 +21,34 @@ TWITTER_CLI = Path.home() / ".claude" / "skills" / "twitter" / "scripts" / "twit
 
 
 def handle_tweet_scheduled(records: list) -> None:
-    """Handle tweet.scheduled events — wait for scheduled time, then post."""
+    """Handle tweet.scheduled events — post immediately."""
     for record in records:
         payload = record.payload
         text = payload.get("text", "")
-        scheduled_for = payload.get("scheduled_for", "")
 
         if not text:
             log.warning("tweet.scheduled event with empty text, skipping")
             continue
 
-        # Parse scheduled time
+        # Skip test/dry-run events
+        if payload.get("dry_run") or text.startswith("__TEST"):
+            log.info("Skipping dry-run/test tweet: %s", text[:80])
+            continue
+
+        # Check staleness — if scheduled_for is way in the past (>24h), skip
+        scheduled_for = payload.get("scheduled_for", "")
         if scheduled_for:
             try:
                 post_at = datetime.fromisoformat(scheduled_for)
-                # Make sure it's timezone-aware
                 if post_at.tzinfo is None:
                     from zoneinfo import ZoneInfo
                     post_at = post_at.replace(tzinfo=ZoneInfo("America/New_York"))
-
-                now = datetime.now(timezone.utc)
-                wait_seconds = (post_at - now).total_seconds()
-
-                if wait_seconds > 0:
-                    log.info(
-                        "Tweet scheduled for %s — waiting %.0f seconds (%.1f hours)",
-                        scheduled_for, wait_seconds, wait_seconds / 3600,
-                    )
-                    # Cap at 24 hours — if somehow scheduled for far future, don't block forever
-                    if wait_seconds > 86400:
-                        log.warning("Tweet scheduled >24h in future, posting now anyway")
-                    else:
-                        time.sleep(wait_seconds)
-            except (ValueError, TypeError) as e:
-                log.warning("Could not parse scheduled_for '%s': %s — posting now", scheduled_for, e)
+                age_hours = (datetime.now(timezone.utc) - post_at).total_seconds() / 3600
+                if age_hours > 24:
+                    log.warning("Tweet is %.1f hours stale, skipping: %s", age_hours, text[:80])
+                    continue
+            except (ValueError, TypeError):
+                pass  # Can't parse — just post it
 
         # Post the tweet
         log.info("Posting tweet: %s", text[:80])
@@ -74,7 +63,8 @@ def handle_tweet_scheduled(records: list) -> None:
             if result.returncode == 0:
                 log.info("Tweet posted successfully: %s", result.stdout.strip()[:200])
             else:
-                log.error("Tweet post failed (rc=%d): %s", result.returncode, result.stderr[:500])
+                log.error("Tweet post failed (rc=%d): stderr=%s stdout=%s",
+                          result.returncode, result.stderr[:500], result.stdout[:500])
         except subprocess.TimeoutExpired:
             log.error("Tweet post timed out after 60s")
         except Exception as e:

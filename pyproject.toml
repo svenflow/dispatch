@@ -51,6 +51,13 @@ combine-as-imports = true
 [tool.ruff.format]
 indent-style = "space"
 
+[tool.ty.rules]
+# Suppress false positives from dynamic attributes and monkey-patching
+unresolved-attribute = "ignore"  # self.sessions, self._send_sms etc are dynamic attrs
+invalid-assignment = "ignore"    # monkey-patching SDK parse_message
+invalid-argument-type = "ignore" # SDK hook type narrowing
+unresolved-reference = "ignore"  # f-string variable resolution false positives
+
 [tool.ty.environment]
 # Extra paths for modules that are dynamically added to sys.path
 extra-paths = [
@@ -58,4 +65,5 @@ extra-paths = [
     "skills/reminders/scripts",
     "skills/sms-assistant/scripts",
     "skills/tts/scripts",
+    "skills/signal/scripts",
 ]

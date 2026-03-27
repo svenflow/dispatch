@@ -112,6 +112,27 @@ uv run python -m bus.cli tail         # Live tail of events
 uv run python -m bus.cli export       # Export events as JSONL
 ```
 
+**Consumer best practices — NEVER sleep in a handler:**
+
+Consumer handlers must process events and return quickly. Long sleeps kill the consumer's heartbeat, causing it to go DEAD and stop processing all future events.
+
+```python
+# WRONG — blocks consumer thread, kills heartbeat, consumer goes DEAD
+def handle_tweet_scheduled(records):
+    for record in records:
+        time.sleep((post_time - now).total_seconds())  # could be hours!
+        post_tweet(record)
+
+# CORRECT — consumer handles immediately; delay lives in the scheduler
+def handle_tweet_scheduled(records):
+    for record in records:
+        post_tweet(record)  # event was scheduled to arrive at the right time
+```
+
+**The correct pattern for delayed delivery:** Use `claude-assistant remind add --event` to schedule the bus event for the desired future time. The reminder system fires it at the right moment; the consumer handles it immediately on arrival. This is exactly how `assistant/tweet_consumer.py` works. If an event somehow arrives stale (e.g., after a restart), check `scheduled_for` age and skip if >24h old.
+
+Check consumer health with: `uv run python -m bus.cli groups` — look for DEAD status or very old heartbeats.
+
 ### Resource Lifecycle (ResourceRegistry)
 
 All persistent resources (file handles, SQLite connections, subprocesses) are managed through a centralized `ResourceRegistry` in `assistant/resources.py`:

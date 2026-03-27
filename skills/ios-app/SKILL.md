@@ -33,7 +33,7 @@ Build, test, and deploy iOS apps from the command line.
 
 ### Deployment Priority: Direct Device Deploy > TestFlight
 
-**When deploying to Nikhil's device:**
+**When deploying to the owner's device:**
 1. **FIRST: Try direct device deploy via Xcode** - instant (~30 seconds), no TestFlight processing
 2. **FALLBACK: Use TestFlight** - only if direct deploy fails (not on wifi, device unavailable)
 
@@ -41,12 +41,12 @@ Direct device deploy is 10x faster than TestFlight (30s vs 10-30 min processing)
 
 **Decision tree:**
 ```
-Is Nikhil available on same WiFi network?
+Is the admin available on same WiFi network?
 ├── YES → Direct device deploy (preferred)
 │   └── Check with: xcrun devicectl list devices
-│   └── Deploy with: xcrun devicectl device install app --device "Nikhil iPhone 16" <app_path>
+│   └── Deploy with: xcrun devicectl device install app --device "Owner's iPhone" <app_path>
 └── NO → TestFlight
-    └── When: Nikhil is away, device sleeping, or sharing with multiple testers
+    └── When: the owner is away, device sleeping, or sharing with multiple testers
 ```
 
 ### Why This Matters
@@ -149,7 +149,7 @@ xcrun simctl list devices available
 
 ### Boot a Simulator
 ```bash
-xcrun simctl boot "iPhone 16 Pro"
+xcrun simctl boot "iPhone 17 Pro"
 
 # Open Simulator.app to see it
 open -a Simulator
@@ -161,7 +161,7 @@ xcodebuild \
   -project ~/code/ios-apps/AppName/AppName.xcodeproj \
   -scheme AppName \
   -sdk iphonesimulator \
-  -destination 'platform=iOS Simulator,name=iPhone 16 Pro' \
+  -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
   -configuration Debug \
   CODE_SIGN_IDENTITY="" \
   CODE_SIGNING_REQUIRED=NO \
@@ -229,7 +229,7 @@ extension Logger {
 xcrun simctl shutdown booted
 
 # Erase all content (factory reset)
-xcrun simctl erase "iPhone 16 Pro"
+xcrun simctl erase "iPhone 17 Pro"
 
 # Open a URL in simulator
 xcrun simctl openurl booted "https://example.com"
@@ -249,7 +249,7 @@ xcrun simctl get_app_container booted com.dispatch.AppName
 
 **Deploy directly to physical devices via Xcode - instant, no TestFlight wait.**
 
-**⚠️ ALWAYS try this first when Nikhil is available.** It's 10-30x faster than TestFlight.
+**⚠️ ALWAYS try this first when the owner is available.** It's 10-30x faster than TestFlight.
 
 ### Prerequisites (One-Time Setup)
 
@@ -260,7 +260,7 @@ xcrun simctl get_app_container booted com.dispatch.AppName
 After USB pairing once, future deploys can be wireless.
 
 **Known paired devices:**
-- "Nikhil iPhone 16" - Nikhil's iPhone (paired 2026-02-09)
+- "Owner's iPhone" - the owner's iPhone (paired 2026-02-09)
 
 ### Check Device Availability
 
@@ -305,7 +305,7 @@ xcodebuild \
 ### Device Names
 
 Find exact device name with `xcrun devicectl list devices`. Example names:
-- "Nikhil iPhone 16" - Nikhil's iPhone
+- "Owner's iPhone" - the owner's iPhone
 - "iPhone 16 Pro Max" - generic name if renamed
 
 ### Quick Deploy Command
@@ -317,25 +317,25 @@ For rapid iteration, use this one-liner after building:
 xcodebuild \
   -project ~/code/ios-apps/AppName/AppName.xcodeproj \
   -scheme AppName \
-  -destination 'platform=iOS,name=Nikhil iPhone 16' \
+  -destination 'platform=iOS,name=Owner's iPhone' \
   -allowProvisioningUpdates \
   build
 
 # Find and install
 APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData -name "AppName.app" -path "*/Debug-iphoneos/*" 2>/dev/null | head -1)
-xcrun devicectl device install app --device "Nikhil iPhone 16" "$APP_PATH"
+xcrun devicectl device install app --device "Owner's iPhone" "$APP_PATH"
 ```
 
 ### When to Use TestFlight Instead
 
 Use TestFlight only when:
-- Device not on same wifi network (Nikhil is away)
+- Device not on same wifi network (the owner is away)
 - Device unavailable/sleeping and user can't wake it
-- Need to distribute to multiple testers (not just Nikhil)
+- Need to distribute to multiple testers (not just the owner)
 - Need build to persist (device deploys expire after ~7 days)
 - Sharing with external beta testers
 
-**Default to direct deploy** for Nikhil when he's available and on the same network.
+**Default to direct deploy** for the admin when they're available and on the same network.
 
 ## TestFlight Deployment Workflow
 

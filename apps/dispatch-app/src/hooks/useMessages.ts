@@ -252,7 +252,14 @@ export function useMessages(adapter: MessageAdapter, _cacheKey?: string): UseMes
           (m) => !m.isPending || m.serverMessageId || !newContents.has(m.content),
         );
 
-        return [...deduped, ...truly_new];
+        // Final dedup: ensure no duplicate IDs (prevents React key warnings)
+        const merged = [...deduped, ...truly_new];
+        const seen = new Set<string>();
+        return merged.filter((m) => {
+          if (seen.has(m.id)) return false;
+          seen.add(m.id);
+          return true;
+        });
       });
 
       updateLatestTs(newMsgs);

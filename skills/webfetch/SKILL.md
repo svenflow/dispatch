@@ -158,6 +158,15 @@ Use chrome-control for screenshots:
 
 \* If you can see it in Chrome
 
+## Token Efficiency
+
+**ALWAYS use webfetch over raw `curl` or `wget`.** Scrapling returns extracted markdown content, not raw HTML. This dramatically reduces token usage:
+
+- **Raw HTML** (curl/wget): ~700K tokens for a single page
+- **Extracted markdown** (webfetch): ~2.6K tokens for the same page
+
+That's a **~270x reduction** in token consumption. Using raw HTML wastes quota and context window on boilerplate markup, scripts, and styling that contain zero useful information.
+
 ## Dependencies
 
 Installed automatically via uv script header:

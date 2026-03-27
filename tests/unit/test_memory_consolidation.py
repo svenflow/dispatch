@@ -63,7 +63,7 @@ That's all.'''
 
         exclusions = ["propose", "proposal", "engagement ring", "surprise party"]
 
-        assert is_excluded("Planning to propose to Caroline", exclusions) == True
+        assert is_excluded("Planning to propose to Partner User", exclusions) == True
         assert is_excluded("Bought an ENGAGEMENT RING", exclusions) == True
         assert is_excluded("Planning a proposal", exclusions) == True
         assert is_excluded("Has a dog named Max", exclusions) == False
@@ -337,7 +337,7 @@ class TestExclusionFiltering:
 
         facts = [
             "Planning to propose on May 9th",
-            "Has a girlfriend named Caroline",
+            "Has a girlfriend named Partner User",
             "Bought engagement ring",
             "Plays tennis",
         ]
@@ -346,7 +346,7 @@ class TestExclusionFiltering:
 
         assert len(filtered) == 2
         assert "Plays tennis" in filtered
-        assert "Has a girlfriend named Caroline" in filtered
+        assert "Has a girlfriend named Partner User" in filtered
 
     def test_exclusion_case_insensitive(self):
         """Should match exclusions regardless of case."""

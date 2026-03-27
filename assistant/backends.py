@@ -30,6 +30,10 @@ class BackendConfig(BaseModel, frozen=True):
     # If True, a MessageReader implementation must exist for this backend.
     supports_image_context: bool = False
 
+    # Whether the client renders markdown in messages.
+    # If True, sessions are told to use markdown formatting in responses.
+    supports_markdown: bool = False
+
 
 BACKENDS: dict[str, BackendConfig] = {
     "imessage": BackendConfig(
@@ -69,7 +73,7 @@ BACKENDS: dict[str, BackendConfig] = {
         registry_prefix="discord:",
         send_cmd='~/.claude/skills/discord/scripts/send-discord "{chat_id}"',
         send_group_cmd='~/.claude/skills/discord/scripts/send-discord "{chat_id}"',
-        history_cmd="",  # No history CLI yet (could add later via Discord REST API)
+        history_cmd='~/.claude/skills/discord/scripts/read-discord "{chat_id}" --limit {limit}',
         supports_image_context=False,  # Discord CDN URLs, not local files
     ),
     "dispatch-app": BackendConfig(
@@ -82,6 +86,7 @@ BACKENDS: dict[str, BackendConfig] = {
         reply_hint='~/.claude/skills/dispatch-app/scripts/reply-app "{chat_id}" "message"',
         history_cmd="",
         supports_image_context=True,
+        supports_markdown=True,
     ),
     "dispatch-api": BackendConfig(
         name="dispatch-api",

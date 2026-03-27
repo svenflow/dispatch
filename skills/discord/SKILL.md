@@ -20,6 +20,30 @@ Send and receive messages in Discord channels via a bot integration.
 ~/.claude/skills/sms-assistant/scripts/reply "message"
 ```
 
+### Read recent messages (for context)
+```bash
+~/.claude/skills/discord/scripts/read-discord <channel_id>              # Last 25 messages
+~/.claude/skills/discord/scripts/read-discord <channel_id> --limit 50   # Last 50 messages
+~/.claude/skills/discord/scripts/read-discord <channel_id> --before <message_id>  # Before a message
+~/.claude/skills/discord/scripts/read-discord <channel_id> --after <message_id>   # After a message
+~/.claude/skills/discord/scripts/read-discord <channel_id> --json       # Raw JSON output
+```
+
+Use this to get context when you are tagged — read the last N messages to understand what the conversation is about before responding.
+
+### React to a message with an emoji
+```bash
+~/.claude/skills/discord/scripts/discord-react <channel_id> <message_id> "🦀"
+```
+
+To get message IDs, fetch recent messages via the Discord API:
+```python
+httpx.get(f"https://discord.com/api/v10/channels/{channel_id}/messages?limit=10",
+          headers={"Authorization": f"Bot {token}"})
+```
+
+Use reactions to add personality — react to funny messages, acknowledge things without a full reply, etc.
+
 ## How It Works
 
 - Bot connects to Discord Gateway via discord.py (runs in a daemon thread)
@@ -36,11 +60,25 @@ Discord config lives in `~/dispatch/config.local.yaml`:
 discord:
   channel_ids:
     - "1234567890"
+  bot_role_ids:           # Role IDs that trigger the bot when @mentioned
+    - "BOT_ROLE_ID"
+  bot_names:              # Name strings that trigger the bot (case-insensitive)
+    - "sven"
   users:
     "DISCORD_USER_ID":
       name: "Name"
       tier: "admin"
 ```
+
+### Mention Filtering
+
+The listener only queues messages that are directed at the bot:
+1. **@mention** of the bot user
+2. **Role mention** matching `bot_role_ids`
+3. **Bot name** in message text (case-insensitive, from `bot_names`)
+4. **Reply** to a bot message
+
+All other messages are silently dropped at the listener level (zero token cost).
 
 Bot token stored in macOS Keychain as `discord_bot_token`.
 

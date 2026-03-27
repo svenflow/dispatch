@@ -1,5 +1,6 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
+  Animated,
   Platform,
   Pressable,
   ScrollView,
@@ -15,17 +16,14 @@ if (Platform.OS !== "web") {
     Notifications = require("expo-notifications") as typeof import("expo-notifications");
   } catch { /* native module not available */ }
 }
-import { branding } from "@/src/config/branding";
 import {
   getApiBaseUrl,
   setApiBaseUrl,
   getDefaultUrl,
   API_URL_STORAGE_KEY,
 } from "@/src/config/constants";
-import { useDeviceToken } from "@/src/hooks/useDeviceToken";
 import { clearMessages, restartSession } from "@/src/api/chats";
 import { apiRequest } from "@/src/api/client";
-import { copyToClipboard } from "@/src/utils/clipboard";
 import { getItem, setItem, deleteItem } from "@/src/utils/storage";
 import {
   showAlert,
@@ -35,12 +33,155 @@ import {
 
 type ConnectionStatus = "checking" | "connected" | "disconnected";
 
+/** Single usage bar with label, percentage, and time-to-reset */
+function UsageBar({
+  label,
+  utilization,
+  resetsAt,
+}: {
+  label: string;
+  utilization: number;
+  resetsAt: string;
+}) {
+  // Color based on utilization level
+  const barColor =
+    utilization >= 80
+      ? "#ef4444" // red
+      : utilization >= 50
+        ? "#eab308" // yellow
+        : "#22c55e"; // green
+
+  // Format reset time as relative
+  const resetDate = new Date(resetsAt);
+  const now = new Date();
+  const diffMs = resetDate.getTime() - now.getTime();
+  const diffHours = Math.max(0, Math.floor(diffMs / (1000 * 60 * 60)));
+  const diffMins = Math.max(0, Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60)));
+  const resetLabel =
+    diffHours > 24
+      ? `${Math.floor(diffHours / 24)}d ${diffHours % 24}h`
+      : diffHours > 0
+        ? `${diffHours}h ${diffMins}m`
+        : `${diffMins}m`;
+
+  return (
+    <View style={usageStyles.barRow}>
+      <View style={usageStyles.labelRow}>
+        <Text style={usageStyles.label}>{label}</Text>
+        <Text style={usageStyles.percentage}>{Math.round(utilization)}%</Text>
+      </View>
+      <View style={usageStyles.barTrack}>
+        <View
+          style={[
+            usageStyles.barFill,
+            { width: `${Math.min(100, utilization)}%`, backgroundColor: barColor },
+          ]}
+        />
+      </View>
+      <Text style={usageStyles.resetText}>Resets in {resetLabel}</Text>
+    </View>
+  );
+}
+
+const usageStyles = StyleSheet.create({
+  barRow: {
+    paddingHorizontal: 16,
+    paddingVertical: 5,
+  },
+  labelRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 4,
+  },
+  label: {
+    color: "#fafafa",
+    fontSize: 14,
+    fontWeight: "500",
+  },
+  percentage: {
+    color: "#a1a1aa",
+    fontSize: 13,
+    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+  },
+  barTrack: {
+    height: 6,
+    backgroundColor: "#27272a",
+    borderRadius: 3,
+    overflow: "hidden",
+  },
+  barFill: {
+    height: "100%",
+    borderRadius: 3,
+  },
+  resetText: {
+    color: "#52525b",
+    fontSize: 11,
+    marginTop: 3,
+  },
+});
+
 export default function SettingsScreen() {
-  const { token } = useDeviceToken();
   const [connectionStatus, setConnectionStatus] =
     useState<ConnectionStatus>("checking");
-  const [copiedToken, setCopiedToken] = useState(false);
   const [currentUrl, setCurrentUrl] = useState(getApiBaseUrl());
+
+  // Usage quota state
+  interface QuotaBucket {
+    utilization: number;
+    resets_at: string;
+  }
+  interface QuotaData {
+    five_hour?: QuotaBucket | null;
+    seven_day?: QuotaBucket | null;
+    seven_day_sonnet?: QuotaBucket | null;
+    seven_day_opus?: QuotaBucket | null;
+  }
+  const [quota, setQuota] = useState<QuotaData | null>(null);
+  const [quotaLoading, setQuotaLoading] = useState(true);
+  const [lastFetched, setLastFetched] = useState<Date | null>(null);
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+
+  // Fetch usage quota
+  const fetchQuota = useCallback(async () => {
+    // Subtle pulse animation on refresh
+    Animated.sequence([
+      Animated.timing(pulseAnim, {
+        toValue: 0.5,
+        duration: 150,
+        useNativeDriver: true,
+      }),
+      Animated.timing(pulseAnim, {
+        toValue: 1,
+        duration: 300,
+        useNativeDriver: true,
+      }),
+    ]).start();
+
+    try {
+      setQuotaLoading(true);
+      const data = await apiRequest<{
+        quota?: QuotaData | null;
+        _quota_error?: string | null;
+        active_block?: { costUSD?: number; totalTokens?: number } | null;
+      }>("/api/dashboard/ccu", { timeout: 10000 });
+      if (data.quota) {
+        setQuota(data.quota);
+      }
+      setLastFetched(new Date());
+    } catch {
+      // silently fail — quota is non-critical
+    } finally {
+      setQuotaLoading(false);
+    }
+  }, [pulseAnim]);
+
+  // Fetch quota on mount and refresh every 30s
+  useEffect(() => {
+    fetchQuota();
+    const interval = setInterval(fetchQuota, 30000);
+    return () => clearInterval(interval);
+  }, [fetchQuota]);
 
   // Load persisted API URL on mount
   useEffect(() => {
@@ -110,16 +251,6 @@ export default function SettingsScreen() {
     checkConnection();
   }, [checkConnection]);
 
-  // Copy device token to clipboard (cross-platform)
-  const handleCopyToken = useCallback(async () => {
-    if (!token) return;
-    const success = await copyToClipboard(token);
-    if (success) {
-      setCopiedToken(true);
-      setTimeout(() => setCopiedToken(false), 2000);
-    }
-  }, [token]);
-
   // Clear all data
   const handleClearData = useCallback(async () => {
     const confirmed = await showDestructiveConfirm(
@@ -162,22 +293,76 @@ export default function SettingsScreen() {
   }, []);
 
   const displayUrl = currentUrl || "(same-origin)";
-  const truncatedToken = token
-    ? `${token.slice(0, 8)}...${token.slice(-4)}`
-    : "Loading...";
 
   return (
     <ScrollView
       style={styles.container}
       contentContainerStyle={styles.contentContainer}
     >
-      {/* App Header */}
-      <View style={styles.appHeader}>
-        <Text style={styles.appName}>
-          {branding.displayName}
-        </Text>
-        <Text style={styles.appVersion}>v1.0.0</Text>
-        <Text style={styles.poweredBy}>Powered by Claude</Text>
+      {/* Usage Quota Section */}
+      <View style={styles.section}>
+        <Text style={styles.sectionHeader}>USAGE</Text>
+        <Pressable onPress={fetchQuota}>
+          <Animated.View style={[styles.sectionCard, { opacity: pulseAnim }]}>
+            {quotaLoading && !quota ? (
+              <View style={styles.row}>
+                <Text style={styles.rowValue}>Loading...</Text>
+              </View>
+            ) : quota ? (
+              <View style={styles.quotaContainer}>
+                {quota.five_hour && (
+                  <UsageBar
+                    label="5-Hour"
+                    utilization={quota.five_hour.utilization}
+                    resetsAt={quota.five_hour.resets_at}
+                  />
+                )}
+                {quota.seven_day && (
+                  <>
+                    <View style={styles.quotaSeparator} />
+                    <UsageBar
+                      label="7-Day"
+                      utilization={quota.seven_day.utilization}
+                      resetsAt={quota.seven_day.resets_at}
+                    />
+                  </>
+                )}
+                {quota.seven_day_sonnet && (
+                  <>
+                    <View style={styles.quotaSeparator} />
+                    <UsageBar
+                      label="Sonnet"
+                      utilization={quota.seven_day_sonnet.utilization}
+                      resetsAt={quota.seven_day_sonnet.resets_at}
+                    />
+                  </>
+                )}
+                {quota.seven_day_opus && (
+                  <>
+                    <View style={styles.quotaSeparator} />
+                    <UsageBar
+                      label="Opus"
+                      utilization={quota.seven_day_opus.utilization}
+                      resetsAt={quota.seven_day_opus.resets_at}
+                    />
+                  </>
+                )}
+              </View>
+            ) : (
+              <View style={styles.row}>
+                <Text style={styles.rowValue}>Unavailable</Text>
+              </View>
+            )}
+          </Animated.View>
+        </Pressable>
+        <View style={styles.usageFooter}>
+          <Text style={styles.sectionFooter}>Tap to refresh</Text>
+          {lastFetched && (
+            <Text style={styles.lastFetchedText}>
+              {lastFetched.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+            </Text>
+          )}
+        </View>
       </View>
 
       {/* Connection Section */}
@@ -230,22 +415,6 @@ export default function SettingsScreen() {
         </View>
         <Text style={styles.sectionFooter}>
           Tap API Server to change the URL manually.
-        </Text>
-      </View>
-
-      {/* About Section */}
-      <View style={styles.section}>
-        <Text style={styles.sectionHeader}>ABOUT</Text>
-        <View style={styles.sectionCard}>
-          <Pressable style={styles.row} onPress={handleCopyToken}>
-            <Text style={styles.rowLabel}>Device Token</Text>
-            <Text style={styles.rowValueMono}>
-              {copiedToken ? "Copied!" : truncatedToken}
-            </Text>
-          </Pressable>
-        </View>
-        <Text style={styles.sectionFooter}>
-          Tap to copy the full device token
         </Text>
       </View>
 
@@ -308,26 +477,6 @@ const styles = StyleSheet.create({
   },
   contentContainer: {
     paddingBottom: 48,
-  },
-  appHeader: {
-    alignItems: "center",
-    paddingTop: 32,
-    paddingBottom: 24,
-  },
-  appName: {
-    color: "#fafafa",
-    fontSize: 28,
-    fontWeight: "700",
-  },
-  appVersion: {
-    color: "#71717a",
-    fontSize: 14,
-    marginTop: 4,
-  },
-  poweredBy: {
-    color: "#52525b",
-    fontSize: 13,
-    marginTop: 2,
   },
   section: {
     marginTop: 24,
@@ -431,5 +580,25 @@ const styles = StyleSheet.create({
     color: "#52525b",
     fontSize: 22,
     fontWeight: "300",
+  },
+  quotaContainer: {
+    paddingVertical: 2,
+  },
+  quotaSeparator: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: "#27272a",
+    marginHorizontal: 16,
+  },
+  usageFooter: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginTop: 6,
+    paddingHorizontal: 4,
+  },
+  lastFetchedText: {
+    color: "#3f3f46",
+    fontSize: 11,
+    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
   },
 });

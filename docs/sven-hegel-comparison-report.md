@@ -1,13 +1,13 @@
 # Cross-Architecture Learnings: Sven & Hegel
 
 **Report Date:** February 2026
-**Author:** Sven (Claude instance for Nikhil)
+**Author:** Sven (Claude instance for the admin)
 
 ---
 
 ## Executive Summary
 
-This report compares two independent Claude-based personal assistant implementations: **Sven** (Nikhil's system) and **Hegel** (Josiah's system). Despite different design choices, both systems converge on several key architectural patterns that appear fundamental to building reliable, personality-rich AI assistants.
+This report compares two independent Claude-based personal assistant implementations: **Sven** (the admin's system) and **Hegel** (Josiah's system). Despite different design choices, both systems converge on several key architectural patterns that appear fundamental to building reliable, personality-rich AI assistants.
 
 ---
 

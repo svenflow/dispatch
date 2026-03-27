@@ -1176,7 +1176,7 @@ function setConnection(ok) {
 
 async function fetchSessions() {
   try {
-    const data = await api('/api/agents/sessions');
+    const data = await api('/api/app/sessions');
     sessions = data.sessions || [];
     sessionsLoaded = true;
     setConnection(true);
@@ -1402,7 +1402,7 @@ async function loadMessages() {
   $messagesLoading.classList.add('visible');
 
   try {
-    const data = await api('/api/agents/messages?session_id=' + encodeURIComponent(selectedSessionId) + '&limit=100');
+    const data = await api('/api/app/messages?session_id=' + encodeURIComponent(selectedSessionId) + '&limit=100');
     const msgs = data.messages || [];
     hasMore = data.has_more;
 
@@ -1428,7 +1428,7 @@ async function loadOlderMessages() {
   loadingOlder = true;
 
   try {
-    const data = await api('/api/agents/messages?session_id=' + encodeURIComponent(selectedSessionId) + '&limit=50&before_ts=' + oldestTimestampMs);
+    const data = await api('/api/app/messages?session_id=' + encodeURIComponent(selectedSessionId) + '&limit=50&before_ts=' + oldestTimestampMs);
     const msgs = data.messages || [];
     hasMore = data.has_more;
 
@@ -1450,7 +1450,7 @@ async function pollMessages() {
 
   try {
     const afterParam = latestTimestampMs ? '&after_ts=' + latestTimestampMs : '';
-    const data = await api('/api/agents/messages?session_id=' + encodeURIComponent(selectedSessionId) + '&limit=50' + afterParam);
+    const data = await api('/api/app/messages?session_id=' + encodeURIComponent(selectedSessionId) + '&limit=50' + afterParam);
     const msgs = data.messages || [];
     setConnection(true);
 
@@ -1621,7 +1621,7 @@ async function sendMessage() {
   }
 
   try {
-    await api('/api/agents/messages', {
+    await api('/api/app/messages', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({ session_id: selectedSessionId, text: text })
@@ -1658,7 +1658,7 @@ async function createAgent() {
   const name = 'Agent ' + new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 
   try {
-    const data = await api('/api/agents/sessions', {
+    const data = await api('/api/app/sessions', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({ name: name })
@@ -1698,7 +1698,7 @@ async function finishRename() {
   if (!newName || !selectedSession || newName === selectedSession.name) return;
 
   try {
-    await api('/api/agents/sessions/' + encodeURIComponent(selectedSessionId), {
+    await api('/api/app/sessions/' + encodeURIComponent(selectedSessionId), {
       method: 'PATCH',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({ name: newName })
@@ -1739,7 +1739,7 @@ async function deleteSession() {
   const id = selectedSessionId;
 
   try {
-    await api('/api/agents/sessions/' + encodeURIComponent(id) + '?delete_messages=true', {
+    await api('/api/app/sessions/' + encodeURIComponent(id) + '?delete_messages=true', {
       method: 'DELETE'
     });
     hideDeleteConfirm();

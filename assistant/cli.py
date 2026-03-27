@@ -192,15 +192,15 @@ def cmd_restart(args):
     initiator = getattr(args, "initiator", None)
     if not initiator:
         # Auto-detect from cwd if running from a transcript directory
-        # e.g. /Users/sven/transcripts/imessage/_16175969496 → +16175969496
+        # e.g. /Users/sven/transcripts/imessage/_15555550100 → +15555550100
         cwd = Path.cwd()
         transcripts_dir = Path.home() / "transcripts"
         try:
             rel = cwd.relative_to(transcripts_dir)
-            parts = rel.parts  # e.g. ("imessage", "_16175969496")
+            parts = rel.parts  # e.g. ("imessage", "_15555550100")
             if len(parts) >= 2:
-                sanitized_id = parts[1]  # e.g. "_16175969496"
-                initiator = sanitized_id.replace("_", "+", 1)  # → "+16175969496"
+                sanitized_id = parts[1]  # e.g. "_15555550100"
+                initiator = sanitized_id.replace("_", "+", 1)  # → "+15555550100"
         except ValueError:
             pass  # Not in transcripts dir
 
@@ -492,6 +492,69 @@ def cmd_restart_api(args):
     resp = _ipc_command({"cmd": "restart_api"})
     if resp.get("ok"):
         print(resp.get("message", "Dispatch API restarted"))
+    else:
+        print(f"Error: {resp.get('error', 'unknown')}")
+    return 0 if resp.get("ok") else 1
+
+
+def cmd_set_global_model(args):
+    """Set or clear the global model override for all sessions."""
+    model = args.model
+    resp = _ipc_command({"cmd": "set_global_model", "model": model})
+    if resp.get("ok"):
+        print(resp.get("message", "Done"))
+        state = resp.get("state", "unknown")
+        override = resp.get("override")
+        print(f"Quota state: {state.upper()}")
+        if override:
+            print(f"Override: model={override.get('model')}, trigger={override.get('trigger')}, set_at={override.get('set_at')}")
+    else:
+        print(f"Error: {resp.get('error', 'unknown')}")
+    return 0 if resp.get("ok") else 1
+
+
+def cmd_get_global_model(args):
+    """Show current global model override and quota state."""
+    resp = _ipc_command({"cmd": "get_global_model"})
+    if resp.get("ok"):
+        state = resp.get("state", "unknown")
+        override = resp.get("override")
+        cb = resp.get("circuit_breaker", "unknown")
+        q5h = resp.get("quota_5h_pct")
+        q7d = resp.get("quota_7d_opus_pct")
+
+        print(f"Quota state: {state.upper()}")
+        if override:
+            model = override.get("model", "?")
+            trigger = override.get("trigger", "?")
+            set_at = override.get("set_at", "?")
+            print(f"Global model override: {model} (trigger={trigger}, set_at={set_at})")
+        else:
+            print("Global model override: none (using per-session defaults)")
+        print(f"Deep heal circuit breaker: {cb.upper()}")
+
+        if q5h is not None or q7d is not None:
+            q5h_str = f"{q5h:.0f}%" if q5h is not None else "?"
+            q7d_str = f"{q7d:.0f}%" if q7d is not None else "?"
+            print(f"Quota: 5h={q5h_str} | 7d-opus={q7d_str}")
+
+        # Dry-run: show what would happen
+        if args.dry_run:
+            from assistant.quota_manager import QuotaManager
+            print()
+            if q5h is not None and q7d is not None:
+                if state == "normal":
+                    if q5h >= QuotaManager.DEGRADE_THRESHOLD or q7d >= QuotaManager.DEGRADE_THRESHOLD:
+                        print(f"[DRY-RUN] Would transition: NORMAL → DEGRADED (5h={q5h:.0f}% >= {QuotaManager.DEGRADE_THRESHOLD}%)")
+                    else:
+                        print(f"[DRY-RUN] No transition needed (5h={q5h:.0f}% < {QuotaManager.DEGRADE_THRESHOLD}%)")
+                elif state == "degraded":
+                    if q5h < QuotaManager.RECOVER_THRESHOLD and q7d < QuotaManager.RECOVER_THRESHOLD:
+                        print(f"[DRY-RUN] Would transition: DEGRADED → NORMAL (5h={q5h:.0f}% < {QuotaManager.RECOVER_THRESHOLD}%)")
+                    else:
+                        print(f"[DRY-RUN] Would stay DEGRADED (5h={q5h:.0f}% >= {QuotaManager.RECOVER_THRESHOLD}%)")
+            else:
+                print("[DRY-RUN] Cannot evaluate — quota data unavailable")
     else:
         print(f"Error: {resp.get('error', 'unknown')}")
     return 0 if resp.get("ok") else 1
@@ -1052,10 +1115,22 @@ def main():
     compact_session_parser = subparsers.add_parser("compact-session", help="[Deprecated] Compaction is now handled natively by Claude Code")
     compact_session_parser.add_argument("session", nargs="?", help="Session name (ignored — compaction is automatic)")
 
-    # set-model
+    # set-model (per-session)
     set_model_parser = subparsers.add_parser("set-model", help="Set model for a session (opus, sonnet, haiku)")
     set_model_parser.add_argument("session", help="Session name (imessage/_15555550100), chat_id, or contact name")
     set_model_parser.add_argument("model", help="Model to use: opus, sonnet, or haiku")
+
+    # set-global-model
+    set_global_model_parser = subparsers.add_parser("set-global-model",
+        help="Set global model override for all sessions (quota degradation)")
+    set_global_model_parser.add_argument("model",
+        help="Model: opus, sonnet, haiku, or --clear to remove override")
+
+    # get-global-model
+    get_global_model_parser = subparsers.add_parser("get-global-model",
+        help="Show current global model override and quota state")
+    get_global_model_parser.add_argument("--dry-run", action="store_true",
+        help="Show what would happen at current quota levels")
 
     # install
     subparsers.add_parser("install", help="Install LaunchAgent for auto-start")
@@ -1150,6 +1225,8 @@ def main():
         "restart-api": cmd_restart_api,
         "compact-session": cmd_compact_session,
         "set-model": cmd_set_model,
+        "set-global-model": cmd_set_global_model,
+        "get-global-model": cmd_get_global_model,
         "install": cmd_install,
         "uninstall": cmd_uninstall,
         "menubar": cmd_menubar,

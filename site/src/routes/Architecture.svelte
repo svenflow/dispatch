@@ -338,7 +338,7 @@
             <text x="325" y="21" class="session-tier-label">admin</text>
 
             <g transform="translate(15, 40)">
-              <text x="0" y="12" class="session-path">~/transcripts/imessage/_16175969496/</text>
+              <text x="0" y="12" class="session-path">~/transcripts/imessage/_15555550100/</text>
               <rect x="0" y="18" width="310" height="32" rx="4" class="session-work" class:active={step >= 7}/>
               <text x="8" y="34" class="session-work-text">🔧 "what's the weather?"</text>
               <text x="8" y="46" class="session-work-text">✓ "45°F and cloudy!"</text>

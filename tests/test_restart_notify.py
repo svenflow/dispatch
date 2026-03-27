@@ -42,13 +42,13 @@ class TestReadRestartInitiator:
         marker = tmp_path / "graceful-restart"
         marker.write_text(json.dumps({
             "timestamp": 1234567890,
-            "initiator_chat_id": "+16175969496",
+            "initiator_chat_id": "+15555550100",
         }))
         with patch("assistant.sdk_backend.Path") as MockPath:
             MockPath.return_value = marker
             # Actually test the logic directly
             data = json.loads(marker.read_text())
-            assert data.get("initiator_chat_id") == "+16175969496"
+            assert data.get("initiator_chat_id") == "+15555550100"
 
     def test_marker_without_initiator(self, tmp_path):
         """Marker without initiator_chat_id should return None."""
@@ -77,8 +77,8 @@ class TestRestartRole:
 
     def test_initiator_matches_chat_id(self):
         """When restart_initiator == chat_id, role should be 'initiator'."""
-        restart_initiator = "+16175969496"
-        chat_id = "+16175969496"
+        restart_initiator = "+15555550100"
+        chat_id = "+15555550100"
         if restart_initiator is not None and chat_id == restart_initiator:
             role = "initiator"
         else:
@@ -87,7 +87,7 @@ class TestRestartRole:
 
     def test_passive_when_different_chat_id(self):
         """When restart_initiator != chat_id, role should be 'passive'."""
-        restart_initiator = "+16175969496"
+        restart_initiator = "+15555550100"
         chat_id = "+15555550100"
         if restart_initiator is not None and chat_id == restart_initiator:
             role = "initiator"
@@ -98,7 +98,7 @@ class TestRestartRole:
     def test_passive_when_no_initiator(self):
         """When no initiator (crash/watchdog), role should be 'passive'."""
         restart_initiator = None
-        chat_id = "+16175969496"
+        chat_id = "+15555550100"
         if restart_initiator is not None and chat_id == restart_initiator:
             role = "initiator"
         else:
@@ -149,7 +149,7 @@ class TestCLIInitiatorAutoDetect:
     def test_detect_from_imessage_transcript_dir(self, tmp_path):
         """Should detect chat_id from imessage transcript dir."""
         transcripts = tmp_path / "transcripts"
-        imessage_dir = transcripts / "imessage" / "_16175969496"
+        imessage_dir = transcripts / "imessage" / "_15555550100"
         imessage_dir.mkdir(parents=True)
 
         with patch("pathlib.Path.cwd", return_value=imessage_dir), \
@@ -167,12 +167,12 @@ class TestCLIInitiatorAutoDetect:
             except ValueError:
                 initiator = None
 
-        assert initiator == "+16175969496"
+        assert initiator == "+15555550100"
 
     def test_detect_from_signal_transcript_dir(self, tmp_path):
         """Should detect chat_id from signal transcript dir."""
         transcripts = tmp_path / "transcripts"
-        signal_dir = transcripts / "signal" / "_16175969496"
+        signal_dir = transcripts / "signal" / "_15555550100"
         signal_dir.mkdir(parents=True)
 
         with patch("pathlib.Path.cwd", return_value=signal_dir), \
@@ -190,7 +190,7 @@ class TestCLIInitiatorAutoDetect:
             except ValueError:
                 initiator = None
 
-        assert initiator == "+16175969496"
+        assert initiator == "+15555550100"
 
     def test_no_detect_from_non_transcript_dir(self, tmp_path):
         """Should return None when not in a transcript dir."""
@@ -247,12 +247,12 @@ class TestGracefulMarkerFormat:
     def test_marker_json_with_initiator(self, tmp_path):
         """Marker should be valid JSON with timestamp and initiator."""
         marker = tmp_path / "marker"
-        marker_data = {"timestamp": 1234567890, "initiator_chat_id": "+16175969496"}
+        marker_data = {"timestamp": 1234567890, "initiator_chat_id": "+15555550100"}
         marker.write_text(json.dumps(marker_data))
 
         data = json.loads(marker.read_text())
         assert data["timestamp"] == 1234567890
-        assert data["initiator_chat_id"] == "+16175969496"
+        assert data["initiator_chat_id"] == "+15555550100"
 
     def test_marker_json_without_initiator(self, tmp_path):
         """Marker without initiator (e.g. HEALME restart) should have no initiator_chat_id."""

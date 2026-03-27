@@ -1,4 +1,4 @@
-# WebGPU Forge — Known Bug Database
+# model-to-webgpu — Known Bug Database
 
 Reference for Phase 6 activation matching debugging.
 
@@ -21,7 +21,7 @@ Reference for Phase 6 activation matching debugging.
 | Tied weight duplication | OOM on mobile, 2x expected memory | Embedding and LM head using separate copies of same weights | Share GPUBuffer, don't upload twice |
 | workgroupBarrier in branch | Random wrong values, non-deterministic | `workgroupBarrier()` inside divergent `if` block — undefined behavior per WGSL spec | Move ALL barriers outside conditionals, ensure all invocations reach them |
 | u32 index overflow | Wrong values for large tensors only | `row * N + col` overflows u32 when tensor has >4B elements | Cast to i32 arithmetic or split into multiple dispatches |
-| iOS video input garbage | Vision outputs wildly wrong from video but correct from images | iOS Safari `copyExternalImageToTexture` silently produces garbage from `HTMLVideoElement` | Draw video to canvas first, then upload canvas to GPU texture |
+| iOS video input garbage | Vision outputs wildly wrong from video but correct from images | iOS Safari `copyExternalImageToTexture` silently produces garbage from `HTMLVideoElement` | Use `createImageBitmap(video)` — this is the reliable path on iOS Safari |
 | FPN upsample half_pixel_centers | Output positions systematically offset, error ~2-3% | Bilinear upsample in FPN missing `half_pixel_centers=true` — coordinates are off by half a pixel | Set `half_pixel_centers=true`: `src_coord = (dst_coord + 0.5) * (src_size / dst_size) - 0.5` |
 | Pixel-space vs normalized rotation | Systematic coordinate offset on rotated inputs, ~2-3% error | Computing `atan2` and shift in normalized [0,1] space instead of pixel space. C++ references do rotation math in pixel coords. | Compute atan2 in pixel space. Rotate shift vector in pixel space. Normalize X by imgW and Y by imgH separately. |
 | Temporal smoother state leak | 10x inflated error on batch testing / non-sequential inputs | Temporal smoother (one-euro filter, EMA) retains state from previous frame, causing huge error on unrelated inputs | Add `reset()` method to clear smoother state. Call between unrelated inputs. Essential for batch accuracy testing. |
@@ -30,6 +30,8 @@ Reference for Phase 6 activation matching debugging.
 | Shift after square_long | ROI position offset, systematic error on non-square images | Applying center shift AFTER squaring the bounding box to long side. Reference C++ applies shift using original box dimensions BEFORE squaring. | Apply shift BEFORE square_long: `shifted_box = translate(box, shift)` then `squared = square_long(shifted_box)` |
 | Manual bilinear vs hardware | Low recall (missed detections), some test images fail | Manual f32 bilinear interpolation in compute shader doesn't match GPU hardware sampling | Use `textureSampleLevel` (hardware GPU bilinear) for image input preprocessing and affine crop. Matches GL_LINEAR exactly. |
 | Letterbox offset rounding | ~22% error on some images | Using Math.round or fractional letterbox offsets instead of Math.floor | Use `Math.floor` for letterbox padding offsets — matches C++ integer division behavior |
+| TFLite nested model wrong output head | Model "works" but output is meaningless constant | TFLite model with nested sub-models has multiple layers with identical shapes. Outer wrapper layer has extreme bias (e.g., 47.9) producing saturated sigmoid. Inner model layer has small learned bias (e.g., -0.03) and is the real output. | Always inspect bias magnitudes when choosing output heads. Compare against TFLite reference inference. Check model hierarchy paths (e.g., `model_5/model_4/conv2d_151` vs `model_5/conv2d_152`). |
+| Double-sigmoid masking correctness | Output looks plausible but is numerically wrong | Sigmoid applied twice (GPU + JS readback). With extreme logits, `sigmoid(sigmoid(huge)) ≈ 0.73` which passes typical 0.5 threshold by coincidence. Removing redundant sigmoid reveals the real bug. | Never apply sigmoid twice. Clean up numerical code aggressively — redundant activations can mask underlying correctness bugs through numerical coincidence. |
 
 ## Error Magnitude Guide
 
@@ -44,3 +46,5 @@ Quick triage based on how wrong the values are:
 - **10x inflated on batch tests** = temporal smoother state not reset between inputs
 - **0% tracking rate** = ROI tracking threshold too high (try 0.1)
 - **Low recall (missed detections)** = manual bilinear interpolation — switch to textureSampleLevel
+- **Output is a constant (e.g., always ~0.73 or ~1.0)** = wrong output head in nested TFLite model — check bias magnitudes
+- **Plausible but wrong after removing redundant activation** = double-sigmoid masking — the redundancy was hiding a deeper bug

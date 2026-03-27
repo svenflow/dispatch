@@ -22,7 +22,7 @@ TSIP=$(/opt/homebrew/opt/tailscale/bin/tailscale --socket=/tmp/tailscale.sock ip
 # Then send: http://$TSIP:<PORT><PATH>
 ```
 
-**Do NOT use the hostname** (`svens-mac-mini.tail6669f2.ts.net`) — it hasn't been working reliably. Always use the numeric IP from the command above.
+**Do NOT use the hostname** — it hasn't been working reliably. Always use the numeric IP from the command above.
 
 For internal use (curl, testing from this machine), localhost is fine. But any URL sent to a human must use the Tailscale IP.
 

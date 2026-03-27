@@ -22,6 +22,7 @@ import {
 } from "@/src/hooks/useMessages";
 import { MessageBubble } from "@/src/components/MessageBubble";
 import { InputBar } from "@/src/components/InputBar";
+import { DraftBubble } from "@/src/components/DraftBubble";
 import { ThinkingIndicator } from "@/src/components/ThinkingIndicator";
 import { EmptyState } from "@/src/components/EmptyState";
 import { useAudioPlayer } from "@/src/hooks/useAudioPlayer";
@@ -35,8 +36,9 @@ import { showPrompt, showAlert, showDestructiveConfirm } from "@/src/utils/alert
 import { branding, sessionPrefix } from "@/src/config/branding";
 import { markChatAsRead } from "@/src/hooks/useChatList";
 import { setActiveChatId, dismissNotificationsForChat } from "@/src/hooks/usePushNotifications";
-import { copyToClipboard } from "@/src/utils/clipboard";
-import { impactMedium, notificationSuccess } from "@/src/utils/haptics";
+import { impactMedium } from "@/src/utils/haptics";
+import { BubbleMenu, type BubbleMenuItem } from "@/src/components/BubbleMenu";
+import { Toast } from "@/src/components/Toast";
 
 export default function ChatDetailScreen() {
   const { id, chatTitle } = useLocalSearchParams<{
@@ -59,6 +61,7 @@ export default function ChatDetailScreen() {
   });
 
   const [imageSendError, setImageSendError] = useState<string | null>(null);
+  const [dictationDraft, setDictationDraft] = useState<string | null>(null);
   const [menuVisible, setMenuVisible] = useState(false);
   const [menuPosition, setMenuPosition] = useState({ x: 0, y: 0 });
   const [isCreatingDebugSession, setIsCreatingDebugSession] = useState(false);
@@ -66,10 +69,8 @@ export default function ChatDetailScreen() {
   const menuButtonRef = useRef<View>(null);
 
   // Message context menu (long-press)
-  const [contextMessage, setContextMessage] = useState<DisplayMessage | null>(null);
-  const [contextMenuY, setContextMenuY] = useState(0);
-  const [copiedToast, setCopiedToast] = useState(false);
-  const copiedFadeAnim = useRef(new Animated.Value(0)).current;
+  const [menuState, setMenuState] = useState<{ items: BubbleMenuItem[]; anchorY: number } | null>(null);
+  const [toastMsg, setToastMsg] = useState<string | null>(null);
 
   // Optimistically mark as read, persist to server, and track active chat for push suppression
   useEffect(() => {
@@ -215,33 +216,20 @@ export default function ChatDetailScreen() {
   }, [id]);
 
   const handleMessageLongPress = useCallback(
-    (msg: DisplayMessage, pageY: number) => {
+    (items: BubbleMenuItem[], pageY: number) => {
       impactMedium();
-      setContextMessage(msg);
-      // Position context menu near the press, clamped to screen
-      setContextMenuY(Math.max(60, pageY - 60));
+      // Wrap "Copy" actions to show toast
+      const wrappedItems = items.map((item) =>
+        item.label === "Copy"
+          ? { ...item, onPress: () => { item.onPress(); setToastMsg("Copied!"); } }
+          : item,
+      );
+      setMenuState({ items: wrappedItems, anchorY: pageY });
     },
     [],
   );
 
-  const handleCopyMessage = useCallback(async () => {
-    if (!contextMessage?.content) return;
-    const ok = await copyToClipboard(contextMessage.content);
-    setContextMessage(null);
-    if (ok) {
-      notificationSuccess();
-      setCopiedToast(true);
-      copiedFadeAnim.setValue(1);
-      Animated.timing(copiedFadeAnim, {
-        toValue: 0,
-        duration: 800,
-        delay: 600,
-        useNativeDriver: true,
-      }).start(() => setCopiedToast(false));
-    } else {
-      showAlert("Error", "Failed to copy text");
-    }
-  }, [contextMessage, copiedFadeAnim]);
+  // Old handleCopyMessage removed — copy is now handled by BubbleMenu items
 
   const handleMenuPress = useCallback(() => {
     menuButtonRef.current?.measureInWindow((x, y, width, height) => {
@@ -269,11 +257,26 @@ export default function ChatDetailScreen() {
     [handleMenuPress],
   );
 
+  // Find last delivered user message to show "Delivered" indicator (like iMessage)
+  const lastDeliveredUserMsgId = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.role === "user" && !m.isPending && !m.sendFailed) return m.id;
+    }
+    return null;
+  }, [messages]);
+
   const renderItem = useCallback(
     ({ item }: { item: DisplayMessage }) => (
-      <MessageBubble message={item} audioState={audioPlayer} onRetry={retryMessage} onLongPress={handleMessageLongPress} />
+      <MessageBubble
+        message={item}
+        audioState={audioPlayer}
+        onRetry={retryMessage}
+        onLongPress={handleMessageLongPress}
+        showDelivered={item.id === lastDeliveredUserMsgId}
+      />
     ),
-    [audioPlayer, retryMessage, handleMessageLongPress],
+    [audioPlayer, retryMessage, handleMessageLongPress, lastDeliveredUserMsgId],
   );
 
   const keyExtractor = useCallback((item: DisplayMessage) => item.id, []);
@@ -351,15 +354,17 @@ export default function ChatDetailScreen() {
             showsVerticalScrollIndicator={false}
             keyboardDismissMode="interactive"
             keyboardShouldPersistTaps="handled"
+            ListHeaderComponent={showThinking ? <ThinkingIndicator events={sdkEvents} visible={showThinking} /> : null}
           />
         )}
-        <ThinkingIndicator events={sdkEvents} visible={showThinking} />
+        {dictationDraft !== null && <DraftBubble text={dictationDraft} />}
         <InputBar
           onSend={handleSend}
           onSendWithImage={handleSendWithImage}
           chatId={`${sessionPrefix}:${id}`}
           voiceConversation={voiceConversation}
           clearTextRef={clearInputTextRef}
+          onDictationDraft={setDictationDraft}
         />
       </KeyboardAvoidingView>
 
@@ -480,50 +485,20 @@ export default function ChatDetailScreen() {
         </Pressable>
       </Modal>
 
-      {/* Message context menu (long-press) */}
-      <Modal
-        visible={!!contextMessage}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setContextMessage(null)}
-      >
-        <Pressable
-          style={localStyles.menuOverlay}
-          onPress={() => setContextMessage(null)}
-        >
-          <View
-            style={[
-              localStyles.contextMenu,
-              { top: contextMenuY },
-            ]}
-          >
-            <Pressable
-              style={({ pressed }) => [localStyles.menuItem, pressed && localStyles.menuItemPressed]}
-              onPress={handleCopyMessage}
-            >
-              <SymbolView
-                name={{ ios: "doc.on.doc", android: "content_copy", web: "content_copy" }}
-                tintColor="#fafafa"
-                size={16}
-              />
-              <Text style={localStyles.menuItemText}>Copy</Text>
-            </Pressable>
-          </View>
-        </Pressable>
-      </Modal>
-
-      {/* Loading overlay while creating debug session */}
-      {/* Copied toast */}
-      {copiedToast && (
-        <Animated.View style={[localStyles.copiedToast, { opacity: copiedFadeAnim }]}>
-          <SymbolView
-            name={{ ios: "checkmark.circle.fill", android: "check_circle", web: "check_circle" }}
-            tintColor="#34d399"
-            size={18}
-          />
-          <Text style={localStyles.copiedToastText}>Copied</Text>
-        </Animated.View>
+      {/* Inline bubble context menu (long-press) */}
+      {menuState && (
+        <BubbleMenu
+          items={menuState.items}
+          anchorY={menuState.anchorY}
+          onClose={() => setMenuState(null)}
+        />
       )}
+      <Toast
+        message={toastMsg || ""}
+        icon="checkmark"
+        visible={!!toastMsg}
+        onHide={() => setToastMsg(null)}
+      />
 
       {isCreatingDebugSession && (
         <View style={localStyles.debugLoadingOverlay}>

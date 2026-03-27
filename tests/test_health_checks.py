@@ -15,6 +15,7 @@ Covers:
 import asyncio
 import json
 import os
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, patch, MagicMock
@@ -617,10 +618,51 @@ class TestStuckSessionDetection:
 
     async def test_unhealthy_when_stuck_over_10_min(self, sdk_backend):
         """Session stuck for >10 min after inject should be flagged as stuck.
-        Note: check_session_health() will then use Haiku to confirm before restarting."""
+        Note: check_session_health() will then use Haiku to confirm before restarting.
+        Sessions with turn_count > 0 use 10-min threshold."""
         session = await sdk_backend.create_session("User", "test:+15555550006", "admin", source="test")
+        session.turn_count = 1  # Past initialization phase
         session.last_inject_at = datetime.now() - timedelta(minutes=15)
         session.last_response_at = datetime.now() - timedelta(minutes=20)
+        healthy, reason = session.is_healthy()
+        assert not healthy
+        assert "stuck" in reason
+
+    async def test_healthy_when_initializing_under_30_min(self, sdk_backend):
+        """Sessions at turn_count=0 (still initializing) use 30-min threshold.
+        This prevents false-positive kills during slow context compaction/resume."""
+        session = await sdk_backend.create_session("User", "test:+15555550006", "admin", source="test")
+        session.turn_count = 0  # Still initializing
+        session.last_inject_at = datetime.now() - timedelta(minutes=15)
+        session.last_response_at = datetime.now() - timedelta(minutes=20)
+        healthy, reason = session.is_healthy()
+        assert healthy  # 15 min < 30 min threshold for init sessions
+
+    async def test_unhealthy_when_initializing_over_30_min(self, sdk_backend):
+        """Sessions at turn_count=0 that are stuck for >30 min should be flagged."""
+        session = await sdk_backend.create_session("User", "test:+15555550006", "admin", source="test")
+        session.turn_count = 0  # Still initializing
+        session.last_inject_at = datetime.now() - timedelta(minutes=35)
+        session.last_response_at = datetime.now() - timedelta(minutes=40)
+        healthy, reason = session.is_healthy()
+        assert not healthy
+        assert "stuck" in reason
+
+    async def test_init_threshold_boundary_just_under(self, sdk_backend):
+        """Session at turn_count=0 stuck for 29 min should be healthy (under 30-min threshold)."""
+        session = await sdk_backend.create_session("User", "test:+15555550006", "admin", source="test")
+        session.turn_count = 0
+        session.last_inject_at = datetime.now() - timedelta(minutes=29)
+        session.last_response_at = datetime.now() - timedelta(minutes=35)
+        healthy, reason = session.is_healthy()
+        assert healthy
+
+    async def test_init_threshold_boundary_just_over(self, sdk_backend):
+        """Session at turn_count=0 stuck for 31 min should be unhealthy (over 30-min threshold)."""
+        session = await sdk_backend.create_session("User", "test:+15555550006", "admin", source="test")
+        session.turn_count = 0
+        session.last_inject_at = datetime.now() - timedelta(minutes=31)
+        session.last_response_at = datetime.now() - timedelta(minutes=35)
         healthy, reason = session.is_healthy()
         assert not healthy
         assert "stuck" in reason
@@ -647,9 +689,134 @@ class TestStuckSessionDetection:
     async def test_stuck_detection_triggers_health_check(self, sdk_backend):
         """health_check_all should detect stuck sessions (Haiku investigation handles restart)."""
         session = await sdk_backend.create_session("User", "test:+15555550006", "admin", source="test")
+        session.turn_count = 1  # Past initialization phase (uses 10-min threshold)
         session.last_inject_at = datetime.now() - timedelta(minutes=15)
         session.last_response_at = datetime.now() - timedelta(minutes=20)
         healthy, reason = session.is_healthy()
         assert not healthy
         results = await sdk_backend.health_check_all()
         assert "test:+15555550006" in results
+
+
+@pytest.mark.asyncio
+class TestPeriodicPersistence:
+    """Tests for periodic session_id and was_active persistence in fast_health_check."""
+
+    async def test_fast_health_check_persists_session_id(self, sdk_backend):
+        """fast_health_check should persist session_id to registry when it differs."""
+        session = await sdk_backend.create_session("User", "test:+15555550007", "admin", source="test")
+        session.session_id = "test-session-id-123"
+        # Verify registry doesn't have this session_id yet
+        entry = sdk_backend.registry.get("test:+15555550007")
+        assert entry is None or entry.get("session_id") != "test-session-id-123"
+        # Run fast_health_check
+        await sdk_backend.fast_health_check()
+        # Verify session_id was persisted
+        entry = sdk_backend.registry.get("test:+15555550007")
+        assert entry is not None
+        assert entry.get("session_id") == "test-session-id-123"
+
+    async def test_fast_health_check_marks_was_active(self, sdk_backend):
+        """fast_health_check should mark was_active for running sessions."""
+        session = await sdk_backend.create_session("User", "test:+15555550008", "admin", source="test")
+        session.session_id = "test-session-id-456"
+        # Verify was_active not set yet
+        entry = sdk_backend.registry.get("test:+15555550008")
+        assert entry is None or not entry.get("was_active")
+        # Run fast_health_check
+        await sdk_backend.fast_health_check()
+        # Verify was_active was set
+        entry = sdk_backend.registry.get("test:+15555550008")
+        assert entry is not None
+        assert entry.get("was_active") is True
+
+    async def test_kill_session_clears_was_active(self, sdk_backend):
+        """kill_session should clear was_active so killed sessions don't resurrect."""
+        session = await sdk_backend.create_session("User", "test:+15555550009", "admin", source="test")
+        session.session_id = "test-session-id-789"
+        # Mark was_active (simulating what fast_health_check does)
+        sdk_backend.registry.mark_was_active("test:+15555550009")
+        entry = sdk_backend.registry.get("test:+15555550009")
+        assert entry.get("was_active") is True
+        # Kill the session
+        await sdk_backend.kill_session("test:+15555550009")
+        # Verify was_active was cleared
+        entry = sdk_backend.registry.get("test:+15555550009")
+        assert entry is not None
+        assert not entry.get("was_active")
+
+    async def test_recently_healed_cleared_on_restart_failure(self, sdk_backend):
+        """_recently_healed should be cleared when restart fails, allowing re-examination."""
+        session = await sdk_backend.create_session("User", "test:+15555550010", "admin", source="test")
+        session.turn_count = 1
+        # Make session appear stuck
+        session.last_inject_at = datetime.now() - timedelta(minutes=15)
+        session.last_response_at = datetime.now() - timedelta(minutes=20)
+        # Mock Haiku to confirm stuck, and restart to fail
+        with patch.object(sdk_backend, 'restart_session', side_effect=Exception("restart failed")), \
+             patch("assistant.health.check_stuck_haiku", return_value=True):
+            await sdk_backend.health_check_all()
+            # Give fire-and-forget tasks time to complete
+            await asyncio.sleep(0.2)
+        # _recently_healed should be cleared since restart failed
+        assert "test:+15555550010" not in sdk_backend._recently_healed
+
+    async def test_fast_health_check_persistence_idempotent(self, sdk_backend):
+        """Second fast_health_check call should produce 0 redundant writes."""
+        session = await sdk_backend.create_session("User", "test:+15555550011", "admin", source="test")
+        session.session_id = "test-session-id-idem"
+        await sdk_backend.fast_health_check()
+        # First call persists. Now run again without changes.
+        entry_before = dict(sdk_backend.registry.get("test:+15555550011"))
+        await sdk_backend.fast_health_check()
+        entry_after = sdk_backend.registry.get("test:+15555550011")
+        # Values should be identical (equality guards prevent redundant writes)
+        assert entry_before["session_id"] == entry_after["session_id"]
+        assert entry_before.get("was_active") == entry_after.get("was_active")
+
+    async def test_persistence_skips_sessions_without_session_id(self, sdk_backend):
+        """Sessions with no session_id should not have was_active persisted."""
+        session = await sdk_backend.create_session("User", "test:+15555550012", "admin", source="test")
+        session.session_id = None  # No session_id yet
+        await sdk_backend.fast_health_check()
+        entry = sdk_backend.registry.get("test:+15555550012")
+        # Should not have was_active set since session_id guard prevents it
+        assert entry is None or not entry.get("was_active")
+
+    async def test_kill_session_safe_when_was_active_never_set(self, sdk_backend):
+        """kill_session should not crash when was_active was never set."""
+        session = await sdk_backend.create_session("User", "test:+15555550013", "admin", source="test")
+        session.session_id = "test-session-id-never-active"
+        # Don't mark was_active — just kill directly
+        await sdk_backend.kill_session("test:+15555550013")
+        entry = sdk_backend.registry.get("test:+15555550013")
+        assert entry is None or not entry.get("was_active")
+
+    async def test_stuck_session_spared_when_circuit_breaker_open(self, sdk_backend):
+        """When Haiku circuit breaker is open, stuck sessions should be treated as healthy
+        (no restart without Haiku confirmation)."""
+        session = await sdk_backend.create_session("User", "test:+15555550014", "admin", source="test")
+        session.turn_count = 1
+        session.last_inject_at = datetime.now() - timedelta(minutes=15)
+        session.last_response_at = datetime.now() - timedelta(minutes=20)
+        # Verify session IS unhealthy
+        healthy, reason = session.is_healthy()
+        assert not healthy
+        assert "stuck" in reason
+        # Open the circuit breaker (state field, not _state)
+        sdk_backend.haiku_circuit_breaker.state = "open"
+        sdk_backend.haiku_circuit_breaker.opened_at = time.time()  # prevent half-open transition
+        # check_session_health should return True (treat as healthy) when CB is open
+        result = await sdk_backend.check_session_health("test:+15555550014")
+        assert result is True  # Spared because Haiku can't confirm
+
+    async def test_persistence_skips_ephemeral_sessions(self, sdk_backend):
+        """Ephemeral sessions should not have session_id or was_active persisted."""
+        session = await sdk_backend.create_session(
+            "Ephemeral", "ephemeral-test-123", "admin", source="test"
+        )
+        session.session_id = "ephemeral-session-id"
+        await sdk_backend.fast_health_check()
+        entry = sdk_backend.registry.get("ephemeral-test-123")
+        # Ephemeral sessions should be skipped by persistence loop
+        assert entry is None or not entry.get("was_active")

@@ -8,15 +8,15 @@ import type {
   SdkEventsResponse,
 } from "./types";
 
-/** List all sessions (contact + agent). GET /api/agents/sessions */
+/** List all sessions (contact + agent). GET /api/app/sessions */
 export async function getAgentSessions(): Promise<AgentSession[]> {
   const res = await apiRequest<AgentSessionsResponse>(
-    "/api/agents/sessions",
+    "/api/app/sessions",
   );
   return res.sessions;
 }
 
-/** Get messages for a session. GET /api/agents/messages */
+/** Get messages for a session. GET /api/app/messages */
 export async function getAgentMessages(
   sessionId: string,
   options?: {
@@ -25,7 +25,7 @@ export async function getAgentMessages(
     after_ts?: number;
   },
 ): Promise<AgentMessagesResponse> {
-  return apiRequest<AgentMessagesResponse>("/api/agents/messages", {
+  return apiRequest<AgentMessagesResponse>("/api/app/messages", {
     params: {
       session_id: sessionId,
       limit: options?.limit,
@@ -35,12 +35,12 @@ export async function getAgentMessages(
   });
 }
 
-/** Create a new agent session. POST /api/agents/sessions */
+/** Create a new agent session. POST /api/app/sessions */
 export async function createAgentSession(
   name: string,
 ): Promise<{ id: string; name: string; status: string }> {
   return apiRequest<{ id: string; name: string; status: string }>(
-    "/api/agents/sessions",
+    "/api/app/sessions",
     {
       method: "POST",
       body: { name },
@@ -48,14 +48,14 @@ export async function createAgentSession(
   );
 }
 
-/** Send a message to a session. POST /api/agents/messages */
+/** Send a message to a session. POST /api/app/messages */
 export async function sendAgentMessage(
   sessionId: string,
   text: string,
   messageId?: string,
 ): Promise<{ ok: boolean; message_id?: string }> {
   return apiRequest<{ ok: boolean; message_id?: string }>(
-    "/api/agents/messages",
+    "/api/app/messages",
     {
       method: "POST",
       body: { session_id: sessionId, text, message_id: messageId ?? generateUUID() },
@@ -63,7 +63,7 @@ export async function sendAgentMessage(
   );
 }
 
-/** Get SDK events for a session. GET /api/agents/sdk-events */
+/** Get SDK events for a session. GET /api/app/sdk-events */
 export async function getAgentSdkEvents(
   sessionId: string,
   options?: {
@@ -72,7 +72,7 @@ export async function getAgentSdkEvents(
     since_ts?: number;
   },
 ): Promise<SdkEventsResponse> {
-  return apiRequest<SdkEventsResponse>("/api/agents/sdk-events", {
+  return apiRequest<SdkEventsResponse>("/api/app/sdk-events", {
     params: {
       session_id: sessionId,
       limit: options?.limit,
@@ -82,13 +82,13 @@ export async function getAgentSdkEvents(
   });
 }
 
-/** Rename an agent session. PATCH /api/agents/sessions/:sessionId */
+/** Rename an agent session. PATCH /api/app/sessions/:sessionId */
 export async function renameAgentSession(
   sessionId: string,
   name: string,
 ): Promise<{ ok: boolean; id: string; name: string }> {
   return apiRequest<{ ok: boolean; id: string; name: string }>(
-    `/api/agents/sessions/${encodeURIComponent(sessionId)}`,
+    `/api/app/sessions/${encodeURIComponent(sessionId)}`,
     {
       method: "PATCH",
       body: { name },
@@ -96,13 +96,13 @@ export async function renameAgentSession(
   );
 }
 
-/** Fork an agent session into a new dispatch-app chat. POST /api/agents/sessions/:sessionId/fork-to-chat */
+/** Fork an agent session into a new dispatch-app chat. POST /api/app/sessions/:sessionId/fork-to-chat */
 export async function forkAgentToChat(
   sessionId: string,
   title: string,
 ): Promise<Conversation> {
   return apiRequest<Conversation>(
-    `/api/agents/sessions/${encodeURIComponent(sessionId)}/fork-to-chat`,
+    `/api/app/sessions/${encodeURIComponent(sessionId)}/fork-to-chat`,
     {
       method: "POST",
       body: { title },
@@ -145,13 +145,13 @@ export async function searchBus(
   return res.results;
 }
 
-/** Delete an agent session. DELETE /api/agents/sessions/:sessionId */
+/** Delete an agent session. DELETE /api/app/sessions/:sessionId */
 export async function deleteAgentSession(
   sessionId: string,
   deleteMessages: boolean = false,
 ): Promise<{ ok: boolean }> {
   return apiRequest<{ ok: boolean }>(
-    `/api/agents/sessions/${encodeURIComponent(sessionId)}`,
+    `/api/app/sessions/${encodeURIComponent(sessionId)}`,
     {
       method: "DELETE",
       params: { delete_messages: deleteMessages },

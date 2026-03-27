@@ -108,7 +108,7 @@ export default ({ config: _config }: ConfigContext): ExpoConfig => ({
     ],
   experiments: {
     typedRoutes: true,
-    baseUrl: "/app",
+    baseUrl: "/",
   },
   extra: {
     accentColor: config.accentColor,

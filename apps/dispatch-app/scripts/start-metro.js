@@ -12,6 +12,34 @@ const { execSync, spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 
+// Patch dnssd-advertise to prevent "Maximum call stack size exceeded" crash
+// that kills Metro. The module has a recursive state machine bug (line ~2628).
+// Wrap its advertise() export so crashes are caught and logged, not fatal.
+try {
+  const dnssdPath = require.resolve("dnssd-advertise");
+  const dnssd = require(dnssdPath);
+  const originalAdvertise = dnssd.advertise;
+  if (originalAdvertise) {
+    dnssd.advertise = function safeAdvertise(...args) {
+      try {
+        const stop = originalAdvertise.apply(this, args);
+        // Wrap the returned stop function too
+        if (stop && typeof stop.then === "function") {
+          return stop.catch((err) => {
+            console.warn("[dnssd-advertise] Caught error:", err.message);
+          });
+        }
+        return stop;
+      } catch (err) {
+        console.warn("[dnssd-advertise] Caught sync error:", err.message);
+        return () => Promise.resolve();
+      }
+    };
+  }
+} catch {
+  // dnssd-advertise not found — no patch needed
+}
+
 // Read metroHost from app.yaml
 let metroHost = "";
 try {

@@ -18,12 +18,12 @@ import sys
 
 SAMPLE_PERSON_FACTS = """Processing 5 contacts...
 
-[1/5] Nikhil Thorat
+[1/5] Admin User
   Suggester: 3 candidates
   Reviewer: 3 verified, 0 refuted
   Committer: 3 facts written
 
-[2/5] Caroline Malone
+[2/5] Partner User
   Suggester: 2 candidates
   Reviewer: 2 verified, 0 refuted
   Committer: 2 facts written
@@ -46,7 +46,7 @@ Summary: 5 contacts processed, 9 facts extracted, 1 hallucination caught"""
 
 SAMPLE_CHAT_CONTEXT = """Processing 4 chat directories...
 
-[1/4] imessage/_15555550001 (Nikhil)
+[1/4] imessage/_15555550001 (Admin User)
   Suggester: extracted 12 items
   Reviewer: 11 verified, 1 refuted
   Committer: wrote CONTEXT.md (4 ongoing, 2 pending, 3 topics, 2 prefs)
@@ -61,7 +61,7 @@ SAMPLE_CHAT_CONTEXT = """Processing 4 chat directories...
   Reviewer: 6 verified
   Committer: wrote CONTEXT.md (2 ongoing, 2 pending, 1 topic, 2 prefs)
 
-[4/4] signal/_15555550001 (Nikhil Signal)
+[4/4] signal/_15555550001 (Admin User Signal)
   Suggester: 2 candidates
   Reviewer: 2 verified
   Committer: wrote CONTEXT.md
@@ -73,7 +73,7 @@ def main():
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--chat-id", default="ab3876ca883949d2b0ce9c4cd5d1d633",
-                        help="Chat ID to inject into (default: Nikhil's group)")
+                        help="Chat ID to inject into (default: admin's group)")
     args = parser.parse_args()
 
     # Build the summary prompt (same format as manager.py)

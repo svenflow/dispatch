@@ -1573,8 +1573,8 @@ class TestSDKEvents:
         """Producer.send_sdk_event writes to sdk_events table."""
         producer = bus.producer()
         producer.send_sdk_event(
-            session_name="imessage/_16175969496",
-            chat_id="+16175969496",
+            session_name="imessage/_15555550100",
+            chat_id="+15555550100",
             event_type="tool_use",
             tool_name="Bash",
             tool_use_id="tu_123",
@@ -1582,11 +1582,11 @@ class TestSDKEvents:
         )
         producer.flush()
 
-        events = bus.query_sdk_events(session_name="imessage/_16175969496")
+        events = bus.query_sdk_events(session_name="imessage/_15555550100")
         assert len(events) == 1
         ev = events[0]
-        assert ev["session_name"] == "imessage/_16175969496"
-        assert ev["chat_id"] == "+16175969496"
+        assert ev["session_name"] == "imessage/_15555550100"
+        assert ev["chat_id"] == "+15555550100"
         assert ev["event_type"] == "tool_use"
         assert ev["tool_name"] == "Bash"
         assert ev["tool_use_id"] == "tu_123"
@@ -1600,8 +1600,8 @@ class TestSDKEvents:
         """Result events include duration_ms and num_turns."""
         producer = bus.producer()
         producer.send_sdk_event(
-            session_name="imessage/_16175969496",
-            chat_id="+16175969496",
+            session_name="imessage/_15555550100",
+            chat_id="+15555550100",
             event_type="result",
             duration_ms=1234.5,
             num_turns=3,
@@ -1619,8 +1619,8 @@ class TestSDKEvents:
         """Error events set is_error=True."""
         producer = bus.producer()
         producer.send_sdk_event(
-            session_name="imessage/_16175969496",
-            chat_id="+16175969496",
+            session_name="imessage/_15555550100",
+            chat_id="+15555550100",
             event_type="error",
             is_error=True,
             payload="context window exceeded",

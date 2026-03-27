@@ -1,6 +1,6 @@
 # Voice Notes
 
-Nikhil's voice-recorded notes captured via Sven app.
+The admin's voice-recorded notes captured via Sven app.
 
 ---
 

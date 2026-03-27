@@ -34,7 +34,7 @@ Access Vivint security cameras via local RTSP streams.
 
 # Capture a camera snapshot
 ~/.claude/skills/vivint/scripts/vivint-snapshot "Front Door"
-~/.claude/skills/vivint/scripts/vivint-snapshot "driveway" --panel "nikhil"
+~/.claude/skills/vivint/scripts/vivint-snapshot "driveway" --panel "default"
 ~/.claude/skills/vivint/scripts/vivint-snapshot "Front Door"        # HD quality (default)
 ~/.claude/skills/vivint/scripts/vivint-snapshot "Front Door" --sd   # SD quality (512x512)
 ~/.claude/skills/vivint/scripts/vivint-snapshot --list  # List all cameras

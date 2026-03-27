@@ -36,9 +36,22 @@ class DiscordListener:
       - Runs as a daemon thread (call .start())
       - Pushes messages to a queue.Queue
       - Main poll loop drains queue → produces to bus
+
+    Mention filtering: Only queues messages that are directed at the bot via:
+      - @mention of the bot user
+      - Role mention matching bot_role_ids
+      - Bot name appearing in message text (case-insensitive)
+      - Reply to a bot message
     """
 
-    def __init__(self, message_queue: queue.Queue, channel_ids: list[str], bot_token: str):
+    def __init__(
+        self,
+        message_queue: queue.Queue,
+        channel_ids: list[str],
+        bot_token: str,
+        bot_role_ids: list[str] | None = None,
+        bot_names: list[str] | None = None,
+    ):
         if not DISCORD_AVAILABLE:
             raise ImportError("discord.py is not installed. Run: uv add 'discord.py>=2.3.0'")
 
@@ -47,6 +60,8 @@ class DiscordListener:
         self.message_queue = message_queue
         self.channel_ids = set(int(c) for c in channel_ids)
         self.bot_token = bot_token
+        self.bot_role_ids = set(int(r) for r in (bot_role_ids or []))
+        self.bot_names = [n.lower() for n in (bot_names or ["sven"])]
         self.running = False
         self._loop: asyncio.AbstractEventLoop | None = None
         self._client: discord.Client | None = None
@@ -111,6 +126,37 @@ class DiscordListener:
                     text = "(attachment)"
                 else:
                     return
+
+            # ── Mention filter: only process messages directed at the bot ──
+            is_mentioned = False
+
+            # 1. Direct @mention of the bot user
+            if client.user in message.mentions:
+                is_mentioned = True
+
+            # 2. Role mention matching bot role IDs
+            if not is_mentioned and self.bot_role_ids:
+                mentioned_role_ids = {r.id for r in message.role_mentions}
+                if self.bot_role_ids & mentioned_role_ids:
+                    is_mentioned = True
+
+            # 3. Bot name appears in message text (case-insensitive)
+            if not is_mentioned:
+                text_lower = text.lower()
+                for name in self.bot_names:
+                    if name in text_lower:
+                        is_mentioned = True
+                        break
+
+            # 4. Reply to a bot message
+            if not is_mentioned and message.reference and message.reference.resolved:
+                ref_msg = message.reference.resolved
+                if hasattr(ref_msg, 'author') and ref_msg.author == client.user:
+                    is_mentioned = True
+
+            if not is_mentioned:
+                log.debug(f"DiscordListener: skipping non-directed message from {message.author.display_name} in #{message.channel.name}")
+                return
 
             sender_id = str(message.author.id)
             sender_name = message.author.display_name or message.author.name

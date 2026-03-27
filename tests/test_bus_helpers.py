@@ -153,11 +153,11 @@ class TestSanitizeMsgForBus:
     def test_whitelisted_fields_pass_through(self):
         msg = {
             "rowid": 12345,
-            "phone": "+16175969496",
+            "phone": "+15555550100",
             "text": "hello",
             "is_group": False,
             "group_name": None,
-            "chat_identifier": "+16175969496",
+            "chat_identifier": "+15555550100",
             "is_audio_message": False,
             "audio_transcription": None,
             "thread_originator_guid": None,
@@ -165,9 +165,9 @@ class TestSanitizeMsgForBus:
         }
         payload = sanitize_msg_for_bus(msg)
         assert payload["rowid"] == 12345
-        assert payload["phone"] == "+16175969496"
+        assert payload["phone"] == "+15555550100"
         assert payload["text"] == "hello"
-        assert payload["chat_id"] == "+16175969496"
+        assert payload["chat_id"] == "+15555550100"
 
     def test_datetime_converted_to_ms(self):
         dt = datetime(2026, 3, 13, 19, 0, 0)
@@ -209,9 +209,9 @@ class TestSanitizeMsgForBus:
         assert payload["custom_flag"] is True
 
     def test_chat_id_from_phone_for_individual(self):
-        msg = {"phone": "+16175969496", "text": "hi", "is_group": False}
+        msg = {"phone": "+15555550100", "text": "hi", "is_group": False}
         payload = sanitize_msg_for_bus(msg)
-        assert payload["chat_id"] == "+16175969496"
+        assert payload["chat_id"] == "+15555550100"
 
     def test_chat_id_from_chat_identifier_for_group(self):
         msg = {"phone": "+1", "text": "hi", "is_group": True, "chat_identifier": "abc123"}
@@ -258,11 +258,11 @@ class TestSanitizeReconstructRoundTrip:
         """Build a realistic message dict as produced by MessagesReader."""
         return {
             "rowid": 30001,
-            "phone": "+16175969496",
+            "phone": "+15555550100",
             "text": "hello world",
             "is_group": False,
             "group_name": None,
-            "chat_identifier": "+16175969496",
+            "chat_identifier": "+15555550100",
             "is_audio_message": False,
             "audio_transcription": None,
             "thread_originator_guid": None,
@@ -400,10 +400,10 @@ class TestConsolidationPayload:
 
 class TestReminderPayload:
     def test_required_fields(self):
-        payload = reminder_payload("rem-1", "Nikhil", "+123", "Do laundry", "once")
+        payload = reminder_payload("rem-1", "Admin User", "+123", "Do laundry", "once")
         assert payload == {
             "reminder_id": "rem-1",
-            "contact": "Nikhil",
+            "contact": "Admin User",
             "chat_id": "+123",
             "title": "Do laundry",
             "schedule_type": "once",
@@ -424,8 +424,8 @@ class TestSessionInjectedPayload:
 
     def test_with_contact_and_tier(self):
         payload = session_injected_payload("+123", "reaction",
-                                           contact_name="Nikhil", tier="admin")
-        assert payload["contact_name"] == "Nikhil"
+                                           contact_name="Admin User", tier="admin")
+        assert payload["contact_name"] == "Admin User"
         assert payload["tier"] == "admin"
 
     def test_all_injection_types(self):
@@ -444,14 +444,14 @@ class TestSanitizeReactionForBus:
     def _make_reaction(self):
         return {
             "rowid": 50001,
-            "phone": "+16175969496",
+            "phone": "+15555550100",
             "emoji": "👍",
             "is_removal": False,
             "target_guid": "p:0/abc-def-123",
             "target_text": "hello world",
             "target_is_from_me": True,
             "is_group": False,
-            "chat_identifier": "+16175969496",
+            "chat_identifier": "+15555550100",
             "source": "imessage",
             "timestamp": datetime(2026, 3, 13, 21, 30, 0),
         }
@@ -460,14 +460,14 @@ class TestSanitizeReactionForBus:
         reaction = self._make_reaction()
         payload = sanitize_reaction_for_bus(reaction)
         assert payload["rowid"] == 50001
-        assert payload["phone"] == "+16175969496"
+        assert payload["phone"] == "+15555550100"
         assert payload["emoji"] == "👍"
         assert payload["is_removal"] is False
         assert payload["target_guid"] == "p:0/abc-def-123"
         assert payload["target_text"] == "hello world"
         assert payload["target_is_from_me"] is True
         assert payload["is_group"] is False
-        assert payload["chat_identifier"] == "+16175969496"
+        assert payload["chat_identifier"] == "+15555550100"
         assert payload["source"] == "imessage"
 
     def test_datetime_converted_to_ms(self):
@@ -480,7 +480,7 @@ class TestSanitizeReactionForBus:
     def test_chat_id_set_from_phone_for_individual(self):
         reaction = self._make_reaction()
         payload = sanitize_reaction_for_bus(reaction)
-        assert payload["chat_id"] == "+16175969496"
+        assert payload["chat_id"] == "+15555550100"
 
     def test_chat_id_set_from_chat_identifier_for_group(self):
         reaction = self._make_reaction()
@@ -530,14 +530,14 @@ class TestSanitizeReconstructReactionRoundTrip:
     def _make_full_reaction(self):
         return {
             "rowid": 50001,
-            "phone": "+16175969496",
+            "phone": "+15555550100",
             "emoji": "❤️",
             "is_removal": False,
             "target_guid": "p:0/abc-def-123",
             "target_text": "test message with emoji 🎉",
             "target_is_from_me": True,
             "is_group": False,
-            "chat_identifier": "+16175969496",
+            "chat_identifier": "+15555550100",
             "source": "imessage",
             "timestamp": datetime(2026, 3, 13, 21, 30, 0),
         }
@@ -706,18 +706,18 @@ class TestVisionPayload:
 class TestCompactionTriggeredPayload:
     def test_required_fields(self):
         payload = compaction_triggered_payload(
-            "imessage/_123", "+123", "Nikhil", 42
+            "imessage/_123", "+123", "Admin User", 42
         )
         assert payload == {
             "session_name": "imessage/_123",
             "chat_id": "+123",
-            "contact_name": "Nikhil",
+            "contact_name": "Admin User",
             "turn_count": 42,
         }
 
     def test_extra_fields(self):
         payload = compaction_triggered_payload(
-            "imessage/_123", "+123", "Nikhil", 42,
+            "imessage/_123", "+123", "Admin User", 42,
             reason="context_full"
         )
         assert payload["reason"] == "context_full"

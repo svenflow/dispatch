@@ -141,6 +141,7 @@ class TestHandleTaskRequested:
         m._producer = MagicMock()
         m._ephemeral_tasks = {}
         m._running_script_tasks = {}
+        m._completed_task_times = {}
         m._shutdown_flag = False
         # Bind the real method
         m._handle_task_requested = Manager._handle_task_requested.__get__(m, Manager)
@@ -320,6 +321,7 @@ class TestTaskSupervision:
         m.sessions = FakeBackend()
         m._producer = MagicMock()
         m._shutdown_flag = False
+        m._completed_task_times = {}
         m._ephemeral_tasks = {
             "task-old": {
                 "session_key": "ephemeral-task-old",
@@ -369,6 +371,7 @@ class TestTaskSupervision:
         m.sessions = FakeBackend()
         m._producer = MagicMock()
         m._shutdown_flag = False
+        m._completed_task_times = {}
         m._ephemeral_tasks = {
             "task-done": {
                 "session_key": "ephemeral-task-done",
@@ -471,6 +474,7 @@ class TestScriptTask:
 
         m = MagicMock(spec=Manager)
         m._producer = MagicMock()
+        m._completed_task_times = {}
         m._notify_task_event = AsyncMock()
         m._run_script_task = Manager._run_script_task.__get__(m, Manager)
 
@@ -506,6 +510,7 @@ class TestScriptTask:
 
         m = MagicMock(spec=Manager)
         m._producer = MagicMock()
+        m._completed_task_times = {}
         m._run_script_task = Manager._run_script_task.__get__(m, Manager)
 
         payload = {
@@ -534,6 +539,7 @@ class TestScriptTask:
 
         m = MagicMock(spec=Manager)
         m._producer = MagicMock()
+        m._completed_task_times = {}
         m._notify_task_event = AsyncMock()
         m._run_script_task = Manager._run_script_task.__get__(m, Manager)
 

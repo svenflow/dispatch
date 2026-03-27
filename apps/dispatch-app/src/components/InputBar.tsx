@@ -46,13 +46,53 @@ interface InputBarProps {
   voiceConversation?: VoiceConversationReturn;
   /** Ref that parent sets to a function that clears the text input (used by voice mode). */
   clearTextRef?: React.MutableRefObject<(() => void) | null>;
+  /** Called with live dictation draft text (null when not dictating) */
+  onDictationDraft?: (text: string | null) => void;
 }
 
-export function InputBar({ onSend, onSendWithImage, disabled, chatId, voiceConversation, clearTextRef }: InputBarProps) {
-  const [text, setText] = useState("");
+/** Silence timeout — auto-send after this many ms of no new speech results */
+const SILENCE_TIMEOUT_MS = 1800;
+
+// In-memory draft cache (hydrated from SecureStore on mount)
+const draftCache: Record<string, string> = {};
+let draftCacheHydrated = false;
+
+// Hydrate draft cache from SecureStore on first import
+import { getItem, setItem, deleteItem } from "../utils/storage";
+const DRAFT_STORAGE_KEY = "chat_drafts";
+(async () => {
+  try {
+    const stored = await getItem(DRAFT_STORAGE_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      Object.assign(draftCache, parsed);
+    }
+  } catch {}
+  draftCacheHydrated = true;
+})();
+
+async function persistDraftCache() {
+  const nonEmpty = Object.fromEntries(Object.entries(draftCache).filter(([, v]) => v));
+  if (Object.keys(nonEmpty).length === 0) {
+    await deleteItem(DRAFT_STORAGE_KEY).catch(() => {});
+  } else {
+    await setItem(DRAFT_STORAGE_KEY, JSON.stringify(nonEmpty)).catch(() => {});
+  }
+}
+
+export function InputBar({ onSend, onSendWithImage, disabled, chatId, voiceConversation, clearTextRef, onDictationDraft }: InputBarProps) {
+  const draftKey = chatId ?? "__default__";
+  const [text, setText] = useState(() => draftCache[draftKey] ?? "");
+  const [inputKey, setInputKey] = useState(0); // Force TextInput remount to fix height reset
   const [selectedAttachments, setSelectedAttachments] = useState<string[]>([]);
   const [activePanel, setActivePanel] = useState<ActivePanel>("none");
+  const panelAnim = useRef(new Animated.Value(0)).current; // 0 = hidden, 1 = visible
   const speech = useSpeechRecognition();
+  const [isDictatingDraft, setIsDictatingDraft] = useState(false);
+  const isDictatingDraftRef = useRef(false); // Ref mirror to avoid stale closure in speech effect
+  const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const draftTextRef = useRef<string>("");
+  const draftHasStartedListening = useRef(false);
   const insets = useSafeAreaInsets();
 
   // Wire up clearTextRef so parent (voice mode) can clear the input
@@ -65,7 +105,25 @@ export function InputBar({ onSend, onSendWithImage, disabled, chatId, voiceConve
     };
   }, [clearTextRef]);
 
+  // Hydrate text from SecureStore once cache is ready (handles case where cache loads after mount)
+  useEffect(() => {
+    if (!text && draftCacheHydrated && draftCache[draftKey]) {
+      setText(draftCache[draftKey]);
+    }
+  }, [draftKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Persist draft text to memory cache + SecureStore
+  useEffect(() => {
+    if (text) {
+      draftCache[draftKey] = text;
+    } else {
+      delete draftCache[draftKey];
+    }
+    persistDraftCache();
+  }, [text, draftKey]);
+
   const handleMicLongPress = useCallback(() => {
+    if (Platform.OS === "web") return; // No voice mode on desktop
     if (text.trim()) return; // Ignore long-press when text is present — send text first
     voiceConversation?.activate();
   }, [voiceConversation, text]);
@@ -117,7 +175,7 @@ export function InputBar({ onSend, onSendWithImage, disabled, chatId, voiceConve
   }, []);
 
   const canSend = !!(text.trim().length > 0 || selectedAttachments.length > 0) && !disabled;
-  const showMic = !text.trim() && selectedAttachments.length === 0 && speech.isAvailable && !disabled && !speech.isListening;
+  const showMic = Platform.OS !== "web" && !text.trim() && selectedAttachments.length === 0 && speech.isAvailable && !disabled && !speech.isListening;
 
   // Send button pop-in animation
   const sendButtonScale = useRef(new Animated.Value(0)).current;
@@ -144,18 +202,65 @@ export function InputBar({ onSend, onSendWithImage, disabled, chatId, voiceConve
     prevCanSend.current = canSend;
   }, [canSend, sendButtonScale]);
 
-  // Sync speech transcript into the text field (skip when voice mode is active —
-  // the global STT singleton fires events to both hooks, and useSpeechCapture's
-  // activeRef guard handles its side; we suppress the old hook's side here)
+  // Keep ref in sync with state (ref is readable immediately, state is deferred)
+  useEffect(() => {
+    isDictatingDraftRef.current = isDictatingDraft;
+  }, [isDictatingDraft]);
+
+  // Sync speech transcript — in draft mode, show as bubble; otherwise fill text input
   useEffect(() => {
     if (voiceConversation?.isActive) return;
     if (!speech.isListening && !speech.transcript && !speech.partialTranscript) return;
     const liveText = speech.partialTranscript || speech.transcript;
     if (liveText) {
-      const prefix = preDictationText ? preDictationText + " " : "";
-      setText(prefix + liveText);
+      if (isDictatingDraftRef.current) {
+        // Draft bubble mode — show text as a bubble, not in the text input
+        draftTextRef.current = liveText;
+        onDictationDraft?.(liveText);
+        // Reset silence timer on each new result
+        if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+        silenceTimerRef.current = setTimeout(() => {
+          // Silence detected — auto-send
+          const finalText = draftTextRef.current.trim();
+          if (finalText) {
+            speech.stop();
+            onSend(finalText);
+            draftTextRef.current = "";
+            onDictationDraft?.(null);
+            setIsDictatingDraft(false);
+            isDictatingDraftRef.current = false;
+          }
+        }, SILENCE_TIMEOUT_MS);
+      } else {
+        const prefix = preDictationText ? preDictationText + " " : "";
+        setText(prefix + liveText);
+      }
     }
-  }, [speech.transcript, speech.partialTranscript, speech.isListening, preDictationText, voiceConversation?.isActive]);
+  }, [speech.transcript, speech.partialTranscript, speech.isListening, preDictationText, voiceConversation?.isActive, onDictationDraft, onSend]);
+
+  // Track when speech actually starts listening in draft mode
+  useEffect(() => {
+    if (speech.isListening && isDictatingDraft) {
+      draftHasStartedListening.current = true;
+    }
+  }, [speech.isListening, isDictatingDraft]);
+
+  // Clean up draft mode when speech stops (only after it actually started)
+  useEffect(() => {
+    if (!speech.isListening && isDictatingDraft && draftHasStartedListening.current) {
+      // Speech ended — send whatever we have
+      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+      const finalText = draftTextRef.current.trim();
+      if (finalText) {
+        onSend(finalText);
+      }
+      draftTextRef.current = "";
+      draftHasStartedListening.current = false;
+      onDictationDraft?.(null);
+      setIsDictatingDraft(false);
+      isDictatingDraftRef.current = false;
+    }
+  }, [speech.isListening, isDictatingDraft, onDictationDraft, onSend]);
 
   const handleSend = useCallback(() => {
     if (!canSend) return;
@@ -172,21 +277,35 @@ export function InputBar({ onSend, onSendWithImage, disabled, chatId, voiceConve
     }
 
     setText("");
+    delete draftCache[draftKey];
+    persistDraftCache();
+    setInputKey((k) => k + 1); // Force TextInput remount to reset height
     setSelectedAttachments([]);
     setPreDictationText("");
     speech.reset();
-  }, [canSend, onSend, onSendWithImage, text, selectedAttachments, speech]);
+  }, [canSend, onSend, onSendWithImage, text, selectedAttachments, speech, draftKey]);
 
   const handleMicPress = useCallback(() => {
     impactLight();
-    setPreDictationText(text);
+    if (text.trim()) {
+      // If there's already text, use old behavior (append to text input)
+      setPreDictationText(text);
+    } else {
+      // Empty input — use draft bubble mode
+      setIsDictatingDraft(true);
+      isDictatingDraftRef.current = true; // Set ref immediately so speech effect sees it
+      draftTextRef.current = "";
+      draftHasStartedListening.current = false;
+      onDictationDraft?.("");
+    }
     speech.reset();
     speech.start();
-  }, [speech, text]);
+  }, [speech, text, onDictationDraft]);
 
   const handleStopDictation = useCallback(() => {
     impactLight();
     speech.stop();
+    // Draft mode cleanup happens in the useEffect that watches speech.isListening
   }, [speech]);
 
   const handlePickFromGallery = useCallback(async () => {
@@ -247,16 +366,32 @@ export function InputBar({ onSend, onSendWithImage, disabled, chatId, voiceConve
 
   const handleAttachPress = useCallback(() => {
     impactLight();
-    safeConfigureNext(makeLayoutAnim(200));
-    setActivePanel((prev) => (prev === "attach" ? "none" : "attach"));
-  }, []);
+    setActivePanel((prev) => {
+      if (prev === "attach") {
+        // Close — unmount immediately (animation not visible anyway since we remove the view)
+        panelAnim.setValue(0);
+        return "none";
+      } else {
+        // Open — reset to 0, then spring to 1
+        panelAnim.setValue(0);
+        Animated.spring(panelAnim, {
+          toValue: 1,
+          tension: 180,
+          friction: 16,
+          useNativeDriver: true,
+        }).start();
+        return "attach";
+      }
+    });
+  }, [panelAnim]);
 
   const handleAttachOption = useCallback(
     (action: () => void) => {
+      Animated.timing(panelAnim, { toValue: 0, duration: 150, useNativeDriver: true }).start();
       setActivePanel("none");
       action();
     },
-    []
+    [panelAnim]
   );
 
   const handleOpenSessionPicker = useCallback(() => {
@@ -325,7 +460,19 @@ export function InputBar({ onSend, onSendWithImage, disabled, chatId, voiceConve
       ) : null}
 
       {activePanel === "attach" && onSendWithImage ? (
-        <View accessibilityRole="toolbar" accessibilityLabel="Attachment options">
+        <Animated.View
+          accessibilityRole="toolbar"
+          accessibilityLabel="Attachment options"
+          style={{
+            opacity: panelAnim,
+            transform: [{
+              translateY: panelAnim.interpolate({
+                inputRange: [0, 1],
+                outputRange: [40, 0],
+              }),
+            }],
+          }}
+        >
           <View style={attachStyles.row}>
             <AttachOption icon="camera.fill" label="Camera" onPress={() => handleAttachOption(handleTakePicture)} />
             <AttachOption icon="photo.fill" label="Gallery" onPress={() => handleAttachOption(handlePickFromGallery)} />
@@ -339,7 +486,7 @@ export function InputBar({ onSend, onSendWithImage, disabled, chatId, voiceConve
             <AttachOption icon="ant.fill" label="Debug" iconColor="#ef4444" onPress={handleBugFinder} />
             <AttachOption icon="arrow.right.circle.fill" label="Nudge" iconColor="#34d399" onPress={handleNudge} />
           </View>
-        </View>
+        </Animated.View>
       ) : null}
 
       {activePanel === "sessions" ? (
@@ -416,86 +563,89 @@ export function InputBar({ onSend, onSendWithImage, disabled, chatId, voiceConve
               </Pressable>
             ) : null}
 
-            <TextInput
-              style={[
-                styles.input,
-                speech.isListening && styles.inputDictating,
-              ]}
-              value={text}
-              onChangeText={(newText) => {
-                setText(newText);
-                if (speech.isListening) speech.stop();
-              }}
-              onFocus={() => setIsFocused(true)}
-              onBlur={() => setIsFocused(false)}
-              placeholder={speech.isListening ? "Listening..." : `Message ${branding.displayName}...`}
-              placeholderTextColor={speech.isListening ? "#ef4444" : "#52525b"}
-              multiline
-              maxLength={10000}
-              editable={!disabled}
-              returnKeyType="default"
-              blurOnSubmit={false}
-              onKeyPress={Platform.OS === "web" ? (e: any) => {
-                // Enter sends, Shift+Enter inserts newline
-                if (e.nativeEvent.key === "Enter" && !e.nativeEvent.shiftKey) {
-                  e.preventDefault();
-                  handleSend();
-                }
-              } : undefined}
-              accessibilityLabel={speech.isListening ? "Listening for speech" : "Message input"}
-            />
-            {speech.isListening ? (
-              <Pressable
-                onPress={handleStopDictation}
-                style={({ pressed }) => [
-                  styles.actionButton,
-                  styles.stopDictationButton,
-                  pressed && styles.buttonPressed,
-                ]}
-                hitSlop={8}
-                accessibilityRole="button"
-                accessibilityLabel="Stop dictation"
-              >
-                <View style={styles.stopSquare} />
-              </Pressable>
-            ) : canSend ? (
-              <Animated.View style={{ transform: [{ scale: sendButtonScale }] }}>
+            <View style={[
+              styles.inputWrapper,
+              speech.isListening && !isDictatingDraft && styles.inputWrapperDictating,
+            ]}>
+              <TextInput
+                key={inputKey}
+                style={styles.input}
+                value={text}
+                onChangeText={(newText) => {
+                  setText(newText);
+                  if (speech.isListening) speech.stop();
+                }}
+                onFocus={() => setIsFocused(true)}
+                onBlur={() => setIsFocused(false)}
+                placeholder={speech.isListening && !isDictatingDraft ? "Listening..." : `Message ${branding.displayName}...`}
+                placeholderTextColor={speech.isListening && !isDictatingDraft ? "#ef4444" : "#52525b"}
+                multiline
+                maxLength={10000}
+                editable={!disabled}
+                returnKeyType="default"
+                blurOnSubmit={false}
+                onKeyPress={Platform.OS === "web" ? (e: any) => {
+                  // Enter sends, Shift+Enter inserts newline
+                  if (e.nativeEvent.key === "Enter" && !e.nativeEvent.shiftKey) {
+                    e.preventDefault();
+                    handleSend();
+                  }
+                } : undefined}
+                accessibilityLabel={speech.isListening ? "Listening for speech" : "Message input"}
+              />
+              {speech.isListening ? (
                 <Pressable
-                  onPress={handleSend}
+                  onPress={handleStopDictation}
                   style={({ pressed }) => [
-                    styles.actionButton,
-                    styles.sendButton,
+                    styles.inlineActionButton,
+                    styles.stopDictationButton,
                     pressed && styles.buttonPressed,
                   ]}
                   hitSlop={8}
                   accessibilityRole="button"
-                  accessibilityLabel="Send message"
+                  accessibilityLabel="Stop dictation"
                 >
-                  <SymbolView
-                    name={{ ios: "arrow.up", android: "arrow_upward", web: "arrow_upward" }}
-                    tintColor="#ffffff"
-                    size={18}
-                    weight="bold"
-                  />
+                  <View style={styles.stopSquare} />
                 </Pressable>
-              </Animated.View>
-            ) : showMic ? (
-              <Pressable
-                onPress={handleMicPress}
-                onLongPress={handleMicLongPress}
-                delayLongPress={350}
-                style={({ pressed }) => [
-                  styles.actionButton,
-                  pressed && styles.buttonPressed,
-                ]}
-                hitSlop={8}
-                accessibilityRole="button"
-                accessibilityLabel="Start dictation"
-                accessibilityHint="Long press for voice mode"
-              >
-                <SymbolView name={{ ios: "mic.fill", android: "mic", web: "mic" }} tintColor="#8E8E93" size={18} />
-              </Pressable>
-            ) : null}
+              ) : canSend ? (
+                <Animated.View style={{ transform: [{ scale: sendButtonScale }] }}>
+                  <Pressable
+                    onPress={handleSend}
+                    style={({ pressed }) => [
+                      styles.inlineActionButton,
+                      styles.sendButton,
+                      pressed && styles.buttonPressed,
+                    ]}
+                    hitSlop={8}
+                    accessibilityRole="button"
+                    accessibilityLabel="Send message"
+                  >
+                    <SymbolView
+                      name={{ ios: "arrow.up", android: "arrow_upward", web: "arrow_upward" }}
+                      tintColor="#ffffff"
+                      size={18}
+                      weight="bold"
+                    />
+                  </Pressable>
+                </Animated.View>
+              ) : showMic ? (
+                <Pressable
+                  onPress={handleMicPress}
+                  onLongPress={handleMicLongPress}
+                  delayLongPress={350}
+                  style={({ pressed }) => [
+                    styles.inlineActionButton,
+                    pressed && styles.buttonPressed,
+                  ]}
+                  hitSlop={8}
+                  accessibilityRole="button"
+                  accessibilityLabel="Start dictation"
+                  accessibilityHint="Long press for voice mode"
+                >
+                  <SymbolView name={{ ios: "mic", android: "mic", web: "mic" }} tintColor="#8E8E93" size={20} weight="light" />
+                </Pressable>
+              ) : null}
+            </View>
           </View>
         )}
       </View>
@@ -536,9 +686,7 @@ function AttachOption({
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: "#18181b",
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: "#27272a",
+    backgroundColor: "#09090b",
     paddingHorizontal: 12,
     paddingTop: 8,
   },
@@ -546,20 +694,34 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "flex-end",
   },
-  input: {
+  inputWrapper: {
     flex: 1,
+    flexDirection: "row",
+    alignItems: "flex-end",
     backgroundColor: "#27272a",
     borderRadius: 20,
+    paddingRight: 4,
+    minHeight: 40,
+  },
+  inputWrapperDictating: {
+    borderWidth: 1,
+    borderColor: "#ef4444",
+  },
+  input: {
+    flex: 1,
     paddingHorizontal: 16,
     paddingVertical: Platform.OS === "ios" ? 10 : 8,
     fontSize: 16,
     color: "#fafafa",
     maxHeight: 120,
-    minHeight: 40,
   },
-  inputDictating: {
-    borderWidth: 1,
-    borderColor: "#ef4444",
+  inlineActionButton: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 5,
   },
   actionButton: {
     width: 34,

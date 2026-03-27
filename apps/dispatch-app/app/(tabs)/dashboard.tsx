@@ -52,6 +52,7 @@ export default function DashboardScreen() {
         javaScriptEnabled
         domStorageEnabled
         startInLoadingState
+        pullToRefreshEnabled
         renderLoading={() => (
           <View style={styles.loadingContainer}>
             <ActivityIndicator size="large" color="#71717a" />
