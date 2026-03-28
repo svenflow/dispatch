@@ -48,6 +48,11 @@ from pydantic import BaseModel
 import uvicorn
 import yaml
 
+# Widget system models — shared with reply-widget CLI
+import sys as _sys
+_sys.path.insert(0, str(Path.home() / ".claude" / "skills" / "dispatch-app" / "scripts"))
+from widget_models import validate_response as _validate_widget_response, format_widget_response as _format_widget_response
+
 
 def _load_dispatch_config() -> dict:
     """Load assistant config from ~/dispatch/config.local.yaml."""
@@ -352,6 +357,13 @@ def init_db():
         conn.execute("ALTER TABLE messages ADD COLUMN status TEXT DEFAULT 'complete'")
     if "failure_reason" not in columns:
         conn.execute("ALTER TABLE messages ADD COLUMN failure_reason TEXT")
+    # Widget system columns
+    if "widget_data" not in columns:
+        conn.execute("ALTER TABLE messages ADD COLUMN widget_data TEXT")
+    if "widget_response" not in columns:
+        conn.execute("ALTER TABLE messages ADD COLUMN widget_response TEXT")
+    if "responded_at" not in columns:
+        conn.execute("ALTER TABLE messages ADD COLUMN responded_at DATETIME")
     # Create indexes for chat_id queries
     conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_chat_id ON messages(chat_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_chat_created ON messages(chat_id, created_at)")
@@ -450,6 +462,18 @@ def init_db():
             END
         """)
 
+    # Reactions table — stores emoji reactions per message
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS message_reactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+            emoji TEXT NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(message_id, emoji)
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_reactions_message ON message_reactions(message_id)")
+
     # Reconcile orphaned 'generating' messages from prior crashes/restarts
     conn.execute("UPDATE messages SET status='failed', failure_reason='server_restart', content='Image generation interrupted' WHERE status='generating'")
     # Reconcile orphaned image generation status from prior crashes/restarts
@@ -497,12 +521,52 @@ def validate_token(token: str):
         raise HTTPException(status_code=403, detail="Invalid token")
 
 
+def _rebuild_fts(conn):
+    """Rebuild the FTS5 index from scratch. Call after dropping triggers or on corruption."""
+    conn.execute("DROP TRIGGER IF EXISTS messages_fts_delete")
+    conn.execute("DROP TRIGGER IF EXISTS messages_fts_insert")
+    conn.execute("DROP TRIGGER IF EXISTS messages_fts_update")
+    conn.execute("DROP TABLE IF EXISTS messages_fts")
+    conn.execute("""
+        CREATE VIRTUAL TABLE messages_fts USING fts5(
+            content, chat_id UNINDEXED, message_id UNINDEXED,
+            content_rowid='rowid'
+        )
+    """)
+    conn.execute("""
+        INSERT INTO messages_fts(rowid, content, chat_id, message_id)
+        SELECT rowid, content, chat_id, id FROM messages
+    """)
+    conn.execute("""
+        CREATE TRIGGER messages_fts_insert AFTER INSERT ON messages BEGIN
+            INSERT INTO messages_fts(rowid, content, chat_id, message_id)
+            VALUES (NEW.rowid, NEW.content, NEW.chat_id, NEW.id);
+        END
+    """)
+    conn.execute("""
+        CREATE TRIGGER messages_fts_delete AFTER DELETE ON messages BEGIN
+            INSERT INTO messages_fts(messages_fts, rowid, content, chat_id, message_id)
+            VALUES ('delete', OLD.rowid, OLD.content, OLD.chat_id, OLD.id);
+        END
+    """)
+    conn.execute("""
+        CREATE TRIGGER messages_fts_update AFTER UPDATE OF content ON messages BEGIN
+            INSERT INTO messages_fts(messages_fts, rowid, content, chat_id, message_id)
+            VALUES ('delete', OLD.rowid, OLD.content, OLD.chat_id, OLD.id);
+            INSERT INTO messages_fts(rowid, content, chat_id, message_id)
+            VALUES (NEW.rowid, NEW.content, NEW.chat_id, NEW.id);
+        END
+    """)
+    conn.commit()
+    logger.info("FTS index rebuilt successfully")
+
+
 def get_db():
     """Get a WAL-mode database connection."""
     init_db()
     conn = sqlite3.connect(DB_PATH)
     conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=5000")
+    conn.execute("PRAGMA busy_timeout=10000")  # 10s to handle concurrent access from app + sessions
     return conn
 
 
@@ -723,16 +787,19 @@ async def receive_prompt(request: PromptRequest):
         logger.error(f"POST /prompt: failed to store message: {e}")
         raise HTTPException(status_code=500, detail="Failed to store message")
 
-    # Auto-title: on first message to a "New Chat", set title from transcript
+    # Auto-title: on first message to a "New Chat", use Haiku to generate a smart title
     try:
         conn = get_db()
         row = conn.execute("SELECT title FROM chats WHERE id = ?", (request.chat_id,)).fetchone()
         if row and row[0] == "New Chat":
-            title = transcript[:40].strip()
+            # Set immediate placeholder so the UI isn't blank
+            placeholder = transcript[:40].strip()
             if len(transcript) > 40:
-                title = title.rsplit(" ", 1)[0] + "..." if " " in title else title + "..."
-            conn.execute("UPDATE chats SET title = ? WHERE id = ?", (title, request.chat_id))
+                placeholder = placeholder.rsplit(" ", 1)[0] + "..." if " " in placeholder else placeholder + "..."
+            conn.execute("UPDATE chats SET title = ? WHERE id = ?", (placeholder, request.chat_id))
             conn.commit()
+            # Fire off async Haiku call to generate a smart 1-2 word title
+            asyncio.create_task(_auto_title_with_haiku(request.chat_id, transcript))
         conn.close()
     except Exception:
         pass  # Don't fail the request on auto-title error
@@ -942,6 +1009,71 @@ def copy_image_to_canonical(source_path: str, message_id: str, chat_id: str) -> 
         return str(dest)
     except Exception:
         return None
+
+
+async def _auto_title_with_haiku(chat_id: str, transcript: str):
+    """Use Claude Haiku to generate a smart 1-2 word chat title. Non-blocking background task."""
+    try:
+        prompt_text = (
+            "What is the user trying to do? Generate a short title (1-2 words, max 3 words) that describes their goal. "
+            "Focus on intent, not topic. Respond with ONLY the title — no quotes, no punctuation, no explanation. "
+            "Use title case. Examples: 'Debug Auth', 'Plan Trip', 'Fix Build', 'Rename Chats'.\n\n"
+            f"USER MESSAGE:\n{transcript[:500]}"
+        )
+
+        env = {k: v for k, v in os.environ.items() if k not in ("VIRTUAL_ENV",)}
+        result = await asyncio.to_thread(
+            subprocess.run,
+            [
+                "claude", "-p",
+                "--model", "haiku",
+                "--no-session-persistence",
+            ],
+            input=prompt_text,
+            timeout=30,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+
+        if result.returncode != 0:
+            logger.warning(f"Auto-title Haiku call failed (rc={result.returncode}): {result.stderr[:200]}")
+            return
+
+        title = result.stdout.strip().strip('"\'').strip()
+        if not title or len(title) > 50:
+            logger.warning(f"Auto-title: bad result from Haiku: {title!r}")
+            return
+
+        # Update the chat title in DB
+        conn = get_db()
+        conn.execute("UPDATE chats SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (title, chat_id))
+        conn.commit()
+        conn.close()
+        logger.info(f"Auto-title: chat {chat_id[:8]}... titled '{title}'")
+
+        # Produce bus event
+        try:
+            import sys
+            sys.path.insert(0, os.path.expanduser("~/dispatch"))
+            from bus.bus import Bus
+            from assistant.bus_helpers import produce_event
+            bus = Bus(str(BUS_DB_PATH))
+            producer = bus.producer()
+            produce_event(
+                producer,
+                topic="sessions",
+                event_type="chat.title_updated",
+                payload={"chat_id": chat_id, "title": title},
+                key=chat_id,
+                source="dispatch-api",
+            )
+            logger.info(f"Auto-title: bus event produced for chat {chat_id[:8]}...")
+        except Exception as e:
+            logger.warning(f"Auto-title: bus event failed (non-fatal): {e}")
+
+    except Exception as e:
+        logger.warning(f"Auto-title background task failed (non-fatal): {e}")
 
 
 def _sanitize_chat_id_for_path(chat_id: str) -> str:
@@ -1164,7 +1296,7 @@ async def get_messages(since: Optional[str] = None, token: Optional[str] = None,
             # Convert ISO 8601 back to SQLite format for comparison
             since_sqlite = since.replace("T", " ").replace("Z", "") if since else since
             cursor = conn.execute(
-                "SELECT id, role, content, image_path, video_path, audio_path, created_at, status, failure_reason FROM messages "
+                "SELECT id, role, content, image_path, video_path, audio_path, created_at, status, failure_reason, widget_data, widget_response, responded_at FROM messages "
                 "WHERE chat_id = ? AND created_at > ? ORDER BY created_at ASC LIMIT 500",
                 (chat_id, since_sqlite)
             )
@@ -1172,7 +1304,7 @@ async def get_messages(since: Optional[str] = None, token: Optional[str] = None,
             # Subquery gets newest 200 messages, outer query re-orders ASC for display
             cursor = conn.execute(
                 "SELECT * FROM ("
-                "  SELECT id, role, content, image_path, video_path, audio_path, created_at, status, failure_reason FROM messages "
+                "  SELECT id, role, content, image_path, video_path, audio_path, created_at, status, failure_reason, widget_data, widget_response, responded_at FROM messages "
                 "  WHERE chat_id = ? ORDER BY created_at DESC LIMIT 200"
                 ") ORDER BY created_at ASC",
                 (chat_id,)
@@ -1203,9 +1335,28 @@ async def get_messages(since: Optional[str] = None, token: Optional[str] = None,
             # Expose status and failure_reason for async operations
             msg["status"] = msg.get("status") or "complete"
             msg["failure_reason"] = msg.get("failure_reason")
+            # Widget fields — parse JSON strings into objects for client
+            wd = msg.get("widget_data")
+            msg["widget_data"] = json.loads(wd) if wd else None
+            wr = msg.get("widget_response")
+            msg["widget_response"] = json.loads(wr) if wr else None
+            msg["responded_at"] = msg.get("responded_at")
             # Convert SQLite timestamp to ISO 8601 for JavaScript
             msg["created_at"] = _sqlite_to_iso(msg.get("created_at"))
             messages.append(msg)
+        # Batch-fetch reactions for all messages
+        if messages:
+            msg_ids = [m["id"] for m in messages]
+            placeholders = ",".join("?" * len(msg_ids))
+            reaction_cursor = conn.execute(
+                f"SELECT message_id, emoji FROM message_reactions WHERE message_id IN ({placeholders})",
+                msg_ids,
+            )
+            reactions_map: dict[str, list[str]] = {}
+            for r_row in reaction_cursor.fetchall():
+                reactions_map.setdefault(r_row[0], []).append(r_row[1])
+            for msg in messages:
+                msg["reactions"] = reactions_map.get(msg["id"], [])
         conn.close()
     except Exception as e:
         logger.error(f"GET /messages: database error: {e}")
@@ -1216,6 +1367,165 @@ async def get_messages(since: Optional[str] = None, token: Optional[str] = None,
 
     logger.debug(f"GET /messages: returning {len(messages)} messages, is_thinking={is_thinking}")
     return {"messages": messages, "is_thinking": is_thinking}
+
+
+# ---------------------------------------------------------------------------
+# Widget response endpoint
+# ---------------------------------------------------------------------------
+
+
+class WidgetResponseRequest(BaseModel):
+    response: dict
+    token: Optional[str] = None
+
+
+@app.post("/conversations/{chat_id}/messages/{message_id}/widget-response")
+async def widget_response(chat_id: str, message_id: str, body: WidgetResponseRequest):
+    """Submit a response to a widget (e.g. answer a question).
+
+    Inject-first pattern: injects into agent session before persisting,
+    so on failure the user can retry without stale DB state.
+    """
+    import asyncio
+
+    logger.info(f"POST /widget-response: chat_id={chat_id} message_id={message_id[:8]}...")
+
+    # Optional token auth
+    if body.token:
+        allowed_tokens = load_allowed_tokens()
+        if allowed_tokens and body.token not in allowed_tokens:
+            raise HTTPException(status_code=401, detail="Unknown device token")
+
+    try:
+        conn = get_db()
+
+        # 1. Combined lookup + ownership (single query, prevents message-id enumeration)
+        row = conn.execute(
+            "SELECT widget_data, widget_response, responded_at FROM messages WHERE id = ? AND chat_id = ?",
+            (message_id, chat_id),
+        ).fetchone()
+        if not row:
+            conn.close()
+            raise HTTPException(status_code=404, detail="Message not found")
+
+        raw_widget_data, raw_widget_response, responded_at = row
+
+        # 2. Verify widget_data exists
+        if not raw_widget_data:
+            conn.close()
+            raise HTTPException(status_code=400, detail="Message has no widget")
+
+        # 3. Idempotency check
+        if responded_at is not None:
+            conn.close()
+            return {"status": "already_answered", "response": json.loads(raw_widget_response)}
+
+        # 4. Validate response against widget schema
+        widget_data = json.loads(raw_widget_data)
+        error = _validate_widget_response(widget_data, body.response)
+        if error:
+            conn.close()
+            raise HTTPException(status_code=422, detail=error)
+
+        # 5. Format deterministic injection text
+        injection_text = _format_widget_response(widget_data, body.response, message_id)
+
+        # 6. Inject FIRST with timeout
+        try:
+            env = {k: v for k, v in os.environ.items() if k != "VIRTUAL_ENV"}
+            proc = await asyncio.create_subprocess_exec(
+                CLAUDE_ASSISTANT_CLI, "inject-prompt",
+                f"{APP_SESSION_PREFIX}:{chat_id}",
+                "--admin",
+                injection_text,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
+            )
+            try:
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
+            except asyncio.TimeoutError:
+                proc.kill()
+                logger.error(f"widget_response inject timeout: message_id={message_id}")
+                raise HTTPException(status_code=500, detail="Failed to deliver response to agent (timeout)")
+            if proc.returncode != 0:
+                logger.error(f"widget_response inject failed: message_id={message_id} stderr={stderr.decode()}")
+                raise HTTPException(status_code=500, detail="Failed to deliver response to agent")
+        except HTTPException:
+            conn.close()
+            raise
+        except Exception as e:
+            conn.close()
+            logger.error(f"widget_response inject error: message_id={message_id} error={e}")
+            raise HTTPException(status_code=500, detail="Failed to deliver response to agent")
+
+        # 7. Persist with optimistic lock
+        cursor = conn.execute(
+            "UPDATE messages SET widget_response = ?, responded_at = CURRENT_TIMESTAMP WHERE id = ? AND responded_at IS NULL",
+            (json.dumps(body.response), message_id),
+        )
+        if cursor.rowcount == 0:
+            # Race: another request answered between step 3 and 7
+            logger.warning(f"widget_response race: message_id={message_id}")
+            existing = conn.execute("SELECT widget_response FROM messages WHERE id = ?", (message_id,)).fetchone()
+            conn.close()
+            return {"status": "already_answered", "response": json.loads(existing[0]) if existing and existing[0] else body.response}
+
+        conn.commit()
+        conn.close()
+        logger.info(f"widget_response saved: message_id={message_id} chat_id={chat_id}")
+        return {"status": "answered", "response": body.response}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"POST /widget-response: error: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+class ReactRequest(BaseModel):
+    emoji: str = "👍"
+    token: Optional[str] = None
+
+
+@app.post("/messages/{message_id}/react")
+async def react_to_message(message_id: str, request: ReactRequest, token: Optional[str] = None):
+    """Toggle a reaction emoji on a message."""
+    effective_token = token or request.token
+    if effective_token:
+        allowed_tokens = load_allowed_tokens()
+        if allowed_tokens and effective_token not in allowed_tokens:
+            raise HTTPException(status_code=401, detail="Unknown device token")
+
+    emoji = request.emoji.strip()
+    if not emoji or len(emoji) > 8:
+        raise HTTPException(status_code=400, detail="Invalid emoji")
+
+    conn = get_db()
+    # Check message exists
+    row = conn.execute("SELECT id FROM messages WHERE id = ?", (message_id,)).fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    # Toggle: if reaction exists, remove it; otherwise add it
+    existing = conn.execute(
+        "SELECT id FROM message_reactions WHERE message_id = ? AND emoji = ?",
+        (message_id, emoji),
+    ).fetchone()
+    if existing:
+        conn.execute("DELETE FROM message_reactions WHERE message_id = ? AND emoji = ?", (message_id, emoji))
+        action = "removed"
+    else:
+        conn.execute(
+            "INSERT OR REPLACE INTO message_reactions (message_id, emoji) VALUES (?, ?)",
+            (message_id, emoji),
+        )
+        action = "added"
+    conn.commit()
+    conn.close()
+
+    return {"status": "ok", "action": action, "emoji": emoji, "message_id": message_id}
 
 
 @app.get("/audio/{message_id}")
@@ -1641,7 +1951,18 @@ async def clear_messages(token: Optional[str] = None, chat_id: str = "voice"):
         "SELECT audio_path, image_path, video_path FROM messages WHERE chat_id = ?",
         (chat_id,)
     ).fetchall()
-    conn.execute("DELETE FROM messages WHERE chat_id = ?", (chat_id,))
+    try:
+        conn.execute("DELETE FROM messages WHERE chat_id = ?", (chat_id,))
+    except sqlite3.OperationalError as e:
+        if "SQL logic error" in str(e):
+            logger.warning(f"clear_messages: FTS error on delete, dropping triggers and retrying: {e}")
+            conn.execute("DROP TRIGGER IF EXISTS messages_fts_delete")
+            conn.execute("DROP TRIGGER IF EXISTS messages_fts_insert")
+            conn.execute("DROP TRIGGER IF EXISTS messages_fts_update")
+            conn.execute("DELETE FROM messages WHERE chat_id = ?", (chat_id,))
+            _rebuild_fts(conn)
+        else:
+            raise
     conn.commit()
     conn.close()
 
@@ -1761,8 +2082,16 @@ async def restart_session(token: Optional[str] = None, chat_id: str = "voice"):
         sanitized = session_name.replace("+", "_")
         transcript_path = f"dispatch-app/{sanitized}"
         context_prompt = (
-            f"You were just restarted by the user. Read your transcript to recover context:\n"
-            f"uv run ~/.claude/skills/sms-assistant/scripts/read_transcript.py --session {transcript_path}\n\n"
+            f"You were just restarted by the user. Recover context by reading recent messages from this chat:\n"
+            f"curl -s 'http://localhost:9091/messages?chat_id={chat_id}' | uv run python3 -c \"\n"
+            f"import sys, json\n"
+            f"msgs = json.load(sys.stdin).get('messages', [])\n"
+            f"for m in msgs[-20:]:\n"
+            f"    role = m['role']\n"
+            f"    text = m['content'][:500]\n"
+            f"    print(f'[{{role}}] {{text}}')\n"
+            f"    print()\n"
+            f"\"\n\n"
             f"After reading, send a brief message acknowledging you're back and summarizing "
             f"what you were working on. Keep it short — 1-2 sentences."
         )
@@ -1971,7 +2300,7 @@ async def search_chats(q: str = "", limit: int = 50, token: str = None):
             JOIN messages m ON m.id = f.message_id
             LEFT JOIN chats c ON c.id = f.chat_id
             WHERE messages_fts MATCH ?
-            ORDER BY rank
+            ORDER BY m.created_at DESC
             LIMIT ?
         """, (fts_query, limit)).fetchall()
 
@@ -2079,6 +2408,68 @@ async def update_chat(chat_id: str, request: UpdateChatRequest, token: str = Non
         "last_message": None, "last_message_at": None, "last_message_role": None,
         "last_opened_at": _sqlite_to_iso(row[4]),
     }
+
+
+@app.post("/chats/{chat_id}/suggest-title")
+async def suggest_chat_title(chat_id: str, token: str = None):
+    """Use Haiku to suggest 3 short titles based on the chat's messages."""
+    validate_token(token)
+    conn = get_db()
+    # Grab last 10 messages for context (most recent conversation is most relevant)
+    rows = conn.execute(
+        "SELECT role, content FROM messages WHERE chat_id = ? ORDER BY created_at DESC LIMIT 25",
+        (chat_id,)
+    ).fetchall()
+    conn.close()
+
+    if not rows:
+        raise HTTPException(status_code=400, detail="Chat has no messages")
+
+    # Reverse to chronological order
+    rows = list(reversed(rows))
+    conversation = "\n".join(f"{r[0].upper()}: {r[1]}" for r in rows)
+    prompt_text = (
+        "What is the user trying to accomplish in this conversation? Based on their goal, "
+        "generate exactly 3 short titles (1-2 words each, max 3 words) that describe what they're doing. "
+        "Focus on the user's intent, not the assistant's responses. "
+        "Each title should be a different way to describe their goal. "
+        "Respond with ONLY the 3 titles, one per line — no quotes, no numbering, no punctuation, no explanation. "
+        "Use title case. Example output:\nDebug Auth\nFix Login\nSSO Issue\n\n"
+        f"CONVERSATION:\n{conversation}"
+    )
+
+    env = {k: v for k, v in os.environ.items() if k not in ("VIRTUAL_ENV",)}
+    try:
+        result = await asyncio.to_thread(
+            subprocess.run,
+            [
+                "claude", "-p",
+                "--model", "haiku",
+                "--no-session-persistence",
+            ],
+            input=prompt_text,
+            timeout=30,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        if result.returncode != 0:
+            raise HTTPException(status_code=500, detail="Title generation failed")
+
+        raw = result.stdout.strip()
+        titles = [t.strip().strip('"\'').strip() for t in raw.splitlines() if t.strip()]
+        # Filter out empty or too-long titles
+        titles = [t for t in titles if t and len(t) <= 50][:3]
+
+        if not titles:
+            raise HTTPException(status_code=500, detail="No valid titles generated")
+
+        return {"titles": titles}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"suggest-title: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/chats/{chat_id}/fork")
@@ -2269,7 +2660,19 @@ async def delete_chat(chat_id: str, token: str = None):
         "SELECT audio_path, image_path, video_path FROM messages WHERE chat_id = ?",
         (chat_id,)
     ).fetchall()
-    conn.execute("DELETE FROM messages WHERE chat_id = ?", (chat_id,))
+    try:
+        conn.execute("DELETE FROM messages WHERE chat_id = ?", (chat_id,))
+    except sqlite3.OperationalError as e:
+        if "SQL logic error" in str(e):
+            # FTS index out of sync — drop triggers, delete messages, then rebuild FTS
+            logger.warning(f"delete_chat: FTS error on delete, dropping triggers and retrying: {e}")
+            conn.execute("DROP TRIGGER IF EXISTS messages_fts_delete")
+            conn.execute("DROP TRIGGER IF EXISTS messages_fts_insert")
+            conn.execute("DROP TRIGGER IF EXISTS messages_fts_update")
+            conn.execute("DELETE FROM messages WHERE chat_id = ?", (chat_id,))
+            _rebuild_fts(conn)
+        else:
+            raise
     conn.execute("DELETE FROM chats WHERE id = ?", (chat_id,))
     conn.commit()
     conn.close()
@@ -3110,7 +3513,212 @@ async def dashboard_skills():
             "file_count": file_count,
         })
 
+    # ── Enrich with usage metrics from sdk_events ──
+    try:
+        conn = get_bus_db()
+        # UNION ALL for hot + archive in single query
+        try:
+            rows = conn.execute(
+                """
+                SELECT payload, MAX(last_ts) as last_ts, SUM(cnt) as cnt FROM (
+                    SELECT payload, MAX(timestamp) as last_ts, COUNT(*) as cnt
+                    FROM sdk_events WHERE tool_name = 'Skill' AND event_type = 'tool_use'
+                    GROUP BY payload
+                    UNION ALL
+                    SELECT payload, MAX(timestamp) as last_ts, COUNT(*) as cnt
+                    FROM sdk_events_archive WHERE tool_name = 'Skill' AND event_type = 'tool_use'
+                    GROUP BY payload
+                ) GROUP BY payload
+                """
+            ).fetchall()
+        except Exception:
+            rows = conn.execute(
+                "SELECT payload, MAX(timestamp) as last_ts, COUNT(*) as cnt "
+                "FROM sdk_events WHERE tool_name = 'Skill' AND event_type = 'tool_use' "
+                "GROUP BY payload"
+            ).fetchall()
+        conn.close()
+
+        usage_map: dict[str, dict] = {}
+        for row in rows:
+            skill_key = _extract_skill_name(row["payload"])
+            if not skill_key:
+                continue
+            if skill_key not in usage_map:
+                usage_map[skill_key] = {"last_ts": row["last_ts"], "count": row["cnt"]}
+            else:
+                usage_map[skill_key]["count"] += row["cnt"]
+                if row["last_ts"] > usage_map[skill_key]["last_ts"]:
+                    usage_map[skill_key]["last_ts"] = row["last_ts"]
+
+        for skill in skills:
+            sk = skill["name"].lower().replace(" ", "-")
+            usage = usage_map.get(sk)
+            if usage:
+                skill["last_used_ms"] = usage["last_ts"]
+                skill["total_invocations"] = usage["count"]
+            else:
+                skill["last_used_ms"] = None
+                skill["total_invocations"] = 0
+    except Exception:
+        logger.exception("Failed to enrich skills with usage metrics")
+        for skill in skills:
+            skill["last_used_ms"] = None
+            skill["total_invocations"] = 0
+
     return {"skills": skills, "total": len(skills)}
+
+
+_SKILL_PAYLOAD_RE = re.compile(r'skill[:\s]*["\']?([a-z0-9_-]+)')
+
+
+def _extract_skill_name(payload: str | None) -> str | None:
+    """Extract a normalized skill name from a Skill tool payload string."""
+    p = (payload or "").strip().lower()
+    if not p:
+        return None
+    m = _SKILL_PAYLOAD_RE.search(p)
+    if m:
+        return m.group(1)
+    first = p.split()[0] if p else ""
+    return first or None
+
+
+@app.get("/api/dashboard/skills/{skill_name}")
+async def dashboard_skill_detail(skill_name: str, days: int = 30):
+    """Detailed usage metrics for a specific skill."""
+    now_ms = int(time.time() * 1000)
+    since_ms = now_ms - (days * 86400 * 1000)
+    target = skill_name.lower()
+
+    # Load SKILL.md content
+    skill_md_content = None
+    skill_md_path = SKILLS_DIR / skill_name / "SKILL.md"
+    if skill_md_path.exists():
+        try:
+            skill_md_content = skill_md_path.read_text()
+        except Exception:
+            logger.warning("Failed to read SKILL.md for %s", skill_name)
+
+    result = {
+        "name": skill_name,
+        "total_invocations": 0,
+        "last_used_ms": None,
+        "avg_duration_ms": None,
+        "error_count": 0,
+        "invocations_by_session": [],
+        "recent_invocations": [],
+        "skill_md": skill_md_content,
+    }
+
+    try:
+        conn = get_bus_db()
+
+        # UNION ALL for tool_use events (hot + archive)
+        try:
+            tool_use_rows = conn.execute(
+                """
+                SELECT tool_use_id, timestamp, session_name, chat_id, payload
+                FROM sdk_events
+                WHERE tool_name = 'Skill' AND event_type = 'tool_use' AND timestamp >= ?
+                UNION ALL
+                SELECT tool_use_id, timestamp, session_name, chat_id, payload
+                FROM sdk_events_archive
+                WHERE tool_name = 'Skill' AND event_type = 'tool_use' AND timestamp >= ?
+                """,
+                (since_ms, since_ms),
+            ).fetchall()
+        except Exception:
+            tool_use_rows = conn.execute(
+                "SELECT tool_use_id, timestamp, session_name, chat_id, payload "
+                "FROM sdk_events "
+                "WHERE tool_name = 'Skill' AND event_type = 'tool_use' AND timestamp >= ?",
+                (since_ms,),
+            ).fetchall()
+
+        # UNION ALL for tool_result events
+        try:
+            tool_result_rows = conn.execute(
+                """
+                SELECT tool_use_id, duration_ms, is_error FROM sdk_events
+                WHERE tool_name = 'Skill' AND event_type = 'tool_result' AND timestamp >= ?
+                UNION ALL
+                SELECT tool_use_id, duration_ms, is_error FROM sdk_events_archive
+                WHERE tool_name = 'Skill' AND event_type = 'tool_result' AND timestamp >= ?
+                """,
+                (since_ms, since_ms),
+            ).fetchall()
+        except Exception:
+            tool_result_rows = conn.execute(
+                "SELECT tool_use_id, duration_ms, is_error FROM sdk_events "
+                "WHERE tool_name = 'Skill' AND event_type = 'tool_result' AND timestamp >= ?",
+                (since_ms,),
+            ).fetchall()
+
+        conn.close()
+
+        # Build result lookup keyed by tool_use_id (shared between tool_use/tool_result)
+        result_lookup: dict[str, dict] = {}
+        for r in tool_result_rows:
+            if r["tool_use_id"]:
+                result_lookup[r["tool_use_id"]] = {
+                    "duration_ms": r["duration_ms"],
+                    "is_error": bool(r["is_error"]),
+                }
+
+        # Filter to matching skill using shared helper
+        matching = [
+            row for row in tool_use_rows
+            if _extract_skill_name(row["payload"]) == target
+        ]
+
+        if not matching:
+            return result
+
+        result["total_invocations"] = len(matching)
+        result["last_used_ms"] = max(r["timestamp"] for r in matching)
+
+        durations: list[float] = []
+        errors = 0
+        session_counts: dict[str, int] = {}
+        recent: list[dict] = []
+
+        for row in sorted(matching, key=lambda r: r["timestamp"], reverse=True):
+            session = row["session_name"] or "unknown"
+            session_counts[session] = session_counts.get(session, 0) + 1
+
+            # Join on tool_use_id (correct column, not row id)
+            res_info = result_lookup.get(row["tool_use_id"]) if row["tool_use_id"] else None
+            duration = res_info["duration_ms"] if res_info and res_info.get("duration_ms") else None
+            is_error = res_info["is_error"] if res_info else False
+
+            if duration is not None:
+                durations.append(duration)
+            if is_error:
+                errors += 1
+
+            if len(recent) < 50:
+                recent.append({
+                    "timestamp_ms": row["timestamp"],
+                    "session_name": session,
+                    "chat_id": row["chat_id"],
+                    "duration_ms": duration,
+                    "is_error": is_error,
+                })
+
+        result["error_count"] = errors
+        result["avg_duration_ms"] = round(sum(durations) / len(durations), 1) if durations else None
+        result["recent_invocations"] = recent
+        result["invocations_by_session"] = sorted(
+            [{"session_name": k, "count": v} for k, v in session_counts.items()],
+            key=lambda x: x["count"],
+            reverse=True,
+        )
+
+    except Exception:
+        logger.exception("Failed to load skill detail for %s", skill_name)
+
+    return result
 
 
 @app.get("/api/dashboard/tasks")
@@ -3411,9 +4019,97 @@ async def dashboard_ccu():
 
     if data is None:
         # First request ever — no cache yet
-        return {"active_block": None, "recent_blocks": [], "daily": [], "daily_totals": {}, "quota": quota, "_loading": True, "_updated_at": None, "_error": None}
+        return {"active_block": None, "recent_blocks": [], "daily": [], "daily_totals": {}, "quota": quota, "_loading": True, "_updated_at": None, "_error": None, "_quota_error": quota_error, "_quota_updated_at": quota_updated}
 
     return {**data, "quota": quota, "_quota_error": quota_error, "_quota_updated_at": quota_updated, "_loading": loading, "_updated_at": updated, "_error": error}
+
+
+@app.get("/api/dashboard/quota-history")
+async def dashboard_quota_history(hours: int = 24):
+    """Quota utilization history from bus events.
+
+    Reads existing quota.fetched events from bus.db records table.
+    Returns downsampled snapshots (max 96 points) + current quota state.
+    """
+    hours = max(1, min(hours, 168))  # Clamp 1h–7d
+    since_ms = int((time.time() - hours * 3600) * 1000)
+
+    try:
+        conn = get_bus_db()
+        rows = conn.execute(
+            "SELECT timestamp,"
+            " json_extract(payload, '$.five_hour.utilization') AS five_hour,"
+            " json_extract(payload, '$.seven_day.utilization') AS seven_day"
+            " FROM records"
+            " WHERE topic = 'system' AND type = 'quota.fetched'"
+            "   AND timestamp >= ?"
+            " ORDER BY timestamp ASC"
+            " LIMIT 2000",
+            (since_ms,),
+        ).fetchall()
+        conn.close()
+    except Exception as e:
+        logger.error(f"GET /api/dashboard/quota-history error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+    # Convert to dicts
+    snapshots = [
+        {
+            "ts": datetime.fromtimestamp(r["timestamp"] / 1000, tz=timezone.utc).isoformat(),
+            "five_hour": r["five_hour"],
+            "seven_day": r["seven_day"],
+        }
+        for r in rows
+    ]
+
+    # Max-bucket downsampling to 96 points (preserves spikes)
+    MAX_POINTS = 96
+    if len(snapshots) > MAX_POINTS:
+        bucket_size = len(snapshots) / MAX_POINTS
+        downsampled = []
+        for i in range(MAX_POINTS):
+            start = int(i * bucket_size)
+            end = int((i + 1) * bucket_size)
+            bucket = snapshots[start:end]
+            if bucket:
+                best = max(bucket, key=lambda s: max(s["five_hour"] or 0, s["seven_day"] or 0))
+                downsampled.append(best)
+        snapshots = downsampled
+
+    # Current quota + backoff from in-memory cache
+    _quota_read_from_file()
+    with _quota_lock:
+        current_quota = _quota_cache.get("data")
+        quota_updated = _quota_cache.get("updated_at")
+
+    # Backoff from most recent bus event (or defaults)
+    backoff_seconds = 900
+    consecutive_failures = 0
+    try:
+        conn2 = get_bus_db()
+        latest = conn2.execute(
+            "SELECT json_extract(payload, '$.backoff_seconds') AS bs,"
+            " json_extract(payload, '$.consecutive_failures') AS cf"
+            " FROM records"
+            " WHERE topic = 'system' AND type = 'quota.fetched'"
+            " ORDER BY timestamp DESC LIMIT 1"
+        ).fetchone()
+        conn2.close()
+        if latest:
+            backoff_seconds = latest["bs"] or 900
+            consecutive_failures = latest["cf"] or 0
+    except Exception:
+        pass
+
+    return {
+        "snapshots": snapshots,
+        "current_backoff": {
+            "backoff_seconds": int(backoff_seconds),
+            "consecutive_failures": int(consecutive_failures),
+        },
+        "current_quota": current_quota,
+        "_quota_updated_at": quota_updated,
+    }
 
 
 # Usage per session — background-cached like CCU
@@ -4938,7 +5634,8 @@ if DISPATCH_APP_DIST.is_dir():
         return RedirectResponse(url=f"/{path}", status_code=301)
 
     # Mount static assets at root-level paths (baseUrl="/")
-    app.mount("/_expo", StaticFiles(directory=str(DISPATCH_APP_DIST / "_expo")), name="dispatch-app-expo")
+    if (DISPATCH_APP_DIST / "_expo").is_dir():
+        app.mount("/_expo", StaticFiles(directory=str(DISPATCH_APP_DIST / "_expo")), name="dispatch-app-expo")
 
     if (DISPATCH_APP_DIST / "assets").is_dir():
         app.mount("/assets", StaticFiles(directory=str(DISPATCH_APP_DIST / "assets")), name="dispatch-app-assets")

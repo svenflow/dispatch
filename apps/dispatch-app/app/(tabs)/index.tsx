@@ -23,6 +23,22 @@ import { showDestructiveConfirm } from "@/src/utils/alert";
 import { searchChats } from "@/src/api/chats";
 import type { Conversation, SearchResult } from "@/src/api/types";
 
+/** Format a UTC timestamp like "Mar 28" or "Mar 28, 2025" or "2:30 PM" if today */
+function formatSearchTimestamp(created_at: string): string {
+  // Server returns "YYYY-MM-DD HH:MM:SS" in UTC
+  const date = new Date(created_at.replace(" ", "T") + "Z");
+  const now = new Date();
+  const isToday = date.toDateString() === now.toDateString();
+  if (isToday) {
+    return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  }
+  const isThisYear = date.getFullYear() === now.getFullYear();
+  if (isThisYear) {
+    return date.toLocaleDateString([], { month: "short", day: "numeric" });
+  }
+  return date.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
+}
+
 export default function ChatListScreen() {
   const router = useRouter();
   const {
@@ -88,7 +104,7 @@ export default function ChatListScreen() {
   const handleNewChat = useCallback(async () => {
     const chat = await createConversation();
     if (chat) {
-      router.push({ pathname: "/chat/[id]", params: { id: chat.id, chatTitle: chat.title } });
+      router.push({ pathname: "/chat/[id]", params: { id: chat.id, chatTitle: chat.title, chatModel: chat.model || undefined } });
     }
   }, [createConversation, router]);
 
@@ -103,7 +119,7 @@ export default function ChatListScreen() {
       openSwipeableRef.current?.close();
       router.push({
         pathname: "/chat/[id]",
-        params: { id: conversation.id, chatTitle: conversation.title },
+        params: { id: conversation.id, chatTitle: conversation.title, chatModel: conversation.model || undefined },
       });
     },
     [router],
@@ -253,7 +269,12 @@ export default function ChatListScreen() {
         <Text style={styles.searchGroupTitle} numberOfLines={1}>{item.chatTitle}</Text>
         {item.results.slice(0, 3).map((r) => (
           <View key={r.message_id} style={styles.searchResultRow}>
-            <Text style={styles.searchResultRole}>{r.role === "user" ? "You" : "Sven"}</Text>
+            <View style={styles.searchResultMeta}>
+              <Text style={styles.searchResultRole}>{r.role === "user" ? "You" : "Sven"}</Text>
+              <Text style={styles.searchResultTimestamp}>
+                {formatSearchTimestamp(r.created_at)}
+              </Text>
+            </View>
             <Text style={styles.searchResultSnippet} numberOfLines={2}>
               {renderHighlightedSnippet(r.snippet)}
             </Text>
@@ -453,17 +474,22 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   searchResultRow: {
+    marginTop: 6,
+  },
+  searchResultMeta: {
     flexDirection: "row",
-    alignItems: "flex-start",
-    gap: 8,
-    marginTop: 4,
+    alignItems: "center",
+    gap: 6,
+    marginBottom: 2,
   },
   searchResultRole: {
     color: "#71717a",
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: "600",
-    width: 36,
-    marginTop: 1,
+  },
+  searchResultTimestamp: {
+    color: "#52525b",
+    fontSize: 12,
   },
   searchResultSnippet: {
     color: "#a1a1aa",
