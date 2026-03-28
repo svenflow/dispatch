@@ -333,6 +333,8 @@ export function MessageBubble({ message, audioState, onRetry, onLongPress, showD
       <View style={[
         styles.bubbleRow,
         isUser && styles.bubbleRowUser,
+        // Audio messages: force full width so waveform is consistent across messages
+        !!audioUrl && styles.bubbleRowFullWidth,
         // Shrink-wrap: apply measured width if available (text-only messages)
         !hasMedia && measuredBubbleWidth !== undefined && { width: measuredBubbleWidth, maxWidth: isUser ? "75%" : "90%" },
       ]}>
@@ -354,6 +356,8 @@ export function MessageBubble({ message, audioState, onRetry, onLongPress, showD
           style={[
             styles.bubble,
             isUser ? styles.bubbleUser : styles.bubbleAssistant,
+            // Audio messages: expand bubble to fill row so waveform has consistent width
+            !!audioUrl && styles.bubbleFullWidth,
             isFailed && styles.bubbleGenerationFailed,
             isPlayingThis && styles.bubblePlaying,
             (imageSource || videoSource) && !displayText && styles.bubbleMediaOnly,
@@ -587,6 +591,9 @@ const styles = StyleSheet.create({
     flexDirection: "row-reverse",
     maxWidth: "75%",
   },
+  bubbleRowFullWidth: {
+    width: "90%",
+  },
   bubble: {
     flexShrink: 1,
     paddingHorizontal: 12,
@@ -658,6 +665,9 @@ const styles = StyleSheet.create({
   bubbleAssistant: {
     backgroundColor: "#27272a",
     borderBottomLeftRadius: 4,
+  },
+  bubbleFullWidth: {
+    flexGrow: 1,
   },
   bubbleGenerationFailed: {
     borderLeftWidth: 2,
