@@ -81,7 +81,9 @@ export function useDashboard(): UseDashboardReturn {
 
     try {
       if (force) setCcuLoading(true);
-      const ccuData = await getDashboardCcu();
+      // Pass forceQuota=true on manual refresh so the server hits Anthropic's
+      // quota endpoint immediately instead of waiting for the 5-min background poll.
+      const ccuData = await getDashboardCcu(force);
       if (!mountedRef.current) return;
       setCcu(ccuData);
       lastCcuFetchRef.current = Date.now();

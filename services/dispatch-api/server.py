@@ -160,6 +160,8 @@ for old_path, new_path in _LEGACY_RENAMES.items():
 CLAUDE_ASSISTANT_CLI = str(Path.home() / "dispatch" / "bin" / "claude-assistant")
 NANO_BANANA_PATH = Path.home() / ".claude" / "skills" / "nano-banana" / "scripts" / "nano-banana"
 MFLUX_PATH = Path.home() / ".local" / "bin" / "mflux-generate-flux2"
+DIFFUSIONKIT_CLI = Path.home() / "code" / "DiffusionKit" / ".venv" / "bin" / "diffusionkit-cli"
+GEMINI_CLI = Path.home() / ".claude" / "skills" / "gemini" / "scripts" / "gemini"
 RATE_LIMIT_WINDOW = 60  # seconds
 RATE_LIMIT_MAX = 30  # requests per window
 
@@ -951,26 +953,87 @@ def _sanitize_chat_id_for_path(chat_id: str) -> str:
     return sanitized
 
 
-async def _generate_chat_image_background(chat_id: str, chat_title: str, prompt: str):
-    """Background task: run nano-banana and store result as chat cover image."""
+async def _summarize_to_image_prompt(chat_title: str, conversation_summary: str) -> str:
+    """Use Claude Haiku via Agent SDK CLI to convert a conversation summary into a short image generation prompt."""
+    prompt_text = (
+        "TASK: Convert the following chat conversation into a single SHORT image generation prompt "
+        "(1-2 sentences, max 50 words) for creating a circular app icon/avatar.\n\n"
+        "RULES:\n"
+        "- Output ONLY the image prompt text, nothing else\n"
+        "- No conversation, no explanation, no markdown, no quotes\n"
+        "- Think app icon style: simple, bold, recognizable at small sizes\n"
+        "- Do NOT include any text/words/letters in the image description\n"
+        "- Do NOT respond to the conversation — just analyze its TOPIC and describe an icon for it\n\n"
+        f"CHAT TITLE: {chat_title}\n\n"
+        f"CONVERSATION TO ANALYZE:\n---\n{conversation_summary}\n---\n\n"
+        "IMAGE PROMPT:"
+    )
+
+    env = {k: v for k, v in os.environ.items() if k not in ("VIRTUAL_ENV",)}
+    result = await asyncio.to_thread(
+        subprocess.run,
+        [
+            "claude", "-p",
+            "--model", "haiku",
+            "--no-session-persistence",
+            "--max-turns", "1",
+        ],
+        input=prompt_text,
+        timeout=30,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"Haiku summarization failed: {result.stderr[:500]}")
+
+    prompt = result.stdout.strip().strip('"\'`')
+    if not prompt:
+        raise RuntimeError("Haiku returned empty prompt")
+    return prompt
+
+
+async def _generate_chat_image_background(chat_id: str, chat_title: str, conversation_summary: str):
+    """Background task: summarize conversation via Gemini Flash, then generate image via DiffusionKit FLUX."""
     safe_id = _sanitize_chat_id_for_path(chat_id)
     dest_dir = IMAGE_DIR / "chat-covers"
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest_path = str(dest_dir / f"{safe_id}.png")
     start = time.monotonic()
     try:
+        # Step 1: Summarize conversation into a short image prompt via Gemini Flash
+        image_prompt = await _summarize_to_image_prompt(chat_title, conversation_summary)
+        summarize_elapsed = time.monotonic() - start
+        logger.info(
+            f"Chat image prompt generated: chat_id={chat_id}, "
+            f"title=\"{chat_title}\", prompt=\"{image_prompt}\", "
+            f"summarize_time={summarize_elapsed:.1f}s"
+        )
+
+        # Step 2: Generate image via DiffusionKit FLUX.1-schnell
         async with _generate_semaphore:
-            env = {k: v for k, v in os.environ.items() if k != "VIRTUAL_ENV"}
+            # DiffusionKit needs its own venv; calling the full path to its CLI
+            # ensures it uses the correct Python interpreter from its shebang.
+            # Pass clean env without dispatch server's VIRTUAL_ENV.
+            env = {k: v for k, v in os.environ.items() if k not in ("VIRTUAL_ENV",)}
             result = await asyncio.to_thread(
                 subprocess.run,
-                [str(NANO_BANANA_PATH), prompt, "--aspect-ratio", "1:1", "-o", dest_path],
-                timeout=300,
+                [
+                    str(DIFFUSIONKIT_CLI),
+                    "--prompt", image_prompt,
+                    "--model-version", "argmaxinc/mlx-FLUX.1-schnell",
+                    "--steps", "4",
+                    "--height", "512",
+                    "--width", "512",
+                    "--output-path", dest_path,
+                ],
+                timeout=120,
                 capture_output=True,
                 text=True,
                 env=env,
             )
         if result.returncode != 0:
-            raise RuntimeError(f"exit {result.returncode}: {result.stderr[:200]}")
+            raise RuntimeError(f"DiffusionKit exit {result.returncode}: {result.stderr[-500:]}")
 
         # Update chats table with image_path and status
         conn = get_db()
@@ -984,7 +1047,7 @@ async def _generate_chat_image_background(chat_id: str, chat_title: str, prompt:
             conn.close()
 
         elapsed = time.monotonic() - start
-        logger.info(f"Chat image generated: chat_id={chat_id}, title=\"{chat_title}\", duration={elapsed:.1f}s")
+        logger.info(f"Chat image generated: chat_id={chat_id}, title=\"{chat_title}\", duration={elapsed:.1f}s (summarize={summarize_elapsed:.1f}s)")
 
     except subprocess.TimeoutExpired:
         logger.error(f"Chat image generation timeout: chat_id={chat_id}")
@@ -1009,7 +1072,7 @@ def _set_chat_image_status(chat_id: str, status: str):
 
 @app.post("/generate-image", status_code=202)
 async def generate_image(req: GenerateImageRequest, token: Optional[str] = None):
-    """Generate a chat cover image by summarizing conversation and calling nano-banana.
+    """Generate a chat cover image via 2-step pipeline: Gemini Flash summarization → DiffusionKit FLUX local generation.
 
     Returns 202 immediately. The image is generated in the background;
     poll GET /chats to see the updated image_url on the chat.
@@ -1060,32 +1123,23 @@ async def generate_image(req: GenerateImageRequest, token: Optional[str] = None)
     finally:
         conn.close()
 
-    # Build a summary of the conversation for nano-banana
+    # Build a conversation summary for the 2-step pipeline
+    # (Haiku summarizes into a short image prompt, then DiffusionKit generates the image)
     conversation_lines = []
     for role, content in reversed(msg_rows):
         prefix = "User" if role == "user" else "Assistant"
-        # Truncate very long messages to keep prompt reasonable
-        snippet = content[:200] if content else ""
+        # Truncate messages — haiku only needs topic gist, not full content
+        snippet = content[:100] if content else ""
         conversation_lines.append(f"{prefix}: {snippet}")
     conversation_summary = "\n".join(conversation_lines)
-
-    prompt = (
-        f"Create an icon that represents a chat conversation titled \"{chat_title}\". "
-        f"This will be used as a small circular avatar/icon in a chat list (like app icons), "
-        f"so it should be simple, bold, and recognizable at small sizes. "
-        f"Here is a summary of the conversation to understand the topic:\n\n{conversation_summary}\n\n"
-        f"Design a clean, iconic image that visually represents the main topic or theme. "
-        f"Think app icon style — simple shapes, bold colors, minimal detail. "
-        f"Do NOT include any text, words, or letters in the image."
-    )
 
     logger.info(
         f"POST /generate-image: spawning background task for chat_id={req.chat_id}, "
         f"title=\"{chat_title}\", in_flight={len(_active_generate_tasks)}"
     )
 
-    # Spawn background generation task
-    task = asyncio.create_task(_generate_chat_image_background(req.chat_id, chat_title, prompt))
+    # Spawn background generation task (Gemini Flash → DiffusionKit FLUX pipeline)
+    task = asyncio.create_task(_generate_chat_image_background(req.chat_id, chat_title, conversation_summary))
     _active_generate_tasks.add(task)
     task.add_done_callback(_active_generate_tasks.discard)
 
@@ -1806,9 +1860,16 @@ def _fetch_chat_list() -> list[dict]:
         ) m ON m.chat_id = c.id AND m.rn = 1
         ORDER BY COALESCE(m.created_at, c.created_at) DESC
     """)
+    # Load session registry to get model per chat
+    sessions = _load_sessions()
+
     chats = []
     for row in cursor.fetchall():
         chat_id = row[0]
+        # Look up model from sessions.json — try both prefixed and unprefixed keys
+        session_key = f"{APP_SESSION_PREFIX}:{chat_id}"
+        session_info = sessions.get(session_key) or sessions.get(chat_id) or {}
+        model = session_info.get("model", "opus")  # Default to opus
         chats.append({
             "id": chat_id,
             "title": row[1],
@@ -1824,6 +1885,7 @@ def _fetch_chat_list() -> list[dict]:
             "marked_unread": bool(row[10]),
             "image_url": _build_chat_image_url(chat_id, row[11]),
             "image_status": row[12],
+            "model": model,
         })
     conn.close()
     return chats
@@ -3184,8 +3246,13 @@ def _quota_fetch():
             _quota_cache["error"] = str(e)
 
 
-def _quota_maybe_refresh(max_age_seconds: int = 30):
-    """Trigger background refresh if quota cache is stale."""
+def _quota_maybe_refresh(max_age_seconds: int = 300):
+    """Trigger background refresh if quota cache is stale (default 5 min).
+
+    The Anthropic OAuth /api/oauth/usage endpoint has aggressive rate limits
+    (~1-2 req/min before 429 lockout that persists 30+ min). We poll every 5 min
+    in a background timer and only force-refresh on explicit user tap.
+    """
     with _quota_lock:
         if _quota_cache["loading"]:
             return
@@ -3198,6 +3265,26 @@ def _quota_maybe_refresh(max_age_seconds: int = 30):
 
     t = threading.Thread(target=_quota_fetch, daemon=True)
     t.start()
+
+
+_quota_timer: threading.Timer | None = None
+
+def _quota_start_background_polling():
+    """Start a repeating background timer that refreshes quota every 5 min."""
+    global _quota_timer
+
+    def _tick():
+        _quota_maybe_refresh(max_age_seconds=0)  # force refresh
+        global _quota_timer
+        _quota_timer = threading.Timer(300, _tick)
+        _quota_timer.daemon = True
+        _quota_timer.start()
+
+    # Initial fetch after 5s delay (let server finish starting)
+    _quota_timer = threading.Timer(5, _tick)
+    _quota_timer.daemon = True
+    _quota_timer.start()
+    logger.info("Quota background polling started (every 5 min)")
 
 
 # ─────────────────────────────────────────────────────────────
@@ -3307,10 +3394,17 @@ def _ccu_maybe_refresh(max_age_seconds: int = 60):
 
 
 @app.get("/api/dashboard/ccu")
-async def dashboard_ccu():
-    """Claude Code Usage — returns cached data, triggers background refresh."""
+async def dashboard_ccu(force_quota: bool = False):
+    """Claude Code Usage — returns cached data, triggers background refresh.
+
+    Quota is polled every 5 min by a background timer. Pass ?force_quota=true
+    to trigger an immediate quota refresh (e.g. on user tap-to-refresh).
+    """
     _ccu_maybe_refresh(max_age_seconds=60)
-    _quota_maybe_refresh(max_age_seconds=30)
+
+    # Only force-refresh quota on explicit user request (tap-to-refresh)
+    if force_quota:
+        _quota_maybe_refresh(max_age_seconds=0)
 
     with _ccu_lock:
         data = _ccu_cache["data"]
@@ -3321,12 +3415,13 @@ async def dashboard_ccu():
     with _quota_lock:
         quota = _quota_cache["data"]
         quota_error = _quota_cache.get("error")
+        quota_updated = _quota_cache.get("updated_at")
 
     if data is None:
         # First request ever — no cache yet
         return {"active_block": None, "recent_blocks": [], "daily": [], "daily_totals": {}, "quota": quota, "_loading": True, "_updated_at": None, "_error": None}
 
-    return {**data, "quota": quota, "_quota_error": quota_error, "_loading": loading, "_updated_at": updated, "_error": error}
+    return {**data, "quota": quota, "_quota_error": quota_error, "_quota_updated_at": quota_updated, "_loading": loading, "_updated_at": updated, "_error": error}
 
 
 # Usage per session — background-cached like CCU
@@ -3739,6 +3834,21 @@ async def set_model_config(request: SetModelRequest, token: str = ""):
         raise
     except Exception as e:
         logger.error(f"set_model_config error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/app/restart-daemon")
+async def restart_daemon(token: str = ""):
+    """Restart the dispatch daemon via claude-assistant restart."""
+    try:
+        import subprocess as _sp
+        result = _sp.run(
+            [str(Path.home() / "dispatch" / "bin" / "claude-assistant"), "restart"],
+            capture_output=True, text=True, timeout=30,
+        )
+        return {"ok": True, "output": result.stdout.strip()}
+    except Exception as e:
+        logger.error(f"restart_daemon error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -4871,6 +4981,9 @@ if __name__ == "__main__":
 
     # Initialize database on startup
     init_db()
+
+    # Start background quota polling (every 5 min) to avoid rate limits
+    _quota_start_background_polling()
 
     # Configure uvicorn with socket reuse to prevent "address already in use" crashes
     # when the daemon restarts and the old process hasn't fully released the port.

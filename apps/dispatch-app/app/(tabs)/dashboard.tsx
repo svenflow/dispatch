@@ -291,60 +291,19 @@ function UsageSection({
           </View>
         ) : hasBlockData ? (
           <View style={styles.quotaContainer}>
-            {/* Current 5h block cost */}
-            <View style={styles.row}>
-              <Text style={styles.rowLabel}>Current Block</Text>
-              <Text style={styles.rowValue}>{formatCost(blockCost!)}</Text>
+            {/* Compact approximation row: block cost · burn rate · 7d total */}
+            <View style={styles.approxRow}>
+              <Text style={styles.approxLabel}>~{formatCost(blockCost!)} block</Text>
+              {burnRate?.costPerHour != null && (
+                <Text style={styles.approxLabel}> · {formatCost(burnRate.costPerHour)}/hr</Text>
+              )}
+              {dailyTotals?.totalCost != null && (
+                <Text style={styles.approxLabel}> · {formatCost(dailyTotals.totalCost)} 7d</Text>
+              )}
             </View>
-            {/* Burn rate */}
-            {burnRate?.costPerHour != null && (
-              <>
-                <View style={styles.separator} />
-                <View style={styles.row}>
-                  <Text style={styles.rowLabel}>Burn Rate</Text>
-                  <Text style={styles.rowValue}>
-                    {formatCost(burnRate.costPerHour)}/hr
-                  </Text>
-                </View>
-              </>
-            )}
-            {/* Projected block cost */}
-            {projection?.totalCost != null && (
-              <>
-                <View style={styles.separator} />
-                <View style={styles.row}>
-                  <Text style={styles.rowLabel}>Block Projection</Text>
-                  <Text style={styles.rowValue}>
-                    {formatCost(projection.totalCost)}
-                    {projection.remainingMinutes != null &&
-                      ` · ${projection.remainingMinutes}m left`}
-                  </Text>
-                </View>
-              </>
-            )}
-            {/* 7-day rolling cost */}
-            {dailyTotals?.totalCost != null && (
-              <>
-                <View style={styles.separator} />
-                <View style={styles.row}>
-                  <Text style={styles.rowLabel}>7-Day Total</Text>
-                  <Text style={styles.rowValue}>
-                    {formatCost(dailyTotals.totalCost)}
-                  </Text>
-                </View>
-              </>
-            )}
-            {/* Quota error notice */}
-            {ccu?._quota_error && (
-              <>
-                <View style={styles.separator} />
-                <View style={styles.row}>
-                  <Text style={[styles.rowValueMuted, { fontSize: 12 }]}>
-                    Quota bars unavailable (rate limited)
-                  </Text>
-                </View>
-              </>
-            )}
+            <Text style={styles.approxNote}>
+              Estimated from local usage data
+            </Text>
           </View>
         ) : (
           <View style={styles.row}>
@@ -663,6 +622,23 @@ const styles = StyleSheet.create({
     backgroundColor: "#27272a",
     marginHorizontal: 16,
     marginVertical: 2,
+  },
+  approxRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    paddingBottom: 2,
+  },
+  approxLabel: {
+    color: "#a1a1aa",
+    fontSize: 13,
+  },
+  approxNote: {
+    color: "#52525b",
+    fontSize: 11,
+    paddingHorizontal: 16,
+    paddingBottom: 10,
   },
 
   // Warning banner
