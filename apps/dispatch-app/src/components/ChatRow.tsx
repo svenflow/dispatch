@@ -99,12 +99,15 @@ export function ChatRow({ conversation, onPress, onLongPress, isUnread, isSelect
               <Text style={[styles.time, isUnread && styles.timeUnread]}>{timestamp}</Text>
             ) : null}
           </View>
-          {is_thinking ? (
+          {preview ? (
+            <View style={is_thinking ? styles.previewWithThinking : undefined}>
+              <Text style={[styles.preview, isUnread && styles.previewUnread]} numberOfLines={is_thinking ? 1 : 2}>
+                {preview}
+              </Text>
+              {is_thinking && <TypingDots />}
+            </View>
+          ) : is_thinking ? (
             <TypingDots />
-          ) : preview ? (
-            <Text style={[styles.preview, isUnread && styles.previewUnread]} numberOfLines={2}>
-              {preview}
-            </Text>
           ) : (
             <Text style={styles.emptyPreview}>No messages yet</Text>
           )}
@@ -253,10 +256,13 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontStyle: "italic",
   },
+  previewWithThinking: {
+    gap: 2,
+  },
   typingRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
-    height: 19,
+    height: 14,
   },
 });
