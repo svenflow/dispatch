@@ -131,3 +131,133 @@ export interface SdkEvent {
 export interface SdkEventsResponse {
   events: SdkEvent[];
 }
+
+// ---------------------------------------------------------------------------
+// Dashboard API types
+// ---------------------------------------------------------------------------
+
+/** System health snapshot from GET /api/dashboard/health */
+export interface DashboardHealth {
+  daemon_pid: number | null;
+  daemon_running: boolean;
+  uptime_seconds: number;
+  active_sessions: number;
+  total_sessions: number;
+  total_bus_events: number;
+  total_sdk_events: number;
+  events_last_hour: number;
+  sdk_events_last_hour: number;
+  last_event_age_seconds: number | null;
+  health_status: "unknown" | "healthy" | "degraded" | "down";
+  active_reminders: number;
+  facts_count: number;
+  skills_count: number;
+}
+
+/** A session from GET /api/dashboard/sessions */
+export interface DashboardSession {
+  chat_id: string;
+  session_name: string | null;
+  contact_name: string;
+  tier: string;
+  type: string;
+  source: string;
+  model: string;
+  created_at: string | null;
+  updated_at: string | null;
+  last_message_time: string | null;
+  age_seconds: number | null;
+}
+
+/** Response from GET /api/dashboard/sessions */
+export interface DashboardSessionsResponse {
+  sessions: DashboardSession[];
+  total: number;
+  by_tier: Record<string, number>;
+}
+
+/** A reminder from GET /api/dashboard/tasks */
+export interface DashboardReminder {
+  id: string;
+  title: string;
+  schedule: string;
+  timezone: string;
+  next_fire: string | null;
+  last_fired: string | null;
+  fired_count: number;
+  last_error: string | null;
+  status: string;
+}
+
+/** Response from GET /api/dashboard/tasks */
+export interface DashboardTasksResponse {
+  reminders: DashboardReminder[];
+  recent_task_events: Array<{
+    type: string;
+    timestamp: number;
+    key: string;
+    task_id: string | null;
+    title: string | null;
+  }>;
+}
+
+/** A skill from GET /api/dashboard/skills */
+export interface DashboardSkill {
+  name: string;
+  description: string;
+  path: string;
+  has_scripts: boolean;
+  script_count: number;
+  scripts: string[];
+  file_count: number;
+}
+
+/** Response from GET /api/dashboard/skills */
+export interface DashboardSkillsResponse {
+  skills: DashboardSkill[];
+  total: number;
+}
+
+/** Quota bucket used in CCU response */
+export interface QuotaBucket {
+  utilization: number;
+  resets_at: string;
+}
+
+/** A bus event from GET /api/dashboard/events */
+export interface DashboardEvent {
+  topic: string;
+  partition: number;
+  offset: number;
+  timestamp: number;
+  type: string;
+  source: string;
+  key: string;
+  payload_preview: string;
+  age_seconds: number;
+}
+
+/** Response from GET /api/dashboard/events */
+export interface DashboardEventsResponse {
+  events: DashboardEvent[];
+  total_count: number;
+  max_offset: number;
+}
+
+/** Response from GET /api/dashboard/ccu */
+export interface DashboardCcuResponse {
+  active_block: Record<string, unknown> | null;
+  recent_blocks: Array<Record<string, unknown>>;
+  daily: Array<Record<string, unknown>>;
+  daily_totals: Record<string, unknown>;
+  quota: {
+    five_hour?: QuotaBucket | null;
+    seven_day?: QuotaBucket | null;
+    seven_day_sonnet?: QuotaBucket | null;
+    seven_day_opus?: QuotaBucket | null;
+  } | null;
+  _loading: boolean;
+  _updated_at: string | null;
+  _error: string | null;
+  _quota_error: string | null;
+}

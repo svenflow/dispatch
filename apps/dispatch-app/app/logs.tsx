@@ -1,10 +1,11 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FlatList,
   Platform,
   Pressable,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from "react-native";
 import { Stack } from "expo-router";
@@ -28,6 +29,7 @@ export default function LogsScreen() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [autoScroll, setAutoScroll] = useState(true);
+  const [searchQuery, setSearchQuery] = useState("");
   const flatListRef = useRef<FlatList>(null);
   const lastLineRef = useRef(0);
 
@@ -96,6 +98,12 @@ export default function LogsScreen() {
     }
   }, [logs.length, autoScroll]);
 
+  const filteredLogs = useMemo(() => {
+    if (!searchQuery.trim()) return logs;
+    const q = searchQuery.trim().toLowerCase();
+    return logs.filter((entry) => entry.line.toLowerCase().includes(q));
+  }, [logs, searchQuery]);
+
   const renderLogLine = useCallback(
     ({ item }: { item: LogEntry }) => {
       const isError =
@@ -157,9 +165,25 @@ export default function LogsScreen() {
         ))}
       </View>
 
+      {/* Search bar */}
+      <View style={styles.searchContainer}>
+        <TextInput
+          style={styles.searchInput}
+          value={searchQuery}
+          onChangeText={setSearchQuery}
+          placeholder="Filter logs..."
+          placeholderTextColor="#52525b"
+          autoCapitalize="none"
+          autoCorrect={false}
+          clearButtonMode="while-editing"
+        />
+      </View>
+
       {/* Auto-scroll toggle */}
       <View style={styles.toolbar}>
-        <Text style={styles.logCount}>{logs.length} lines</Text>
+        <Text style={styles.logCount}>
+          {searchQuery ? `${filteredLogs.length} / ${logs.length}` : `${logs.length}`} lines
+        </Text>
         <Pressable
           style={[
             styles.autoScrollBtn,
@@ -183,14 +207,16 @@ export default function LogsScreen() {
         <View style={styles.centered}>
           <Text style={styles.loadingText}>Loading logs...</Text>
         </View>
-      ) : logs.length === 0 ? (
+      ) : filteredLogs.length === 0 ? (
         <View style={styles.centered}>
-          <Text style={styles.emptyText}>No logs found</Text>
+          <Text style={styles.emptyText}>
+            {searchQuery ? "No matching lines" : "No logs found"}
+          </Text>
         </View>
       ) : (
         <FlatList
           ref={flatListRef}
-          data={logs}
+          data={filteredLogs}
           renderItem={renderLogLine}
           keyExtractor={(item, index) => `${item.lineNumber}-${index}`}
           style={styles.logList}
@@ -206,6 +232,22 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#09090b",
+  },
+  searchContainer: {
+    paddingHorizontal: 8,
+    paddingTop: 8,
+    paddingBottom: 4,
+  },
+  searchInput: {
+    backgroundColor: "#27272a",
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: Platform.OS === "ios" ? 8 : 6,
+    fontSize: 14,
+    color: "#fafafa",
+    borderWidth: 1,
+    borderColor: "#3f3f46",
+    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
   },
   fileTabs: {
     flexDirection: "row",

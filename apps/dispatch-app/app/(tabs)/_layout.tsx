@@ -128,18 +128,7 @@ export default function TabLayout() {
       <Tabs.Screen
         name="agents"
         options={{
-          title: "Agent Sessions",
-          tabBarIcon: ({ color }) => (
-            <SymbolView
-              name={{
-                ios: "terminal",
-                android: "code",
-                web: "code",
-              }}
-              tintColor={color}
-              size={24}
-            />
-          ),
+          href: null, // Hidden — sessions are now in Dashboard > Sessions
         }}
       />
       <Tabs.Screen
