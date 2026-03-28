@@ -42,7 +42,7 @@ function stateFromResponse(
     selected: new Set<string>(),
     otherText: "",
   }));
-  for (const answer of response.answers) {
+  for (const answer of response.answers ?? []) {
     if (answer.question_index < states.length) {
       states[answer.question_index] = {
         selected: new Set(answer.selected),
