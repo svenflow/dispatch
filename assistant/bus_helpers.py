@@ -33,7 +33,8 @@ Topic/type taxonomy (v6):
                 compaction.user_waiting, compaction.auto_cleared,
                 master.triggered,
                 signal.connection_state,
-                sdk.turn_complete, session.heartbeat (keyed by component/session_name)
+                sdk.turn_complete, session.heartbeat (keyed by component/session_name),
+                quota.fetched, quota.fetch_failed (source=daemon)
     reminders — reminder.due (keyed by chat_id)
     tasks     — task.requested, task.started, task.completed, task.failed,
                 task.timeout, task.skipped (keyed by requested_by chat_id)

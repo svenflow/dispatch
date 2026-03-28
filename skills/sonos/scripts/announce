@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["kokoro-onnx", "soundfile"]
+# dependencies = ["kokoro-onnx", "soundfile", "pyyaml"]
 # ///
 """
 Announce text on all Sonos speakers, then resume previous playback.
@@ -34,10 +34,26 @@ import xml.etree.ElementTree as ET
 
 warnings.filterwarnings("ignore")
 
+import yaml
 
-# Known speaker IPs (fallback if discovery fails)
-# These are extracted from the Sonos System Info screenshots
-KNOWN_SPEAKERS = {
+
+def _load_config(dotpath: str, default=None):
+    """Load a value from ~/dispatch/config.local.yaml by dot path."""
+    config_path = Path.home() / "dispatch" / "config.local.yaml"
+    if not config_path.exists():
+        return default
+    with open(config_path) as f:
+        cfg = yaml.safe_load(f) or {}
+    for key in dotpath.split("."):
+        if isinstance(cfg, dict) and key in cfg:
+            cfg = cfg[key]
+        else:
+            return default
+    return cfg
+
+
+# Load speaker IPs from config (fallback to hardcoded defaults)
+KNOWN_SPEAKERS = _load_config("sonos.all_devices", {
     "Arc: Basement Sonos": "10.10.10.53",
     "Sub: Basement Sonos": "10.10.10.54",
     "One SL: Bathroom": "10.10.10.47",
@@ -45,16 +61,15 @@ KNOWN_SPEAKERS = {
     "Arc Ultra: Family Room": "10.10.10.152",
     "Sub 4: Family Room": "10.10.10.153",
     "Era 300: Kitchen": "10.10.10.162",
-}
+})
 
-# Extract just the main speakers (not subs)
-MAIN_SPEAKERS = {
+MAIN_SPEAKERS = _load_config("sonos.speakers", {
     "Basement Sonos": "10.10.10.53",
     "Bathroom": "10.10.10.47",
     "Family Room 2": "10.10.10.38",
     "Family Room": "10.10.10.152",
     "Kitchen": "10.10.10.162",
-}
+})
 
 
 def get_local_ip() -> str:

@@ -866,11 +866,12 @@ class TestHealmeEvents:
 class TestServiceSpawnedEvents:
     """Verify daemon spawns emit health.service_spawned."""
 
-    def test_spawn_dispatch_api_daemon_emits_event(self):
+    def test_child_supervisor_start_emits_event(self):
+        """ChildSupervisor.start() emits health.service_spawned."""
         import inspect
-        from assistant.manager import Manager
+        from assistant.manager import ChildSupervisor
 
-        source = inspect.getsource(Manager._spawn_dispatch_api_daemon)
+        source = inspect.getsource(ChildSupervisor.start)
         assert "health.service_spawned" in source
         assert "service_spawned_payload" in source
 

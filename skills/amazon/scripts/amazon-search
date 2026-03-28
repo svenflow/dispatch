@@ -1,0 +1,176 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "httpx>=0.27",
+#     "beautifulsoup4>=4.12",
+#     "click>=8.0",
+# ]
+# ///
+"""Search Amazon products and return structured results."""
+
+import json
+import re
+import sys
+import urllib.parse
+
+import click
+import httpx
+from bs4 import BeautifulSoup
+
+
+CATEGORY_MAP = {
+    "electronics": "electronics",
+    "computers": "computers",
+    "home": "garden",
+    "tools": "tools",
+    "books": "stripbooks",
+    "music": "digital-music",
+    "toys": "toys-and-games",
+    "office": "office-products",
+    "garden": "lawngarden",
+    "kitchen": "kitchen",
+    "clothing": "fashion",
+    "sports": "sporting",
+    "automotive": "automotive",
+    "baby": "baby-products",
+    "beauty": "beauty",
+    "grocery": "grocery",
+    "pet": "pets",
+    "software": "software",
+    "videogames": "videogames",
+}
+
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "DNT": "1",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+}
+
+
+def parse_search_results(html: str) -> list[dict]:
+    """Parse Amazon search result HTML into structured data."""
+    soup = BeautifulSoup(html, "html.parser")
+    results = []
+
+    items = soup.find_all(attrs={"data-asin": True})
+
+    for item in items:
+        asin = item.get("data-asin", "").strip()
+        if not asin or len(asin) != 10:
+            continue
+
+        title_el = item.find("h2")
+        title = title_el.get_text(strip=True) if title_el else None
+        if not title:
+            continue
+
+        price = None
+        price_el = item.select_one(".a-price .a-offscreen")
+        if price_el:
+            price = price_el.get_text(strip=True)
+
+        rating = None
+        rating_el = item.find(attrs={"aria-label": re.compile(r"out of 5 stars")})
+        if rating_el:
+            label = rating_el.get("aria-label", "")
+            match = re.search(r"(\d+\.?\d*) out of", label)
+            if match:
+                rating = float(match.group(1))
+
+        reviews = None
+        review_el = item.find(attrs={"aria-label": re.compile(r"\d.*ratings?")})
+        if review_el:
+            label = review_el.get("aria-label", "")
+            match = re.search(r"([\d,]+)", label)
+            if match:
+                reviews = int(match.group(1).replace(",", ""))
+
+        prime = bool(item.find(attrs={"aria-label": "Amazon Prime"}))
+        url = f"https://www.amazon.com/dp/{asin}"
+
+        results.append({
+            "asin": asin,
+            "title": title,
+            "price": price,
+            "rating": rating,
+            "reviews": reviews,
+            "prime": prime,
+            "url": url,
+        })
+
+    return results
+
+
+@click.command()
+@click.argument("query")
+@click.option("--category", "-c", default=None, help="Amazon category to search in")
+@click.option("--max-results", "-n", default=5, help="Max results to return")
+@click.option("--json-output", "-j", is_flag=True, help="Output as JSON")
+def main(query: str, category: str | None, max_results: int, json_output: bool):
+    """Search Amazon for products.
+
+    QUERY is the search term (e.g. "ESP32-S3-BOX-3").
+    """
+    params = {"k": query}
+    if category:
+        cat_key = CATEGORY_MAP.get(category.lower(), category)
+        params["i"] = cat_key
+
+    search_url = f"https://www.amazon.com/s?{urllib.parse.urlencode(params)}"
+
+    try:
+        client = httpx.Client(headers=HEADERS, follow_redirects=True, timeout=15.0)
+        response = client.get(search_url)
+        html = response.text
+    except Exception as e:
+        print(f"Error fetching results: {e}", file=sys.stderr)
+        print(f"\nFallback — open in Chrome:", file=sys.stderr)
+        print(f'  chrome open "{search_url}"', file=sys.stderr)
+        sys.exit(1)
+
+    if not html or len(html) < 1000 or "captcha" in html.lower():
+        print("Got empty/blocked response. Amazon may be rate-limiting.", file=sys.stderr)
+        print(f"\nFallback — open in Chrome:", file=sys.stderr)
+        print(f'  chrome open "{search_url}"', file=sys.stderr)
+        sys.exit(1)
+
+    results = parse_search_results(html)[:max_results]
+
+    if not results:
+        print(f"No results found for: {query}", file=sys.stderr)
+        print(f"\nTry in Chrome:", file=sys.stderr)
+        print(f'  chrome open "{search_url}"', file=sys.stderr)
+        sys.exit(1)
+
+    if json_output:
+        print(json.dumps(results, indent=2))
+    else:
+        for i, r in enumerate(results, 1):
+            prime_badge = " Prime" if r["prime"] else ""
+            rating_str = f"{r['rating']}/5" if r["rating"] else "No rating"
+            reviews_str = f"({r['reviews']:,} reviews)" if r["reviews"] else ""
+            price_str = r["price"] or "Price not shown"
+
+            print(f"\n{'─' * 60}")
+            print(f"  {i}. {r['title']}")
+            print(f"     {price_str}  {rating_str} {reviews_str}{prime_badge}")
+            print(f"     ASIN: {r['asin']}")
+            print(f"     {r['url']}")
+
+        print(f"\n{'─' * 60}")
+        print(f"  {len(results)} results for: {query}")
+        if category:
+            print(f"  Category: {category}")
+
+
+if __name__ == "__main__":
+    main()

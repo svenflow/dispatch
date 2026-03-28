@@ -13,6 +13,7 @@ import { Stack, router } from "expo-router";
 import { getDashboardTasks } from "@/src/api/dashboard";
 import type { DashboardReminder } from "@/src/api/types";
 import { relativeTime } from "@/src/utils/time";
+import { humanSchedule } from "@/src/utils/schedule";
 
 const Separator = () => <View style={styles.separator} />;
 
@@ -34,87 +35,7 @@ function statusColor(status: string): string {
 }
 
 /** Convert a cron-style schedule string to human-readable text. */
-function humanSchedule(schedule: string): string {
-  const parts = schedule.trim().split(/\s+/);
-  if (parts.length < 5) {
-    // Not a standard cron — return as-is (could be a one-shot date)
-    if (schedule.match(/^\d{4}-\d{2}-\d{2}/)) {
-      try {
-        const d = new Date(schedule);
-        return d.toLocaleDateString("en-US", {
-          month: "short",
-          day: "numeric",
-          year: "numeric",
-          hour: "numeric",
-          minute: "2-digit",
-        });
-      } catch {
-        return schedule;
-      }
-    }
-    return schedule;
-  }
-
-  const [min, hour, dom, mon, dow] = parts;
-  const isEveryMin = min === "*";
-  const isEveryHour = hour === "*";
-  const isEveryDom = dom === "*";
-  const isEveryMon = mon === "*";
-  const isEveryDow = dow === "*";
-
-  // Format time
-  const formatTime = (h: string, m: string): string => {
-    if (h === "*" && m === "*") return "";
-    const hr = parseInt(h, 10);
-    const mn = parseInt(m, 10);
-    if (isNaN(hr)) return "";
-    const ampm = hr >= 12 ? "PM" : "AM";
-    const h12 = hr === 0 ? 12 : hr > 12 ? hr - 12 : hr;
-    return isNaN(mn) ? `${h12} ${ampm}` : `${h12}:${mn.toString().padStart(2, "0")} ${ampm}`;
-  };
-
-  const dayNames: Record<string, string> = {
-    "0": "Sun", "1": "Mon", "2": "Tue", "3": "Wed",
-    "4": "Thu", "5": "Fri", "6": "Sat", "7": "Sun",
-  };
-
-  const timeStr = formatTime(hour, min);
-
-  // Every minute
-  if (isEveryMin && isEveryHour && isEveryDom && isEveryMon && isEveryDow) {
-    return "Every minute";
-  }
-
-  // Every N minutes
-  if (min.startsWith("*/") && isEveryHour) {
-    return `Every ${min.slice(2)} min`;
-  }
-
-  // Every hour at :MM
-  if (!isEveryMin && isEveryHour && isEveryDom && isEveryMon && isEveryDow) {
-    return `Every hour at :${min.padStart(2, "0")}`;
-  }
-
-  // Daily at HH:MM
-  if (!isEveryHour && isEveryDom && isEveryMon && isEveryDow) {
-    return timeStr ? `Daily at ${timeStr}` : `Daily`;
-  }
-
-  // Weekly on specific days
-  if (!isEveryDow && isEveryDom && isEveryMon) {
-    const days = dow.split(",").map((d) => dayNames[d] || d).join(", ");
-    return timeStr ? `${days} at ${timeStr}` : days;
-  }
-
-  // Monthly on specific day
-  if (!isEveryDom && isEveryMon && isEveryDow) {
-    const ordinal = dom === "1" ? "1st" : dom === "2" ? "2nd" : dom === "3" ? "3rd" : `${dom}th`;
-    return timeStr ? `Monthly on the ${ordinal} at ${timeStr}` : `Monthly on the ${ordinal}`;
-  }
-
-  // Fallback — show the cron but more compact
-  return schedule;
-}
+// humanSchedule imported from shared utility
 
 /** Format next fire time prominently */
 function formatNextFire(nextFire: string | null): string {

@@ -820,3 +820,167 @@ class TestPeriodicPersistence:
         entry = sdk_backend.registry.get("ephemeral-test-123")
         # Ephemeral sessions should be skipped by persistence loop
         assert entry is None or not entry.get("was_active")
+
+
+class TestServiceHealthChecks:
+    """Test deep health check methods (diagnostic-only, no restarts).
+
+    The ChildSupervisor handles all restarts. These deep checks only
+    clear degraded mode so the supervisor can retry.
+    """
+
+    def _make_manager(self):
+        from assistant.manager import Manager
+        m = MagicMock(spec=Manager)
+        m._producer = MagicMock()
+        m._send_sms = MagicMock(return_value=True)
+        return m
+
+    def _make_supervisor(self, proc_alive=True, health_ok=True, degraded=False):
+        """Create a mock ChildSupervisor with controllable state."""
+        sv = MagicMock()
+        proc = MagicMock()
+        proc.poll.return_value = None if proc_alive else 1
+        sv.proc = proc if proc_alive or degraded else None
+        if not proc_alive:
+            sv.proc = MagicMock()
+            sv.proc.poll.return_value = 1
+        sv._check_health_sync = MagicMock(return_value=health_ok)
+        sv.degraded = degraded
+        sv.clear_degraded = MagicMock()
+        return sv
+
+    def test_dispatch_api_healthy_clears_degraded(self):
+        """Healthy API clears degraded mode."""
+        from assistant.manager import Manager
+        m = self._make_manager()
+        sv = self._make_supervisor(proc_alive=True, health_ok=True, degraded=True)
+        m.dispatch_api_supervisor = sv
+
+        Manager._check_dispatch_api.__get__(m, Manager)()
+
+        sv.clear_degraded.assert_called_once()
+
+    def test_dispatch_api_healthy_no_degraded_noop(self):
+        """Healthy API with no degraded flag — clear_degraded still called (idempotent)."""
+        from assistant.manager import Manager
+        m = self._make_manager()
+        sv = self._make_supervisor(proc_alive=True, health_ok=True, degraded=False)
+        m.dispatch_api_supervisor = sv
+
+        Manager._check_dispatch_api.__get__(m, Manager)()
+
+        sv.clear_degraded.assert_called_once()
+
+    def test_dispatch_api_unresponsive_logs_warning(self):
+        """Unresponsive API logs warning but does NOT restart (supervisor handles that)."""
+        from assistant.manager import Manager
+        m = self._make_manager()
+        sv = self._make_supervisor(proc_alive=True, health_ok=False, degraded=False)
+        m.dispatch_api_supervisor = sv
+
+        Manager._check_dispatch_api.__get__(m, Manager)()
+
+        # Should NOT clear degraded when health check fails
+        sv.clear_degraded.assert_not_called()
+
+    def test_dispatch_api_dead_degraded_clears_for_retry(self):
+        """Dead API + degraded — clears degraded so supervisor can retry."""
+        from assistant.manager import Manager
+        m = self._make_manager()
+        sv = self._make_supervisor(proc_alive=False, health_ok=False, degraded=True)
+        m.dispatch_api_supervisor = sv
+
+        Manager._check_dispatch_api.__get__(m, Manager)()
+
+        sv.clear_degraded.assert_called_once()
+
+    def test_dispatch_api_dead_not_degraded_noop(self):
+        """Dead API, not degraded — nothing to do (supervisor is already handling it)."""
+        from assistant.manager import Manager
+        m = self._make_manager()
+        sv = self._make_supervisor(proc_alive=False, health_ok=False, degraded=False)
+        m.dispatch_api_supervisor = sv
+
+        Manager._check_dispatch_api.__get__(m, Manager)()
+
+        sv.clear_degraded.assert_not_called()
+
+    def test_dispatch_api_none_proc_degraded_clears(self):
+        """Supervisor has no proc + degraded — clears degraded."""
+        from assistant.manager import Manager
+        m = self._make_manager()
+        sv = MagicMock()
+        sv.proc = None
+        sv.degraded = True
+        sv.clear_degraded = MagicMock()
+        m.dispatch_api_supervisor = sv
+
+        Manager._check_dispatch_api.__get__(m, Manager)()
+
+        sv.clear_degraded.assert_called_once()
+
+    def test_signal_died_restarts(self):
+        """Dead Signal daemon gets restarted."""
+        from assistant.manager import Manager
+        m = self._make_manager()
+        m.signal_daemon = MagicMock()
+        m.signal_daemon.poll.return_value = 1
+
+        Manager._check_signal_health.__get__(m, Manager)()
+
+        m._spawn_signal_daemon.assert_called_once()
+
+    def test_metro_unresponsive_logs_warning(self):
+        """Unresponsive Metro logs warning but does NOT restart (supervisor handles that)."""
+        from assistant.manager import Manager
+        m = self._make_manager()
+        sv = self._make_supervisor(proc_alive=True, health_ok=True, degraded=False)
+        sv._check_metro_health = MagicMock(return_value=False)
+        m.metro_supervisor = sv
+        m._check_metro_health = MagicMock(return_value=False)
+
+        Manager._check_metro.__get__(m, Manager)()
+
+        # Not degraded, so clear_degraded not called
+        sv.clear_degraded.assert_not_called()
+
+    def test_metro_dead_degraded_clears(self):
+        """Dead Metro + degraded — clears degraded so supervisor can retry."""
+        from assistant.manager import Manager
+        m = self._make_manager()
+        sv = self._make_supervisor(proc_alive=False, health_ok=False, degraded=True)
+        m.metro_supervisor = sv
+
+        Manager._check_metro.__get__(m, Manager)()
+
+        sv.clear_degraded.assert_called_once()
+
+
+@pytest.mark.asyncio
+class TestHealthCheckTimeout:
+    """Test that health check loop doesn't hang forever."""
+
+    async def test_health_check_timeout_clears_running_flag(self):
+        """If health check hangs, the timeout wrapper clears _health_check_running."""
+        from assistant.manager import Manager
+
+        m = MagicMock(spec=Manager)
+        m._health_check_running = False
+
+        async def hanging_health_check():
+            m._health_check_running = True
+            await asyncio.sleep(999)  # hang forever
+
+        m._run_health_checks = hanging_health_check
+
+        async def health_with_timeout():
+            try:
+                await asyncio.wait_for(m._run_health_checks(), timeout=0.1)
+            except asyncio.TimeoutError:
+                pass
+            finally:
+                m._health_check_running = False
+
+        await health_with_timeout()
+        assert m._health_check_running is False

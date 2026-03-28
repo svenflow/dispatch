@@ -1,0 +1,334 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#   "zendriver>=0.4",
+# ]
+# ///
+"""
+Freedom Boat Club CLI - View reservations, locations, available boats.
+
+Usage:
+  fbc me                                Show member profile
+  fbc reservations [--all]              Show upcoming (or all) reservations
+  fbc locations [--query TEXT]          List/search locations
+  fbc available <location-id> <date>   Show available boats
+"""
+
+import argparse
+import asyncio
+import json
+import re
+import subprocess
+import sys
+from datetime import date
+
+
+KEYCHAIN_SERVICE = "freedom-boat-club"
+BASE_URL = "https://reservations.freedomboatclub.com"
+API_BASE = f"{BASE_URL}/bin/brunswick/fbc-reservations/api.json"
+USER_ENDPOINT = f"{BASE_URL}/bin/brunswick/fbc-reservations/user"
+
+
+def get_credentials():
+    """Get FBC credentials from macOS Keychain."""
+    try:
+        password = subprocess.check_output(
+            ["security", "find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"],
+            stderr=subprocess.DEVNULL,
+        ).decode().strip()
+        proc = subprocess.run(
+            ["security", "find-generic-password", "-s", KEYCHAIN_SERVICE, "-g"],
+            capture_output=True, text=True,
+        )
+        output = proc.stdout + proc.stderr
+        for line in output.split("\n"):
+            if '"acct"' in line:
+                match = re.search(r'"acct".*="(.+)"', line)
+                if match:
+                    return match.group(1), password
+    except subprocess.CalledProcessError:
+        pass
+    print("Error: FBC credentials not found in Keychain.", file=sys.stderr)
+    sys.exit(1)
+
+
+async def login():
+    """Log in to FBC via zendriver and return (browser, page)."""
+    import zendriver
+
+    email, password = get_credentials()
+    print(f"Logging in as {email}...", file=sys.stderr)
+
+    browser = await zendriver.start(headless=True)
+    page = await browser.get(f"{BASE_URL}/")
+    await asyncio.sleep(6)
+
+    email_field = await page.query_selector("#signInName")
+    if not email_field:
+        print("Error: Could not find login form.", file=sys.stderr)
+        await browser.stop()
+        sys.exit(1)
+
+    await email_field.send_keys(email)
+    pw_field = await page.query_selector("#password")
+    await pw_field.send_keys(password)
+    submit = await page.query_selector("#next")
+    await submit.click()
+
+    print("Authenticating...", file=sys.stderr)
+    await asyncio.sleep(10)
+    print(f"Logged in. URL: {page.url}", file=sys.stderr)
+    return browser, page
+
+
+async def api_fetch(page, url):
+    """Fetch a JSON API endpoint using the browser's session cookies."""
+    js = f"""
+        (async () => {{
+            try {{
+                const resp = await fetch("{url}");
+                if (!resp.ok) return {{error: "HTTP " + resp.status, url: "{url}"}};
+                const text = await resp.text();
+                try {{ return JSON.parse(text); }}
+                catch {{ return {{raw: text.substring(0, 2000)}}; }}
+            }} catch(e) {{ return {{error: e.toString(), url: "{url}"}}; }}
+        }})()
+    """
+    result = await page.evaluate(js, await_promise=True)
+    return result
+
+
+async def get_user_data(page):
+    """Get user data: objectId from /user endpoint, then full profile from /users/{id}."""
+    user = await api_fetch(page, USER_ENDPOINT)
+    object_id = user.get("objectId") if isinstance(user, dict) else None
+
+    if not object_id:
+        # Fallback: check sessionStorage/localStorage
+        user = await page.evaluate("""
+            (() => {
+                for (const key of Object.keys(sessionStorage)) {
+                    try {
+                        const val = JSON.parse(sessionStorage.getItem(key));
+                        if (val && val.objectId) return val;
+                    } catch {}
+                }
+                for (const key of Object.keys(localStorage)) {
+                    try {
+                        const val = JSON.parse(localStorage.getItem(key));
+                        if (val && val.objectId) return val;
+                    } catch {}
+                }
+                return null;
+            })()
+        """)
+        object_id = user.get("objectId") if isinstance(user, dict) else None
+
+    if not object_id:
+        return user or {}
+
+    # Get full profile which includes membershipId
+    profile = await api_fetch(page, f"{API_BASE}/users/{object_id}")
+    if isinstance(profile, dict) and not profile.get("error"):
+        profile["objectId"] = object_id
+        return profile
+
+    return {"objectId": object_id}
+
+
+async def cmd_me(args):
+    """Show member profile."""
+    browser, page = await login()
+    try:
+        user = await get_user_data(page)
+        if not user or not isinstance(user, dict) or not user.get("objectId"):
+            print("Could not retrieve user data.", file=sys.stderr)
+            print(json.dumps(user, indent=2, default=str))
+            return
+
+        object_id = user["objectId"]
+        profile = await api_fetch(page, f"{API_BASE}/users/{object_id}")
+
+        if isinstance(profile, dict) and "error" not in profile:
+            p = profile
+            print(f"Member: {p.get('firstName', '')} {p.get('lastName', '')}")
+            print(f"Member #: {p.get('memberNumber', '')}")
+            print(f"Member ID: {p.get('memberId', '')}")
+            print(f"Object ID: {object_id}")
+            club = p.get("club", {})
+            print(f"Home Club: {club.get('name', 'N/A')}")
+            primary = p.get("primaryLocation", {})
+            print(f"Primary Location: {primary.get('name', 'N/A')} (ID: {primary.get('id', '')})")
+            print(f"Membership Type: {p.get('membershipTypeName', 'N/A')}")
+            print(f"Max Advance Days: {p.get('maxAdvanceDays', 'N/A')}")
+            certs = p.get("certifications", [])
+            if certs:
+                print(f"Certifications: {', '.join(c.get('name', '') for c in certs)}")
+            limits = p.get("reservationLimits", {})
+            if limits:
+                print(f"Active Reservations: {limits.get('currentActiveWeight', 0)}/{limits.get('activeWeight', 'N/A')}")
+            print("\n--- Full Profile JSON ---")
+
+        print(json.dumps(profile, indent=2, default=str))
+    finally:
+        await browser.stop()
+
+
+async def cmd_reservations(args):
+    """Show reservations."""
+    browser, page = await login()
+    try:
+        user = await get_user_data(page)
+        if not user or not isinstance(user, dict):
+            print("Could not retrieve user data.", file=sys.stderr)
+            return
+
+        membership_id = user.get("membershipId") or (user.get("membership", {}) or {}).get("id")
+        if not membership_id:
+            print("Could not find membershipId.", file=sys.stderr)
+            print(json.dumps(user, indent=2, default=str))
+            return
+
+        today = date.today().isoformat()
+        status_filter = "" if args.all else "&reservationStatusTypeId=scheduled"
+        url = f"{API_BASE}/reservations?startDate={today}&membershipId={membership_id}&orderBy=startDate&orderByAsc=true&offset=0&limit=50{status_filter}"
+
+        data = await api_fetch(page, url)
+        if isinstance(data, dict) and "error" in data:
+            print(f"Error fetching reservations: {data['error']}", file=sys.stderr)
+            return
+
+        # Try different response shapes
+        items = data
+        if isinstance(data, dict):
+            items = data.get("reservations", data.get("items", data.get("results", [])))
+
+        if not items or (isinstance(items, list) and len(items) == 0):
+            print("No upcoming reservations found.")
+            if args.all:
+                print("(Checked all statuses)")
+        else:
+            for r in (items if isinstance(items, list) else [items]):
+                if not isinstance(r, dict):
+                    continue
+                print(f"---")
+                print(f"  Date: {r.get('startDate', 'N/A')} {r.get('startTime', '')} - {r.get('endTime', '')}")
+                loc = r.get("location", {})
+                print(f"  Location: {loc.get('name', r.get('locationName', 'N/A'))}")
+                boat = r.get("boat", {})
+                print(f"  Boat: {boat.get('name', r.get('boatName', 'N/A'))}")
+                print(f"  Status: {r.get('reservationStatusTypeName', r.get('status', 'N/A'))}")
+                print()
+
+        print("\n--- Full JSON ---")
+        print(json.dumps(data, indent=2, default=str))
+    finally:
+        await browser.stop()
+
+
+async def cmd_locations(args):
+    """List available locations."""
+    browser, page = await login()
+    try:
+        # Use /locations endpoint (not /clubs which returns locations: null)
+        data = await api_fetch(page, f"{API_BASE}/locations")
+        if isinstance(data, dict) and "error" in data:
+            print(f"Error: {data['error']}", file=sys.stderr)
+            return
+
+        items = data.get("results", data) if isinstance(data, dict) else data
+        if not isinstance(items, list):
+            items = [items]
+
+        query = args.query.lower() if args.query else None
+
+        # Group by club
+        clubs = {}
+        for loc in items:
+            if not isinstance(loc, dict):
+                continue
+            loc_name = loc.get("name", "")
+            loc_id = loc.get("id", "")
+            club = loc.get("club", {}) or {}
+            club_name = club.get("name", "Unknown Club")
+            club_id = club.get("id", "")
+
+            if query and query not in loc_name.lower() and query not in club_name.lower():
+                continue
+
+            if club_name not in clubs:
+                clubs[club_name] = {"id": club_id, "locations": []}
+            clubs[club_name]["locations"].append({"name": loc_name, "id": loc_id})
+
+        for club_name, info in sorted(clubs.items()):
+            print(f"\n{club_name} (Club ID: {info['id']})")
+            for loc in sorted(info["locations"], key=lambda x: x["name"]):
+                print(f"  - {loc['name']} (ID: {loc['id']})")
+
+        print(f"\n({sum(len(c['locations']) for c in clubs.values())} locations in {len(clubs)} clubs)")
+    finally:
+        await browser.stop()
+
+
+async def cmd_available(args):
+    """Show available boats at a location on a date."""
+    browser, page = await login()
+    try:
+        user = await get_user_data(page)
+        membership_id = user.get("membershipId", "") if isinstance(user, dict) else ""
+
+        # Try multiple possible endpoint patterns
+        urls = [
+            f"{API_BASE}/reservations/availability?locationId={args.location_id}&date={args.date}&membershipId={membership_id}",
+            f"{API_BASE}/locations/{args.location_id}/availability?date={args.date}",
+            f"{API_BASE}/availability?locationId={args.location_id}&date={args.date}",
+        ]
+
+        for url in urls:
+            data = await api_fetch(page, url)
+            if isinstance(data, dict) and "error" not in data:
+                print(json.dumps(data, indent=2, default=str))
+                return
+            if isinstance(data, list):
+                print(json.dumps(data, indent=2, default=str))
+                return
+
+        print(f"Could not find availability. Last response:", file=sys.stderr)
+        print(json.dumps(data, indent=2, default=str))
+    finally:
+        await browser.stop()
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Freedom Boat Club CLI")
+    subparsers = parser.add_subparsers(dest="command", help="Command to run")
+
+    subparsers.add_parser("me", help="Show member profile")
+
+    res_parser = subparsers.add_parser("reservations", help="Show reservations")
+    res_parser.add_argument("--all", action="store_true", help="Include past/cancelled")
+
+    loc_parser = subparsers.add_parser("locations", help="List locations")
+    loc_parser.add_argument("--query", "-q", help="Search filter")
+
+    avail_parser = subparsers.add_parser("available", help="Show available boats")
+    avail_parser.add_argument("location_id", help="Location ID")
+    avail_parser.add_argument("date", help="Date (YYYY-MM-DD)")
+
+    args = parser.parse_args()
+    if not args.command:
+        parser.print_help()
+        sys.exit(1)
+
+    handlers = {
+        "me": cmd_me,
+        "reservations": cmd_reservations,
+        "locations": cmd_locations,
+        "available": cmd_available,
+    }
+    asyncio.run(handlers[args.command](args))
+
+
+if __name__ == "__main__":
+    main()

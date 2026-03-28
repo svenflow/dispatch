@@ -31,6 +31,56 @@ Use when a user wants to:
 8. **Mobile** — iPhone Safari hardening (device loss, f16 fallback, submission limits)
 9. **Publish** — npm package with CDN-hosted weights
 
+### GitHub Pages Demo
+
+When publishing a package that includes a browser demo (e.g. `demo/index.html`), the demo typically imports from `./dist/index.js`. This means the built output **must be committed to git** for the demo to work on GitHub Pages.
+
+#### Keep dist/ in Git (CRITICAL)
+
+The demo HTML imports directly from `./dist/index.js`. If `dist/` is in `.gitignore` or removed from git, the GitHub Pages demo will break with a 404 on the JS import. **Do not add `dist/` to `.gitignore`** for projects that serve demos from GitHub Pages.
+
+If `dist/` was previously removed:
+```bash
+# Re-add dist/ to git
+git add dist/ -f
+git commit -m "Add dist/ back — required for GitHub Pages demo"
+```
+
+#### gh-pages Branch Setup
+
+```bash
+# Option 1: Deploy from main branch (simplest)
+# Go to repo Settings → Pages → Source: "Deploy from a branch" → main → / (root)
+
+# Option 2: Use gh-pages branch
+git checkout --orphan gh-pages
+git reset --hard
+git checkout main -- demo/ dist/ weights/ package.json
+git add -A && git commit -m "GitHub Pages deploy"
+git push origin gh-pages
+# Then set Pages source to gh-pages branch in repo settings
+```
+
+#### Verify Deployment
+
+After enabling Pages, the demo is available at:
+```
+https://<username>.github.io/<repo-name>/demo/
+```
+
+Check the deployment status at:
+```
+https://github.com/<username>/<repo-name>/settings/pages
+```
+
+#### Common Gotchas
+
+- **Removing `dist/` from git breaks the demo** — the #1 cause of broken GitHub Pages demos. The HTML imports `./dist/index.js` directly, so it must be checked in.
+- **`.gitignore` containing `dist/`** — remove that line or use `git add -f dist/` to override.
+- **Stale dist/** — after changing source code, rebuild and commit `dist/` again before pushing.
+- **Weight files too large for git** — host weights on a CDN (GCS, S3, unpkg) and load them via fetch, not from the repo. Only JS/WASM build artifacts belong in `dist/`.
+- **Mixed content on HTTPS** — GitHub Pages serves over HTTPS; ensure weight URLs also use HTTPS.
+
 ### Starter Templates (`templates/`)
 
 - **Model inspectors** for ONNX, GGUF, TFLite (Python with uv shebang)

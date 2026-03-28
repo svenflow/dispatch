@@ -228,6 +228,23 @@ Fields are optional. The pipeline sends whatever it can assemble — partial dat
 
 ---
 
+## Required Fields Checklist
+
+**When a trip is first stored, immediately check for these critical fields and proactively ask the user for any that are missing:**
+
+| Field | Why it matters | When needed |
+|-------|---------------|-------------|
+| `booking_ref` | Check-in reminder is useless without it | T-24h (check-in) |
+| `seat` | Nice-to-have for check-in reminder | T-24h |
+| `depart_time` (with timezone) | Pre-departure leave-by calculation | T-Xh |
+| `origin` / `destination` | Every message uses these | Always |
+| `hotel.name` / `hotel.address` | Landing intel, daily briefings | On arrival |
+| `hotel.check_out` | Last morning reminder | Last day |
+
+**Behavior:** When storing a new travel fact, scan for missing `booking_ref` and `seat`. If either is absent, **immediately ask the user** — e.g., "got the flight details stored! what's your confirmation code? (i'll need it for the check-in reminder)". Do NOT silently omit critical fields at send time — that's too late.
+
+---
+
 ## Key Principles
 
 1. **Session-injected, not standalone.** Messages are injected into the contact's foreground session via `inject-prompt`. The user can reply conversationally to update facts (e.g., "actually I'm in seat 14C now").

@@ -44,6 +44,13 @@ export const REVIEW_PROMPT =
  * Prompt injected when user taps the Plan/Build/Test button.
  * Triggers a full autonomous implementation loop with review gates.
  */
+/**
+ * Prompt injected when user taps the Fact Check button.
+ * Triggers fact-check skill to verify claims in the conversation.
+ */
+export const FACT_CHECK_PROMPT =
+  "Use /fact-check to independently verify the factual claims in the above conversation. Extract claims, route each to the right verification source (local docs, bus.db, APIs, web), and report verdicts.";
+
 export const PLAN_BUILD_TEST_PROMPT = `Plan, build, and test the implementation discussed above.
 
 1. PLAN: First, restate your understanding of the task. Web search to ground yourself in canonical approaches. Write a detailed plan. Share it with me, then review with /subagent-review. You must reach 9.0. Do not stop before 9.0. If you've already planned this in the conversation above and reached 9.0, skip to BUILD.

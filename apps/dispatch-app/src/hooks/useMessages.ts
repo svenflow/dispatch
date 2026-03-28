@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AppState, type AppStateStatus } from "react-native";
 import { getMessages, sendPrompt, sendPromptWithImage } from "../api/chats";
 import { getAgentMessages, sendAgentMessage } from "../api/agents";
-import type { ChatMessage, AgentMessage } from "../api/types";
+import type { ChatMessage, AgentMessage, WidgetData, WidgetResponse } from "../api/types";
 import { MESSAGE_POLL_INTERVAL } from "../config/constants";
 import { generateUUID } from "../utils/uuid";
 import { makeLayoutAnim, safeConfigureNext, backoffDelay } from "../utils/animation";
@@ -28,6 +28,10 @@ export interface DisplayMessage {
   localImageUri?: string | null; // optimistic preview (local file URI)
   retryChatId?: string; // chatId for image message retry
   status?: string; // "generating" | "complete" | "failed"
+  reactions?: string[]; // emoji reactions
+  widgetData?: WidgetData | null;
+  widgetResponse?: WidgetResponse | null;
+  respondedAt?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -85,6 +89,10 @@ function chatMessageToDisplay(m: ChatMessage): DisplayMessage {
     imageUrl: m.image_url,
     videoUrl: m.video_url,
     status: m.status,
+    reactions: m.reactions,
+    widgetData: m.widget_data ?? null,
+    widgetResponse: m.widget_response ?? null,
+    respondedAt: m.responded_at ?? null,
   };
 }
 
@@ -137,6 +145,7 @@ export interface UseMessagesReturn {
   sendMessageWithImage: (text: string, imageUri: string, chatId: string) => Promise<void>;
   retryMessage: (messageId: string) => Promise<void>;
   refresh: () => Promise<void>;
+  toggleReaction: (messageId: string, emoji: string) => void;
 }
 
 export function useMessages(adapter: MessageAdapter, _cacheKey?: string): UseMessagesReturn {
@@ -482,6 +491,17 @@ export function useMessages(adapter: MessageAdapter, _cacheKey?: string): UseMes
     return () => sub.remove();
   }, [loadInitial, startPolling, stopPolling]);
 
+  const toggleReaction = useCallback((messageId: string, emoji: string) => {
+    setMessages((prev) =>
+      prev.map((m) => {
+        if (m.id !== messageId) return m;
+        const current = m.reactions ?? [];
+        const has = current.includes(emoji);
+        return { ...m, reactions: has ? current.filter((r) => r !== emoji) : [...current, emoji] };
+      }),
+    );
+  }, []);
+
   return {
     messages,
     isLoading,
@@ -491,5 +511,6 @@ export function useMessages(adapter: MessageAdapter, _cacheKey?: string): UseMes
     sendMessageWithImage,
     retryMessage,
     refresh,
+    toggleReaction,
   };
 }

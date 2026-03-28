@@ -121,6 +121,21 @@ class QuotaManager:
             if self.last_degrade_at and (now - self.last_degrade_at) < self.COOLDOWN_SECONDS:
                 return []
             if quota_5h_pct >= self.DEGRADE_THRESHOLD or quota_7d_opus_pct >= self.DEGRADE_THRESHOLD:
+                # Don't auto-degrade if there's a manual override active.
+                # Any trigger starting with "manual" is sticky — the user chose this
+                # model deliberately and only they can clear it (via "Default" in app
+                # or --clear in CLI).
+                if self.override_path.exists():
+                    try:
+                        data = json.loads(self.override_path.read_text())
+                        if data.get("trigger", "").startswith("manual"):
+                            log.info(
+                                f"QUOTA_MANAGER | SKIP_DEGRADE | manual override is sticky | "
+                                f"5h={quota_5h_pct:.0f}% 7d_opus={quota_7d_opus_pct:.0f}%"
+                            )
+                            return []
+                    except (json.JSONDecodeError, OSError):
+                        pass  # corrupt file — proceed with degradation
                 trigger = f"auto_quota_5h={quota_5h_pct:.0f}_7d={quota_7d_opus_pct:.0f}"
                 self._write_override("sonnet", trigger)
                 self._log_transition("normal", "degraded", trigger, quota_5h_pct, quota_7d_opus_pct)
@@ -165,6 +180,15 @@ class QuotaManager:
         """
         if self.state == "degraded":
             return []  # already degraded
+        # Don't auto-degrade over a manual override — manual overrides are sticky
+        if self.override_path.exists():
+            try:
+                data = json.loads(self.override_path.read_text())
+                if data.get("trigger", "").startswith("manual"):
+                    log.info("QUOTA_MANAGER | FAST_DEGRADE_SKIP | manual override is sticky")
+                    return []
+            except (json.JSONDecodeError, OSError):
+                pass
         self._write_override("sonnet", "api_quota_error_detected")
         self._log_transition("normal", "degraded", "api_quota_errors", -1, -1)
         self.last_degrade_at = time.time()

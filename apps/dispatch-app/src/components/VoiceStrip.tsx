@@ -145,20 +145,9 @@ export function VoiceStrip({
                 />
               ))}
             </View>
-            {sttPartial ? (
-              <Text
-                style={styles.partialText}
-                numberOfLines={1}
-                accessibilityLabel={`Heard: ${sttPartial}`}
-                accessibilityRole="text"
-              >
-                {sttPartial}
-              </Text>
-            ) : (
-              <Text style={styles.listeningHint} accessibilityRole="text">
-                Listening...
-              </Text>
-            )}
+            <Text style={styles.listeningHint} accessibilityRole="text">
+              {sttPartial ? "Listening..." : "Listening..."}
+            </Text>
           </View>
           <Pressable
             onPress={onSend}

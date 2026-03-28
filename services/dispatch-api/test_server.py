@@ -63,7 +63,10 @@ def isolated_server(tmp_path, monkeypatch):
     # Clear in-memory rate limit state between tests
     server.request_counts.clear()
 
-    # Initialize the DB once so tables exist
+    # Reset init_db flag so each test gets a fresh schema
+    server._init_db_done = False
+
+    # Initialize the DB so tables exist
     server.init_db()
 
 
@@ -369,6 +372,86 @@ async def test_delete_chat(client, monkeypatch):
 
     # Verify kill-session was called
     mock_popen.assert_called_once()
+
+
+@pytest.mark.anyio
+async def test_delete_chat_with_fts(client, monkeypatch):
+    """Deleting a chat with FTS-indexed messages should work without SQL logic errors."""
+    _create_chat_in_db("fts-chat", "FTS Test Chat")
+    _insert_message("fts-m1", "user", "hello world searchable", chat_id="fts-chat")
+    _insert_message("fts-m2", "assistant", "response to searchable", chat_id="fts-chat")
+
+    # Verify FTS contains the messages
+    conn = sqlite3.connect(server.DB_PATH)
+    fts_count = conn.execute(
+        "SELECT COUNT(*) FROM messages_fts WHERE chat_id = 'fts-chat'"
+    ).fetchone()[0]
+    conn.close()
+    assert fts_count == 2, "FTS should have indexed both messages"
+
+    mock_popen = MagicMock()
+    monkeypatch.setattr("subprocess.Popen", mock_popen)
+
+    resp = await client.delete("/chats/fts-chat", params={"token": TEST_TOKEN})
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+
+    # Verify messages gone from both main table and FTS
+    conn = sqlite3.connect(server.DB_PATH)
+    assert conn.execute("SELECT COUNT(*) FROM messages WHERE chat_id='fts-chat'").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM messages_fts WHERE chat_id='fts-chat'").fetchone()[0] == 0
+    conn.close()
+
+
+@pytest.mark.anyio
+async def test_delete_chat_fts_corrupted_recovery(client, monkeypatch):
+    """If FTS is out of sync, delete should still succeed via auto-recovery."""
+    _create_chat_in_db("corrupt-chat", "Corrupt FTS Chat")
+    _insert_message("cor-m1", "user", "corrupt test msg", chat_id="corrupt-chat")
+
+    # Corrupt FTS by dropping and recreating it empty (simulates out-of-sync state)
+    # The delete trigger will try to remove an entry that doesn't match, causing SQL logic error
+    conn = sqlite3.connect(server.DB_PATH)
+    conn.execute("DROP TRIGGER IF EXISTS messages_fts_delete")
+    conn.execute("DROP TRIGGER IF EXISTS messages_fts_insert")
+    conn.execute("DROP TRIGGER IF EXISTS messages_fts_update")
+    conn.execute("DROP TABLE IF EXISTS messages_fts")
+    # Recreate FTS but DON'T populate it — so it's out of sync with messages table
+    conn.execute("""
+        CREATE VIRTUAL TABLE messages_fts USING fts5(
+            content, chat_id UNINDEXED, message_id UNINDEXED,
+            content_rowid='rowid'
+        )
+    """)
+    # Insert a fake entry with wrong content to cause mismatch
+    rowid = conn.execute("SELECT rowid FROM messages WHERE id = 'cor-m1'").fetchone()[0]
+    conn.execute(
+        "INSERT INTO messages_fts(rowid, content, chat_id, message_id) VALUES (?, ?, ?, ?)",
+        (rowid, "WRONG CONTENT", "corrupt-chat", "cor-m1"),
+    )
+    # Re-create delete trigger — it will fire on DELETE and try to remove with OLD values
+    # which won't match the "WRONG CONTENT" stored in FTS, causing SQL logic error
+    conn.execute("""
+        CREATE TRIGGER messages_fts_delete AFTER DELETE ON messages BEGIN
+            INSERT INTO messages_fts(messages_fts, rowid, content, chat_id, message_id)
+            VALUES ('delete', OLD.rowid, OLD.content, OLD.chat_id, OLD.id);
+        END
+    """)
+    conn.commit()
+    conn.close()
+
+    mock_popen = MagicMock()
+    monkeypatch.setattr("subprocess.Popen", mock_popen)
+
+    # This should trigger the FTS recovery path
+    resp = await client.delete("/chats/corrupt-chat", params={"token": TEST_TOKEN})
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+
+    # Messages should still be deleted
+    conn = sqlite3.connect(server.DB_PATH)
+    assert conn.execute("SELECT COUNT(*) FROM messages WHERE chat_id='corrupt-chat'").fetchone()[0] == 0
+    conn.close()
 
 
 # ---------------------------------------------------------------------------

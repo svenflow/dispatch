@@ -10,6 +10,7 @@ import {
 import { Stack, useLocalSearchParams } from "expo-router";
 import { getDashboardTasks } from "@/src/api/dashboard";
 import { relativeTime } from "@/src/utils/time";
+import { humanSchedule } from "@/src/utils/schedule";
 
 interface TaskEvent {
   type: string;
@@ -82,17 +83,27 @@ export default function TaskDetailScreen() {
       const data = await getDashboardTasks();
       if (!mountedRef.current) return;
 
-      // Match events: try task_id containing words from the title
-      const titleWords = (params.title ?? "")
-        .toLowerCase()
+      // Match events by task_id or title similarity
+      const taskId = params.id ?? "";
+      const taskTitle = (params.title ?? "").toLowerCase();
+      // Filter out common/short words that cause false matches
+      const stopWords = new Set(["every", "night", "daily", "check", "with", "from", "that", "this", "the", "and", "for"]);
+      const titleWords = taskTitle
         .split(/\s+/)
-        .filter((w) => w.length > 3);
+        .filter((w) => w.length > 4 && !stopWords.has(w));
 
       const matched = data.recent_task_events.filter((e) => {
-        if (!e.task_id) return false;
-        const tid = e.task_id.toLowerCase();
-        // Match if task_id contains any significant word from the title
-        return titleWords.some((w) => tid.includes(w));
+        if (!e.task_id && !e.title) return false;
+        // Exact task_id match (best)
+        if (e.task_id && taskId && e.task_id === taskId) return true;
+        // Title exact match
+        if (e.title && e.title.toLowerCase() === taskTitle) return true;
+        // Fuzzy: require ALL significant words to match (not just any one)
+        if (e.task_id && titleWords.length >= 2) {
+          const tid = e.task_id.toLowerCase();
+          return titleWords.every((w) => tid.includes(w));
+        }
+        return false;
       });
 
       // Sort newest first
@@ -103,7 +114,7 @@ export default function TaskDetailScreen() {
     } finally {
       if (mountedRef.current) setIsLoading(false);
     }
-  }, [params.title]);
+  }, [params.id, params.title]);
 
   useEffect(() => {
     load();
@@ -186,7 +197,9 @@ export default function TaskDetailScreen() {
           <View style={styles.cardSep} />
           <View style={styles.cardRow}>
             <Text style={styles.cardLabel}>Schedule</Text>
-            <Text style={styles.cardValue}>{params.schedule ?? "—"}</Text>
+            <Text style={styles.cardValue} numberOfLines={2}>
+              {params.schedule ? humanSchedule(params.schedule) : "—"}
+            </Text>
           </View>
           {params.next_fire && (
             <>
@@ -278,6 +291,7 @@ const styles = StyleSheet.create({
   cardLabel: {
     color: "#a1a1aa",
     fontSize: 14,
+    flexShrink: 0,
   },
   cardValue: {
     color: "#fafafa",
@@ -306,6 +320,9 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
+    flex: 1,
+    justifyContent: "flex-end",
+    marginLeft: 16,
   },
   statusDot: {
     width: 8,

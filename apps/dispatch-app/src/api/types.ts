@@ -9,6 +9,59 @@ export interface ChatMessage {
   created_at: string;
   status?: string; // "generating" | "complete" | "failed"
   failure_reason?: string | null; // "timeout" | "generation_error" | "server_restart" | "storage_error"
+  reactions?: string[]; // emoji reactions on this message
+  widget_data?: WidgetData | null;
+  widget_response?: WidgetResponse | null;
+  responded_at?: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Widget types
+// ---------------------------------------------------------------------------
+
+/** Option for a question widget */
+export interface QuestionOption {
+  label: string;
+  description?: string | null;
+}
+
+/** A single question in an ask_question widget */
+export interface WidgetQuestion {
+  question: string;
+  options: QuestionOption[];
+  multi_select?: boolean;
+  include_other?: boolean; // default true — shows "Other" option with text input
+}
+
+/** ask_question widget payload */
+export interface AskQuestionWidgetData {
+  v: number;
+  type: "ask_question";
+  questions: WidgetQuestion[];
+}
+
+/** Union of all widget data types (extensible via registry pattern) */
+export type WidgetData = AskQuestionWidgetData;
+
+/** A single question's answer in a form response */
+export interface QuestionAnswer {
+  question_index: number;
+  selected: string[];
+  other_text?: string | null;
+}
+
+/** Batch response to an ask_question widget (all questions answered at once) */
+export interface FormResponse {
+  answers: QuestionAnswer[];
+}
+
+/** Union of all widget response types */
+export type WidgetResponse = FormResponse;
+
+/** Response from POST /widget-response */
+export interface WidgetResponseResult {
+  status: "answered" | "already_answered";
+  response: FormResponse;
 }
 
 /** A chat conversation (dispatch-api chats) */
@@ -28,6 +81,7 @@ export interface Conversation {
   marked_unread?: boolean;
   image_url?: string | null; // Cover image URL (generated via nano-banana)
   image_status?: string | null; // "generating" | "ready" | "failed" | null
+  model?: string | null; // Model used for this session (e.g. "opus", "sonnet")
 }
 
 /** Notes for a chat */
@@ -136,6 +190,23 @@ export interface SdkEventsResponse {
 // Dashboard API types
 // ---------------------------------------------------------------------------
 
+/** A degraded/unhealthy session in the health summary */
+export interface DegradedSession {
+  name: string;
+  contact: string;
+  status: "degraded" | "unhealthy";
+  last_check_seconds: number;
+  issue: string;
+}
+
+/** Session health summary */
+export interface SessionHealthSummary {
+  healthy: number;
+  degraded: number;
+  unhealthy: number;
+  degraded_sessions: DegradedSession[];
+}
+
 /** System health snapshot from GET /api/dashboard/health */
 export interface DashboardHealth {
   daemon_pid: number | null;
@@ -152,6 +223,20 @@ export interface DashboardHealth {
   active_reminders: number;
   facts_count: number;
   skills_count: number;
+
+  // Watchdog
+  watchdog_running: boolean;
+  watchdog_last_check_seconds: number | null;
+  watchdog_crash_count: number;
+  watchdog_last_recovery: string | null;
+  watchdog_backoff_seconds: number;
+
+  // Signal
+  signal_running: boolean;
+  signal_socket_age_seconds: number | null;
+
+  // Session health
+  session_health: SessionHealthSummary;
 }
 
 /** A session from GET /api/dashboard/sessions */
@@ -210,12 +295,32 @@ export interface DashboardSkill {
   script_count: number;
   scripts: string[];
   file_count: number;
+  last_used_ms: number | null;
+  total_invocations: number;
 }
 
 /** Response from GET /api/dashboard/skills */
 export interface DashboardSkillsResponse {
   skills: DashboardSkill[];
   total: number;
+}
+
+/** Detailed usage metrics for a single skill */
+export interface DashboardSkillDetail {
+  name: string;
+  total_invocations: number;
+  last_used_ms: number | null;
+  avg_duration_ms: number | null;
+  error_count: number;
+  invocations_by_session: Array<{ session_name: string; count: number }>;
+  recent_invocations: Array<{
+    timestamp_ms: number;
+    session_name: string;
+    chat_id: string | null;
+    duration_ms: number | null;
+    is_error: boolean;
+  }>;
+  skill_md: string | null;
 }
 
 /** Quota bucket used in CCU response */
@@ -260,4 +365,36 @@ export interface DashboardCcuResponse {
   _updated_at: string | null;
   _error: string | null;
   _quota_error: string | null;
+  _quota_updated_at: string | null;
+}
+
+/** A single quota utilization snapshot from bus events */
+export interface QuotaSnapshot {
+  ts: string;
+  five_hour: number | null;
+  seven_day: number | null;
+}
+
+/** A session that was active between two quota snapshots */
+export interface QuotaHeavySession {
+  window_start: string;
+  window_end: string;
+  five_hour_delta: number;
+  seven_day_delta: number;
+  session_name: string;
+  event_count: number;
+  duration_sec: number;
+  tools: string[];
+}
+
+/** Response from GET /api/dashboard/quota-history */
+export interface QuotaHistoryResponse {
+  snapshots: QuotaSnapshot[];
+  heavy_sessions: QuotaHeavySession[];
+  current_backoff: {
+    backoff_seconds: number;
+    consecutive_failures: number;
+  };
+  current_quota: DashboardCcuResponse["quota"];
+  _quota_updated_at: string | null;
 }

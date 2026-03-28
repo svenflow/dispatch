@@ -13,14 +13,26 @@ Test web apps on real iPhones and iPads in the cloud. Essential for WebGPU, Safa
 - **Platform**: https://app.lambdatest.com
 - **Plan**: Free tier (limited minutes, real device access)
 
+## Pre-Session Checklist
+
+Before starting any LambdaTest session, verify:
+
+1. **Use `applive.lambdatest.com`** — NOT `app.lambdatest.com`. The `app.` domain is the dashboard/settings; `applive.` is the actual real device testing interface.
+2. **Set the URL before clicking Start** — paste the target URL into the LambdaTest URL bar first, then click Start. Navigating inside the remote Safari is unreliable.
+3. **Use synthetic mouse events only** — the remote device renders as a video stream. Dispatch `mousedown`/`mouseup`/`click` events on the canvas/video element at correct coordinates. Standard `chrome click` on device content will miss.
+4. **Use iPhone 17 Pro Max + iOS 26** for WebGPU testing — this is the recommended device/OS combo with confirmed WebGPU support in Safari.
+5. **Free tier is time-limited** — don't leave sessions idle. End sessions promptly when done.
+
 ## How to Start a Real Device Session
 
 Use chrome-control to navigate the LambdaTest UI:
 
-### 1. Open Mobile Browser Testing
+### 1. Open Real Device Testing
+
+**ALWAYS use real devices, NOT virtual/emulator.** Virtual emulators have no GPU (WebGPU wont work).
 
 ```bash
-chrome open "https://app.lambdatest.com/console/realtime/browser/mobile"
+chrome open "https://applive.lambdatest.com/browser"
 ```
 
 ### 2. Select Device

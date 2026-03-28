@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["pillow", "bleak"]
+# dependencies = ["pillow", "bleak", "pyyaml"]
 # ///
 """
 Bloomin8 E-Ink Picture Frame CLI
@@ -37,13 +37,33 @@ import subprocess
 import tempfile
 from pathlib import Path
 from PIL import Image, ExifTags
+import yaml
 
-DEVICE_IP = "10.10.10.37"
+
+def _load_config(dotpath: str, default: str = "") -> str:
+    """Load a value from ~/dispatch/config.local.yaml by dot path."""
+    config_path = Path.home() / "dispatch" / "config.local.yaml"
+    if not config_path.exists():
+        return default
+    with open(config_path) as f:
+        cfg = yaml.safe_load(f) or {}
+    for key in dotpath.split("."):
+        if isinstance(cfg, dict) and key in cfg:
+            cfg = cfg[key]
+        else:
+            return default
+    return str(cfg) if cfg is not None else default
+
+
+DEVICE_IP = _load_config("bloomin8.ip", "10.10.10.37")
 BASE_URL = f"http://{DEVICE_IP}"
 TIMEOUT = 30
 
 # Bluetooth config for wake
-BT_MAC = "F4:90:32:19:2F:50"
+# ESP32 BLE Wake Proxy (WiFi-to-BLE bridge)
+WAKE_PROXY_IP = _load_config("bloomin8.wake_proxy_ip", "10.10.10.64")
+WAKE_PROXY_URL = f"http://{WAKE_PROXY_IP}/wake"
+BT_MAC = "F4:90:32:19:2F:50"  # Not sensitive — hardware identifier
 WAKE_CHARACTERISTIC = "0000f001-0000-1000-8000-00805f9b34fb"
 WAKE_PAYLOAD = bytes([0x01])
 
@@ -150,8 +170,48 @@ async def wake_ble():
         return False
 
 
+def wake_via_proxy():
+    """Wake the device using the ESP32 BLE proxy over HTTP."""
+    print(f"Waking via ESP32 proxy at {WAKE_PROXY_IP}...")
+    try:
+        result = subprocess.run(
+            ["curl", "-s", "--connect-timeout", "5", WAKE_PROXY_URL],
+            capture_output=True, text=True
+        )
+        if result.returncode == 0:
+            data = json.loads(result.stdout)
+            if data.get("result") == "success":
+                print("Wake signal sent via ESP32 proxy!")
+                return True
+            else:
+                print(f"Proxy wake failed: {data.get('result')}")
+                return False
+        else:
+            print(f"Proxy unreachable: {result.stderr}")
+            return False
+    except Exception as e:
+        print(f"Proxy wake error: {e}")
+        return False
+
+
 def wake():
-    """Wake the device using Bluetooth."""
+    """Wake the device — tries ESP32 proxy first, falls back to direct BLE."""
+    # Try ESP32 proxy first (works from anywhere on the network)
+    if wake_via_proxy():
+        # Wait for frame to connect to WiFi
+        print("Waiting for device to reconnect to WiFi...")
+        import time
+        time.sleep(3)
+        try:
+            info = curl_get("/deviceInfo", timeout=5)
+            if isinstance(info, dict):
+                print(f"Device is online! (battery: {info.get('battery')}%)")
+        except:
+            print("Wake sent but device not yet on WiFi. Try again in a few seconds.")
+        return True
+
+    # Fall back to direct BLE (only works if Mac is in BLE range)
+    print("Proxy failed, trying direct BLE...")
     return asyncio.run(wake_ble())
 
 
@@ -193,22 +253,29 @@ def apply_exif_rotation(img: Image.Image) -> Image.Image:
     return img
 
 
-def center_crop_to_ratio(img: Image.Image, ratio_w: int, ratio_h: int) -> Image.Image:
-    """Center crop image to match target aspect ratio."""
+def pad_to_ratio(img: Image.Image, ratio_w: int, ratio_h: int) -> Image.Image:
+    """Pad image with black bars to match target aspect ratio (no cropping)."""
     img_width, img_height = img.size
     target_ratio = ratio_w / ratio_h
     img_ratio = img_width / img_height
 
-    if img_ratio > target_ratio:
-        new_width = int(img_height * target_ratio)
-        left = (img_width - new_width) // 2
-        img = img.crop((left, 0, left + new_width, img_height))
-    elif img_ratio < target_ratio:
-        new_height = int(img_width / target_ratio)
-        top = (img_height - new_height) // 2
-        img = img.crop((0, top, img_width, top + new_height))
+    if abs(img_ratio - target_ratio) < 0.01:
+        return img  # Already correct ratio
 
-    return img
+    if img_ratio > target_ratio:
+        # Image is too wide — add black bars top/bottom
+        new_height = int(img_width / target_ratio)
+        padded = Image.new('RGB', (img_width, new_height), (0, 0, 0))
+        offset_y = (new_height - img_height) // 2
+        padded.paste(img, (0, offset_y))
+        return padded
+    else:
+        # Image is too tall — add black bars left/right
+        new_width = int(img_height * target_ratio)
+        padded = Image.new('RGB', (new_width, img_height), (0, 0, 0))
+        offset_x = (new_width - img_width) // 2
+        padded.paste(img, (offset_x, 0))
+        return padded
 
 
 def prepare_image(filepath: Path, force_orientation: str = None) -> tuple[Path, bool]:
@@ -216,6 +283,15 @@ def prepare_image(filepath: Path, force_orientation: str = None) -> tuple[Path, 
     Prepare image for the e-ink frame.
     Returns tuple of (path to processed image, is_landscape).
     """
+    # Convert HEIC to JPEG first (PIL can't read HEIC natively)
+    if filepath.suffix.lower() in ('.heic', '.heif'):
+        converted = Path(tempfile.gettempdir()) / f"{filepath.stem}_converted.jpg"
+        subprocess.run(
+            ["sips", "-s", "format", "jpeg", str(filepath), "--out", str(converted)],
+            capture_output=True
+        )
+        filepath = converted
+
     img = Image.open(filepath)
 
     if img.mode in ('RGBA', 'P'):
@@ -237,13 +313,13 @@ def prepare_image(filepath: Path, force_orientation: str = None) -> tuple[Path, 
 
     if use_landscape:
         print("Processing as LANDSCAPE (rotate frame clockwise to view)")
-        img = center_crop_to_ratio(img, 4, 3)
+        img = pad_to_ratio(img, 4, 3)
         img = img.resize((SCREEN_LONG, SCREEN_SHORT), Image.Resampling.LANCZOS)
         img = img.rotate(90, expand=True)
         print(f"Output: {img.size[0]}x{img.size[1]} (rotated for landscape viewing)")
     else:
         print("Processing as PORTRAIT")
-        img = center_crop_to_ratio(img, 3, 4)
+        img = pad_to_ratio(img, 3, 4)
         img = img.resize((SCREEN_SHORT, SCREEN_LONG), Image.Resampling.LANCZOS)
         print(f"Output: {img.size[0]}x{img.size[1]}")
 
@@ -267,9 +343,16 @@ def upload(filepath: str, show_now: bool = True, force_orientation: str = None):
 
     result = curl_upload(prepared_path, filename, show_now)
 
-    if result.get("status") == 0:
-        print(f"Uploaded: {result.get('path')}")
+    # Bloomin8 returns status:100 for success (not 0)
+    upload_status = result.get("status")
+    if upload_status in (0, 100) or result.get("path"):
+        uploaded_path = result.get('path', f'/gallerys/default/{filename}')
+        print(f"Uploaded: {uploaded_path}")
         if show_now:
+            # show_now param on upload isn't always reliable, send explicit /show
+            import time
+            time.sleep(1)
+            curl_post("/show", {"image": uploaded_path})
             print("Displaying now...")
             if is_landscape:
                 print(">>> ROTATE FRAME CLOCKWISE to view landscape photo correctly")

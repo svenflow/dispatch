@@ -269,7 +269,7 @@ class SessionRegistry:
             del self._registry[chat_id]
             self._save()
 
-    def update_session_id(self, chat_id: str, session_id: str):
+    def update_session_id(self, chat_id: str, session_id: str | None):
         """Update the SDK session_id for resume support."""
         if chat_id in self._registry:
             self._registry[chat_id]["session_id"] = session_id
@@ -482,6 +482,11 @@ class SDKBackend:
 
             except Exception as e:
                 log.error(f"STARTUP | Failed to recreate {session_name}: {e}")
+                # Clear was_active + stale session_id so we don't retry forever.
+                # A fresh session will be created when the next message arrives.
+                self.registry.clear_was_active(chat_id)
+                self.registry.update_session_id(chat_id, session_id=None)
+                self.registry.flush()
 
         if recreated:
             log.info(f"STARTUP | Recreated {recreated} sessions")
@@ -2253,6 +2258,18 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
         backend = get_backend(source)
         bare_chat_id = chat_id.removeprefix(backend.registry_prefix) if backend.registry_prefix else chat_id
         send_cmd = backend.send_cmd.replace("{chat_id}", bare_chat_id)
+        # Widget hint only for backends that support it (dispatch-app)
+        if backend.name == "dispatch-app":
+            widget_hint = (
+                f'- Send widget (ask_question — use for structured choices, NOT open-ended):\n'
+                f'  cat <<\'EOF\' | ~/.claude/skills/dispatch-app/scripts/reply-widget "{bare_chat_id}" ask_question\n'
+                f'  {{"questions":[{{"question":"...","options":[{{"label":"A"}},{{"label":"B"}}]}}]}}\n'
+                f'  EOF\n'
+                f'  1-4 questions, 2-4 options each. Each has "Other" text input by default (include_other:false to hide).\n'
+                f'  All questions shown at once with Save button. Response: [Widget Response <id>] Q: "..." → answer per question.\n'
+            )
+        else:
+            widget_hint = ""
         if backend.history_cmd:
             history_note = f'**FIRST**: Run this command to see recent conversation history:\n{backend.history_cmd.replace("{chat_id}", bare_chat_id).replace("{limit}", "20")}'
         else:
@@ -2327,7 +2344,7 @@ Quick reference:
   your message here
   ENDMSG
   )"
-- NEVER escape exclamation marks. Write "Hello!" NOT "Hello\\!". The CLI handles escaping. \\! sends a literal backslash.
+{widget_hint}- NEVER escape exclamation marks. Write "Hello!" NOT "Hello\\!". The CLI handles escaping. \\! sends a literal backslash.
 - Full guidelines: ~/.claude/skills/sms-assistant/SKILL.md
 """
 
@@ -2507,6 +2524,21 @@ Full guidelines: ~/.claude/skills/sms-assistant/SKILL.md
 **NEVER use {default_send} in {backend.label} sessions** - it will send via {default_backend.label} instead of {backend.label}, causing duplicate responses and confusion.
 
 All other system documentation applies normally (see ~/.claude/CLAUDE.md via symlink).
+"""
+        # Add widget commands for dispatch-app backend
+        if backend.name == "dispatch-app":
+            content += f"""
+## Widgets
+
+Send interactive widgets (structured choices) instead of plain text when you need a specific selection:
+```bash
+cat <<'EOF' | ~/.claude/skills/dispatch-app/scripts/reply-widget "{{chat_id}}" ask_question
+{{"questions":[{{"question":"Which option?","options":[{{"label":"A","description":"Details"}},{{"label":"B"}}]}}]}}
+EOF
+```
+- 1-4 questions, 2-4 options each. Each question shows "Other" with text input by default (`"include_other": false` to hide).
+- All questions shown at once with a Save button. No auto-submit.
+- Response arrives as multi-line: `[Widget Response <id>]` then `Q: "..." → answer` per question.
 """
 
         # Add markdown rendering note for backends that support it

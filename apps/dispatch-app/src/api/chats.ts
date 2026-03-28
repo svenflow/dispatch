@@ -6,6 +6,8 @@ import type {
   MessagesResponse,
   PromptResponse,
   SearchResponse,
+  WidgetResponse,
+  WidgetResponseResult,
 } from "./types";
 
 /** List all chats with last message previews. GET /chats */
@@ -42,6 +44,15 @@ export async function updateChat(
   return apiRequest<Conversation>(`/chats/${chatId}`, {
     method: "PATCH",
     body: { token: getDeviceToken() ?? "", title },
+  });
+}
+
+/** Suggest 3 short AI-generated titles for a chat. POST /chats/:chatId/suggest-title */
+export async function suggestChatTitles(
+  chatId: string,
+): Promise<{ titles: string[] }> {
+  return apiRequest<{ titles: string[] }>(`/chats/${chatId}/suggest-title`, {
+    method: "POST",
   });
 }
 
@@ -174,6 +185,49 @@ export async function restartSession(
     {
       method: "POST",
       params: { chat_id: chatId },
+    },
+  );
+}
+
+/** Change the model for a specific chat session. POST /chats/:id/model */
+export async function setChatModel(
+  chatId: string,
+  model: string,
+): Promise<{ status: string; model: string; message: string }> {
+  return apiRequest<{ status: string; model: string; message: string }>(
+    `/chats/${chatId}/model`,
+    {
+      method: "POST",
+      body: { model },
+    },
+  );
+}
+
+/** Toggle a reaction on a message. POST /messages/:id/react */
+export async function reactToMessage(
+  messageId: string,
+  emoji: string = "👍",
+): Promise<{ status: string; action: string; emoji: string; message_id: string }> {
+  return apiRequest<{ status: string; action: string; emoji: string; message_id: string }>(
+    `/messages/${messageId}/react`,
+    {
+      method: "POST",
+      body: { emoji },
+    },
+  );
+}
+
+/** Submit a response to a widget. POST /conversations/:chatId/messages/:messageId/widget-response */
+export async function submitWidgetResponse(
+  chatId: string,
+  messageId: string,
+  response: WidgetResponse,
+): Promise<WidgetResponseResult> {
+  return apiRequest<WidgetResponseResult>(
+    `/conversations/${chatId}/messages/${messageId}/widget-response`,
+    {
+      method: "POST",
+      body: { response, token: getDeviceToken() ?? "" },
     },
   );
 }

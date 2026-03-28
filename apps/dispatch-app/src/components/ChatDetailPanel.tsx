@@ -208,7 +208,7 @@ export function ChatDetailPanel({ chatId, chatTitle, onTitleChange, onDelete }: 
             keyExtractor={keyExtractor}
             contentContainerStyle={screenStyles.messageList}
             showsVerticalScrollIndicator={false}
-            keyboardDismissMode="interactive"
+            keyboardDismissMode="none"
             keyboardShouldPersistTaps="handled"
           />
         )}

@@ -1,0 +1,119 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["pydantic"]
+# ///
+"""
+reply-widget - Send a widget message to the dispatch app.
+
+Reads widget payload JSON from stdin, validates it, stores in DB with
+plain-text fallback, and sends a push notification.
+
+Usage:
+    cat <<'EOF' | reply-widget <chat_id> ask_question
+    {"questions": [{"question": "Which approach?", "options": [{"label": "A"}, {"label": "B"}]}]}
+    EOF
+
+Exit codes:
+    0 - Success (prints message_id to stdout)
+    1 - Validation error (prints error to stderr, no DB write)
+"""
+
+import json
+import subprocess
+import sys
+import uuid
+from pathlib import Path
+
+# Add scripts dir for shared module imports
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from dispatch_db import init_db, store_message, get_chat_title
+from widget_models import validate_widget, format_widget_content, WIDGET_REGISTRY
+
+
+PUSH_SCRIPT = Path.home() / ".claude" / "skills" / "dispatch-app" / "scripts" / "send-push"
+
+
+def main():
+    if len(sys.argv) < 3:
+        print("Usage: reply-widget <chat_id> <widget_type>", file=sys.stderr)
+        print("  Reads JSON payload from stdin", file=sys.stderr)
+        sys.exit(1)
+
+    chat_id = sys.argv[1]
+    widget_type = sys.argv[2]
+
+    # Strip prefix
+    if chat_id.startswith("dispatch-app:"):
+        chat_id = chat_id[len("dispatch-app:"):]
+    elif chat_id.startswith("sven-app:"):
+        chat_id = chat_id[len("sven-app:"):]
+
+    # Validate widget type exists
+    if widget_type not in WIDGET_REGISTRY:
+        print(f"Unknown widget type: {widget_type}", file=sys.stderr)
+        print(f"Available types: {', '.join(WIDGET_REGISTRY.keys())}", file=sys.stderr)
+        sys.exit(1)
+
+    # Read JSON from stdin
+    try:
+        raw = sys.stdin.read().strip()
+        if not raw:
+            print("No JSON payload provided on stdin", file=sys.stderr)
+            sys.exit(1)
+        payload = json.loads(raw)
+    except json.JSONDecodeError as e:
+        print(f"Invalid JSON: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Add v and type fields automatically
+    payload["v"] = 1
+    payload["type"] = widget_type
+
+    # Validate via pydantic
+    error = validate_widget(widget_type, payload)
+    if error:
+        print(f"Validation error: {error}", file=sys.stderr)
+        sys.exit(1)
+
+    # Generate plain-text fallback
+    content = format_widget_content(payload)
+
+    # Initialize DB and store
+    init_db()
+    message_id = str(uuid.uuid4())
+    widget_data_json = json.dumps(payload)
+
+    store_message(
+        message_id=message_id,
+        role="assistant",
+        content=content,
+        chat_id=chat_id,
+        widget_data=widget_data_json,
+    )
+    print(f"Widget stored: {message_id}")
+
+    # Send push notification (best-effort)
+    if PUSH_SCRIPT.exists():
+        try:
+            preview = content[:100] + "..." if len(content) > 100 else content
+            chat_title = get_chat_title(chat_id) or chat_id
+            result = subprocess.run(
+                [str(PUSH_SCRIPT), message_id, preview, "--chat-id", chat_id, "--chat-title", chat_title],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if result.returncode == 0:
+                print("Push notification sent")
+            else:
+                print(f"Push notification failed: {result.stderr}", file=sys.stderr)
+        except Exception as e:
+            print(f"Push notification error: {e}", file=sys.stderr)
+
+    # Print message_id for caller
+    print(message_id)
+
+
+if __name__ == "__main__":
+    main()

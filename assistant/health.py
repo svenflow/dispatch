@@ -547,23 +547,18 @@ def _get_oauth_token() -> str | None:
 
 _quota_cache: dict | None = None
 _quota_cache_ts: float = 0.0
-_QUOTA_CACHE_TTL: float = 60.0  # seconds
+_last_attempt_ts: float = 0.0        # when we last tried the API (success or failure)
+_QUOTA_BACKOFF_BASE: float = 900.0   # 15 min base interval
+_QUOTA_BACKOFF_MAX: float = 7200.0   # 2 hour cap
+_quota_backoff: float = 900.0        # current dynamic interval (adapts on failure)
+_consecutive_failures: int = 0
+
+import threading
+_quota_lock = threading.Lock()
 
 
-def fetch_quota_oauth() -> dict | None:
-    """Fetch usage quota via OAuth API. Returns raw usage dict or None.
-
-    Results are cached in-memory for 60 seconds to avoid excessive HTTP requests
-    when multiple callers poll frequently.
-    """
-    import time
-
-    global _quota_cache, _quota_cache_ts
-
-    now = time.monotonic()
-    if _quota_cache is not None and (now - _quota_cache_ts) < _QUOTA_CACHE_TTL:
-        return _quota_cache
-
+def _fetch_quota_from_api() -> dict | None:
+    """Internal: actually hit the Anthropic OAuth API. Never call directly — use fetch_quota()."""
     token = _get_oauth_token()
     if not token:
         log.warning("QUOTA_CHECK | No OAuth token available")
@@ -580,12 +575,120 @@ def fetch_quota_oauth() -> dict | None:
     try:
         resp = urllib.request.urlopen(req, context=ctx, timeout=15)
         result = json.loads(resp.read().decode())
-        _quota_cache = result
-        _quota_cache_ts = now
         return result
     except Exception as e:
         log.warning(f"QUOTA_CHECK | OAuth fetch failed: {e}")
         return None
+
+
+def fetch_quota() -> tuple[dict | None, str | None, bool]:
+    """Central quota accessor. Returns (usage_dict, updated_at_iso, is_fresh).
+
+    Enforces adaptive backoff between API calls (15 min base, doubles on failure,
+    caps at 2 hours, resets on success). All callers go through this single
+    function — there is no other path to the Anthropic quota API.
+
+    is_fresh=True only when the API was actually called and returned new data.
+    """
+    import time
+    from datetime import datetime
+
+    global _quota_cache, _quota_cache_ts, _quota_backoff, _consecutive_failures, _last_attempt_ts
+
+    with _quota_lock:
+        now = time.monotonic()
+
+        # Respect backoff — don't hit API if we attempted recently (success OR failure)
+        if (now - _last_attempt_ts) < _quota_backoff:
+            if _quota_cache is not None:
+                age = now - _quota_cache_ts
+                updated_at = datetime.fromtimestamp(
+                    time.time() - age
+                ).isoformat()
+                return _quota_cache, updated_at, False
+            return None, None, False
+
+        # Backoff window expired — attempt API call
+        _last_attempt_ts = now
+        result = _fetch_quota_from_api()
+        if result is not None:
+            _quota_cache = result
+            _quota_cache_ts = now
+            _quota_backoff = _QUOTA_BACKOFF_BASE  # reset on success
+            _consecutive_failures = 0
+            updated_at = datetime.now().isoformat()
+            log.info("QUOTA_CHECK | Fresh fetch successful, next in %.0fs", _quota_backoff)
+            return result, updated_at, True
+
+        # API failed — increase backoff
+        _consecutive_failures += 1
+        old_backoff = _quota_backoff
+        _quota_backoff = min(_quota_backoff * 2, _QUOTA_BACKOFF_MAX)
+        log.debug("QUOTA_BACKOFF | increased to %.0fs after %d consecutive failures (was %.0fs)",
+                  _quota_backoff, _consecutive_failures, old_backoff)
+
+        # Return stale cache if we have one
+        if _quota_cache is not None:
+            age = now - _quota_cache_ts
+            updated_at = datetime.fromtimestamp(
+                time.time() - age
+            ).isoformat()
+            log.warning("QUOTA_CHECK | API failed, returning stale cache from %s", updated_at)
+            return _quota_cache, updated_at, False
+
+        return None, None, False
+
+
+def get_quota_cached() -> tuple[dict | None, str | None]:
+    """Read-only access to the quota cache. Never triggers an API call.
+
+    Use this from IPC handlers and anywhere that just needs the latest known data.
+    Returns (usage_dict, updated_at_iso).
+    """
+    import time
+    from datetime import datetime
+
+    with _quota_lock:
+        if _quota_cache is not None:
+            age = time.monotonic() - _quota_cache_ts
+            updated_at = datetime.fromtimestamp(
+                time.time() - age
+            ).isoformat()
+            return _quota_cache, updated_at
+        return None, None
+
+
+def get_quota_backoff_state() -> dict:
+    """Return current backoff state for bus event payload."""
+    with _quota_lock:
+        return {
+            "backoff_seconds": int(_quota_backoff),
+            "consecutive_failures": _consecutive_failures,
+        }
+
+
+def seed_quota_cache(data: dict | None, updated_at: str | None):
+    """Seed the in-memory cache from disk on startup.
+
+    Does NOT reset backoff. Sets cache_ts so it's immediately stale —
+    the first health check will trigger a fresh fetch.
+    """
+    import time
+    if data is None:
+        return
+    global _quota_cache, _quota_cache_ts
+    with _quota_lock:
+        _quota_cache = data
+        # Set to immediately stale so next fetch_quota() call hits the API
+        _quota_cache_ts = time.monotonic() - _quota_backoff
+        log.info("QUOTA_CHECK | Seeded cache from disk (immediately stale, will refresh on next check)")
+
+
+# Back-compat alias — existing callers that import fetch_quota_oauth will get the new gated version
+def fetch_quota_oauth() -> dict | None:
+    """DEPRECATED: Use fetch_quota() instead. This wrapper exists for back-compat."""
+    usage, _ts, _fresh = fetch_quota()
+    return usage
 
 
 def check_quota_thresholds(usage: dict) -> list[dict[str, Any]]:

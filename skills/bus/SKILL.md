@@ -297,4 +297,4 @@ GROUP BY hour, source ORDER BY hour, cnt DESC;
 
 ## Live Dashboard
 
-The bus has a live dashboard at `http://10.10.10.250:9091/dashboard` (or via Tailscale). Shows stacked area charts for event rate by source, by type, and by chat, plus SDK calls and active tasks.
+The bus has a live dashboard at the dispatch API `/dashboard` endpoint (or via Tailscale). Shows stacked area charts for event rate by source, by type, and by chat, plus SDK calls and active tasks.

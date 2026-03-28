@@ -34,7 +34,7 @@ import { SessionPicker } from "./SessionPicker";
 import { SkillPicker } from "./SkillPicker";
 import type { AgentSession } from "../api/types";
 import type { Skill } from "../api/skills";
-import { SESSION_CONTEXT_PROMPT, REVIEW_PROMPT, PLAN_BUILD_TEST_PROMPT } from "../prompts/attachPrompts";
+import { SESSION_CONTEXT_PROMPT, REVIEW_PROMPT, PLAN_BUILD_TEST_PROMPT, FACT_CHECK_PROMPT } from "../prompts/attachPrompts";
 
 type ActivePanel = "none" | "attach" | "sessions" | "skills";
 
@@ -83,15 +83,18 @@ async function persistDraftCache() {
 export function InputBar({ onSend, onSendWithImage, disabled, chatId, voiceConversation, clearTextRef, onDictationDraft }: InputBarProps) {
   const draftKey = chatId ?? "__default__";
   const [text, setText] = useState(() => draftCache[draftKey] ?? "");
-  const [inputKey, setInputKey] = useState(0); // Force TextInput remount to fix height reset
+  const [inputKey, setInputKey] = useState(0); // Force TextInput remount to fix height reset (only used when keyboard not focused)
+  const [inputHeight, setInputHeight] = useState<number | undefined>(undefined);
   const [selectedAttachments, setSelectedAttachments] = useState<string[]>([]);
   const [activePanel, setActivePanel] = useState<ActivePanel>("none");
   const panelAnim = useRef(new Animated.Value(0)).current; // 0 = hidden, 1 = visible
+  const inputRef = useRef<TextInput>(null);
   const speech = useSpeechRecognition();
   const [isDictatingDraft, setIsDictatingDraft] = useState(false);
   const isDictatingDraftRef = useRef(false); // Ref mirror to avoid stale closure in speech effect
   const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const draftTextRef = useRef<string>("");
+  const justSentRef = useRef(false); // Guard against native bridge delivering late onChangeText after send
   const draftHasStartedListening = useRef(false);
   const insets = useSafeAreaInsets();
 
@@ -238,6 +241,20 @@ export function InputBar({ onSend, onSendWithImage, disabled, chatId, voiceConve
     }
   }, [speech.transcript, speech.partialTranscript, speech.isListening, preDictationText, voiceConversation?.isActive, onDictationDraft, onSend]);
 
+  // Reset InputBar's speech state when voice conversation deactivates.
+  // Both useSpeechRecognition (InputBar) and useSpeechCapture (voice conversation)
+  // share the native speech module, so stale transcripts leak into the text input
+  // when isActive flips to false.
+  const prevVoiceActiveRef = useRef(false);
+  useEffect(() => {
+    const wasActive = prevVoiceActiveRef.current;
+    const isNowActive = voiceConversation?.isActive ?? false;
+    prevVoiceActiveRef.current = isNowActive;
+    if (wasActive && !isNowActive) {
+      speech.reset();
+    }
+  }, [voiceConversation?.isActive, speech]);
+
   // Track when speech actually starts listening in draft mode
   useEffect(() => {
     if (speech.isListening && isDictatingDraft) {
@@ -276,10 +293,15 @@ export function InputBar({ onSend, onSendWithImage, disabled, chatId, voiceConve
       onSend(text.trim());
     }
 
+    justSentRef.current = true;
+    setTimeout(() => { justSentRef.current = false; }, 200);
     setText("");
     delete draftCache[draftKey];
     persistDraftCache();
-    setInputKey((k) => k + 1); // Force TextInput remount to reset height
+    // Reset height to single line without remounting (remount kills keyboard focus)
+    if (Platform.OS !== "web") setInputHeight(undefined);
+    // Refocus input so keyboard stays up after send
+    requestAnimationFrame(() => inputRef.current?.focus());
     setSelectedAttachments([]);
     setPreDictationText("");
     speech.reset();
@@ -287,20 +309,12 @@ export function InputBar({ onSend, onSendWithImage, disabled, chatId, voiceConve
 
   const handleMicPress = useCallback(() => {
     impactLight();
-    if (text.trim()) {
-      // If there's already text, use old behavior (append to text input)
-      setPreDictationText(text);
-    } else {
-      // Empty input — use draft bubble mode
-      setIsDictatingDraft(true);
-      isDictatingDraftRef.current = true; // Set ref immediately so speech effect sees it
-      draftTextRef.current = "";
-      draftHasStartedListening.current = false;
-      onDictationDraft?.("");
-    }
+    // Always fill the text input — single tap never uses draft bubble mode.
+    // Draft bubble is only for long-press voice conversation mode.
+    setPreDictationText(text);
     speech.reset();
     speech.start();
-  }, [speech, text, onDictationDraft]);
+  }, [speech, text]);
 
   const handleStopDictation = useCallback(() => {
     impactLight();
@@ -434,9 +448,19 @@ export function InputBar({ onSend, onSendWithImage, disabled, chatId, voiceConve
     onSend("Keep going!");
   }, [onSend]);
 
+  const handleManualTest = useCallback(() => {
+    setActivePanel("none");
+    onSend("Use /manual-test to test the above implementation. Enumerate CUJs and test each one.");
+  }, [onSend]);
+
   const handleBugFinder = useCallback(() => {
     setActivePanel("none");
     onSend("Use /bug-finder — run in a subagent to find bugs with the above.");
+  }, [onSend]);
+
+  const handleFactCheck = useCallback(() => {
+    setActivePanel("none");
+    onSend(FACT_CHECK_PROMPT);
   }, [onSend]);
 
   const handleRemoveAttachment = useCallback((index: number) => {
@@ -483,7 +507,9 @@ export function InputBar({ onSend, onSendWithImage, disabled, chatId, voiceConve
           <View style={[attachStyles.row, { borderTopWidth: 0, paddingTop: 0 }]}>
             <AttachOption icon="checkmark.seal.fill" label="Review" iconColor="#a78bfa" onPress={handleReview} />
             <AttachOption icon="hammer.fill" label="Build" iconColor="#f59e0b" onPress={handlePlanBuildTest} />
+            <AttachOption icon="hand.tap.fill" label="Test" iconColor="#fb923c" onPress={handleManualTest} />
             <AttachOption icon="ant.fill" label="Debug" iconColor="#ef4444" onPress={handleBugFinder} />
+            <AttachOption icon="checkmark.shield.fill" label="Fact Check" iconColor="#06b6d4" onPress={handleFactCheck} />
             <AttachOption icon="arrow.right.circle.fill" label="Nudge" iconColor="#34d399" onPress={handleNudge} />
           </View>
         </Animated.View>
@@ -568,10 +594,15 @@ export function InputBar({ onSend, onSendWithImage, disabled, chatId, voiceConve
               speech.isListening && !isDictatingDraft && styles.inputWrapperDictating,
             ]}>
               <TextInput
+                ref={inputRef}
                 key={inputKey}
-                style={styles.input}
+                style={[styles.input, inputHeight != null ? { height: inputHeight } : undefined]}
                 value={text}
+                onContentSizeChange={(e) => {
+                  if (text) setInputHeight(e.nativeEvent.contentSize.height);
+                }}
                 onChangeText={(newText) => {
+                  if (justSentRef.current) return; // Ignore late native bridge events after send
                   setText(newText);
                   if (speech.isListening) speech.stop();
                 }}
@@ -582,6 +613,7 @@ export function InputBar({ onSend, onSendWithImage, disabled, chatId, voiceConve
                 multiline
                 maxLength={10000}
                 editable={!disabled}
+                autoFocus={Platform.OS === "web"}
                 returnKeyType="default"
                 blurOnSubmit={false}
                 onKeyPress={Platform.OS === "web" ? (e: any) => {
@@ -610,6 +642,7 @@ export function InputBar({ onSend, onSendWithImage, disabled, chatId, voiceConve
               ) : canSend ? (
                 <Animated.View style={{ transform: [{ scale: sendButtonScale }] }}>
                   <Pressable
+                    onPressIn={() => inputRef.current?.focus()}
                     onPress={handleSend}
                     style={({ pressed }) => [
                       styles.inlineActionButton,

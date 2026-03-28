@@ -5,7 +5,7 @@ description: Check Claude Code API usage, token consumption, and quota remaining
 
 # Claude Code Usage Tracking
 
-Two data sources: **local** (ccusage npm package, reads JSONL logs) and **server-side** (claude.ai API, real quota data).
+Two data sources: **local** (ccusage npm package, reads JSONL logs) and **server-side** (daemon-cached quota from Anthropic API).
 
 ## Quick Commands
 
@@ -18,19 +18,33 @@ Two data sources: **local** (ccusage npm package, reads JSONL logs) and **server
 ~/.claude/skills/ccusage/scripts/usage weekly
 ~/.claude/skills/ccusage/scripts/usage monthly
 
-# Server-side only (real quota from Anthropic)
+# Server-side (reads from daemon cache by default — instant, no API call)
 ~/.claude/skills/ccusage/scripts/usage server              # Human-readable
 ~/.claude/skills/ccusage/scripts/usage server --json        # Raw JSON
 ~/.claude/skills/ccusage/scripts/usage server --check 80    # Exit 0 if < 80%
 ~/.claude/skills/ccusage/scripts/usage server --reset-time  # ISO 8601 reset time
 ~/.claude/skills/ccusage/scripts/usage server --hours-until-reset  # Hours as float
+~/.claude/skills/ccusage/scripts/usage server --force       # Bypass cache, hit API directly
 ```
 
-## Server-Side Usage
+## Server-Side Usage Architecture
 
-Two auth methods, tried in order:
+The daemon's health check loop fetches quota from Anthropic every ~15 min (adaptive backoff: 15min base → 2h cap on failures). Results are:
 
-### 1. OAuth (preferred, no browser needed)
+1. **Written to disk**: `~/dispatch/state/quota_cache.json` (atomic write)
+2. **Emitted to bus**: `quota.fetched` event on `system` topic (with utilization + backoff state)
+3. **Served via API**: `dispatch-api` reads `quota_cache.json` and serves it at `/api/dashboard/ccu`
+
+The `server-usage` CLI reads from the cache file — **it never hits the Anthropic API** unless you pass `--force`. This prevents quota hammering and makes it instant.
+
+### Cache file location
+```
+~/dispatch/state/quota_cache.json
+```
+
+### Auth methods (only used with --force)
+
+#### 1. OAuth (preferred, no browser needed)
 - **Endpoint**: `api.anthropic.com/api/oauth/usage`
 - **Auth**: `Authorization: Bearer <oauth-token>`
 - **Required header**: `anthropic-beta: oauth-2025-04-20`
@@ -38,18 +52,96 @@ Two auth methods, tried in order:
   - macOS: keychain entry "Claude Code-credentials" → `claudeAiOauth.accessToken`
   - Linux: `~/.claude/.credentials.json` → `claudeAiOauth.accessToken`
 
-### 2. Chrome cookies (fallback)
+#### 2. Chrome cookies (fallback)
 - **Endpoint**: `claude.ai/api/organizations/{org_id}/usage`
 - **Auth**: Chrome session cookies (requires being logged into claude.ai)
 - **org_id**: From `lastActiveOrg` cookie
 
-Returns:
+### Response fields
 - **5-hour block**: Current utilization % and reset time
 - **7-day all models**: Weekly quota utilization % and exact rolling reset time
 - **7-day sonnet**: Separate sonnet-only quota
 - **7-day opus**: Separate opus-only quota (if applicable)
 - **Extra usage**: Credit-based overage spending (if enabled)
 - **Rate limit tier**: Concurrent request limits per model (cookies only)
+
+## Investigating Quota Changes via Bus
+
+The bus stores every `quota.fetched` event with utilization snapshots. Use SQL to find big jumps and correlate with heavy sessions.
+
+### Find big quota jumps (>5% increase between consecutive fetches)
+
+```sql
+-- Show quota changes over time, flagging big jumps
+WITH quota_seq AS (
+  SELECT
+    offset,
+    datetime(timestamp/1000, 'unixepoch', 'localtime') AS ts,
+    timestamp,
+    json_extract(payload, '$.five_hour.utilization') AS fh,
+    json_extract(payload, '$.seven_day.utilization') AS sd,
+    LAG(json_extract(payload, '$.five_hour.utilization')) OVER (ORDER BY offset) AS prev_fh,
+    LAG(json_extract(payload, '$.seven_day.utilization')) OVER (ORDER BY offset) AS prev_sd,
+    LAG(timestamp) OVER (ORDER BY offset) AS prev_ts
+  FROM records
+  WHERE topic = 'system' AND type = 'quota.fetched'
+)
+SELECT ts,
+  fh || '%' AS five_hour,
+  sd || '%' AS seven_day,
+  CASE WHEN prev_fh IS NOT NULL THEN '+' || (fh - prev_fh) || '%' END AS fh_delta,
+  CASE WHEN prev_sd IS NOT NULL THEN '+' || (sd - prev_sd) || '%' END AS sd_delta,
+  CASE WHEN prev_ts IS NOT NULL THEN (timestamp - prev_ts) / 60000 || 'm' END AS gap
+FROM quota_seq
+WHERE prev_fh IS NULL OR (fh - prev_fh) > 5 OR (sd - prev_sd) > 2
+ORDER BY offset DESC
+LIMIT 20;
+```
+
+### Find what was heavy between two quota snapshots
+
+```sql
+-- Given a time window (between two quota.fetched events), find which sessions were active
+-- Replace the timestamps with values from the quota jump query above
+SELECT
+  session_name,
+  COUNT(*) AS events,
+  SUM(duration_ms) / 1000.0 AS total_sec,
+  COUNT(DISTINCT tool_name) AS unique_tools,
+  GROUP_CONCAT(DISTINCT tool_name) AS tools_used
+FROM sdk_events
+WHERE timestamp BETWEEN 1743187827000 AND 1743188792000  -- replace with actual ms timestamps
+  AND event_type = 'tool_result'
+GROUP BY session_name
+ORDER BY total_sec DESC;
+```
+
+### Quick one-liner: recent quota history
+
+```bash
+sqlite3 ~/dispatch/state/bus.db "
+  SELECT datetime(timestamp/1000, 'unixepoch', 'localtime') AS ts,
+         json_extract(payload, '$.five_hour.utilization') || '%' AS fh,
+         json_extract(payload, '$.seven_day.utilization') || '%' AS sd
+  FROM records
+  WHERE topic='system' AND type='quota.fetched'
+  ORDER BY offset DESC LIMIT 20
+"
+```
+
+### Find quota fetch failures and backoff state
+
+```bash
+sqlite3 ~/dispatch/state/bus.db "
+  SELECT datetime(timestamp/1000, 'unixepoch', 'localtime') AS ts,
+         json_extract(payload, '$.backoff_seconds') AS backoff,
+         json_extract(payload, '$.consecutive_failures') AS failures,
+         json_extract(payload, '$.error') AS error
+  FROM records
+  WHERE topic='system' AND type='quota.fetch_failed'
+  ORDER BY offset DESC LIMIT 10
+"
+```
 
 ## Understanding Blocks (Local)
 

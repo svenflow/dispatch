@@ -5,18 +5,22 @@
 # ///
 """Query Claude's server-side usage data.
 
-Primary method: OAuth token from macOS keychain (Claude Code credentials)
+Primary method: Read from daemon-managed cache at ~/dispatch/state/quota_cache.json
+  - The daemon fetches quota every ~15 min with adaptive backoff
+  - Cache is written atomically by the quota-handler bus consumer
+
+Fallback (--force): Fetch directly from Anthropic API
+  - OAuth token from macOS keychain (Claude Code credentials)
   - Endpoint: api.anthropic.com/api/oauth/usage
-  - Requires header: anthropic-beta: oauth-2025-04-20
-  - Token from macOS keychain "Claude Code-credentials" or ~/.claude/.credentials.json (Linux)
-Fallback: Chrome session cookies for claude.ai
+  - Chrome cookies as last resort
 
 Usage:
-    server-usage              # Human-readable summary
+    server-usage              # Human-readable summary (from cache)
     server-usage --json       # Raw JSON for scripting
-    server-usage --check 80   # Exit 0 if weekly < 80%, exit 1 if >= 80%
+    server-usage --check 80   # Exit 0 if weekly < 80%, exit 1 if >=
     server-usage --reset-time # Print weekly reset time as ISO 8601
     server-usage --hours-until-reset  # Print hours until 7-day reset
+    server-usage --force      # Bypass cache, fetch directly from API
 """
 
 import argparse
@@ -28,6 +32,27 @@ import sys
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
+
+
+QUOTA_CACHE_FILE = Path.home() / "dispatch" / "state" / "quota_cache.json"
+
+
+# --- Cache reading ---
+
+def read_from_cache() -> tuple[dict | None, str | None]:
+    """Read usage data from daemon-managed quota cache.
+    Returns (usage_data, updated_at_iso) or (None, None) if unavailable."""
+    if not QUOTA_CACHE_FILE.exists():
+        return None, None
+    try:
+        raw = json.loads(QUOTA_CACHE_FILE.read_text())
+        data = raw.get("data")
+        updated_at = raw.get("updated_at")
+        if data:
+            return data, updated_at
+        return None, None
+    except Exception:
+        return None, None
 
 
 # --- OAuth token retrieval ---
@@ -147,18 +172,27 @@ def fetch_rate_limits(cookies: dict[str, str]) -> dict:
 
 # --- Unified fetch ---
 
-def fetch_usage() -> tuple[dict, str]:
-    """Fetch usage data. Returns (data, method_used).
-    Tries OAuth first, falls back to Chrome cookies."""
+def fetch_usage(force: bool = False) -> tuple[dict, str, str | None]:
+    """Fetch usage data. Returns (data, method_used, updated_at).
+
+    Default: reads from daemon cache (~/dispatch/state/quota_cache.json).
+    --force: bypasses cache, hits API directly (OAuth then cookies).
+    """
+    if not force:
+        data, updated_at = read_from_cache()
+        if data:
+            return data, "cache", updated_at
+
+    # Direct API fetch (force mode, or cache miss)
     token = get_oauth_token()
     if token:
         data = fetch_usage_oauth(token)
         if data:
-            return data, "oauth"
+            return data, "oauth", None
 
     # Fallback to cookies
     cookies = get_claude_cookies()
-    return fetch_usage_cookies(cookies), "cookies"
+    return fetch_usage_cookies(cookies), "cookies", None
 
 
 # --- Formatting ---
@@ -170,6 +204,27 @@ def format_reset_time(iso_str):
     dt = datetime.fromisoformat(iso_str)
     local = dt.astimezone()
     return local.strftime("%a %b %d %I:%M %p %Z")
+
+
+def format_cache_age(updated_at_iso: str | None) -> str:
+    """Format how long ago the cache was updated."""
+    if not updated_at_iso:
+        return ""
+    try:
+        dt = datetime.fromisoformat(updated_at_iso)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        delta = now - dt
+        secs = int(delta.total_seconds())
+        if secs < 60:
+            return f"{secs}s ago"
+        elif secs < 3600:
+            return f"{secs // 60}m ago"
+        else:
+            return f"{secs // 3600}h {(secs % 3600) // 60}m ago"
+    except Exception:
+        return ""
 
 
 def time_until(iso_str):
@@ -191,9 +246,14 @@ def time_until(iso_str):
     return f"({hours}h {minutes}m)"
 
 
-def print_summary(usage, rate_limits, method):
+def print_summary(usage, rate_limits, method, updated_at=None):
     """Print human-readable usage summary."""
-    print(f"\n═══ Claude Server-Side Usage (via {method}) ═══\n")
+    source_label = method
+    if method == "cache":
+        age = format_cache_age(updated_at)
+        source_label = f"cache, fetched {age}" if age else "cache"
+
+    print(f"\n═══ Claude Server-Side Usage (via {source_label}) ═══\n")
 
     # 5-hour block
     fh = usage.get("five_hour", {})
@@ -262,16 +322,21 @@ def main():
                         help="Print 7-day reset time as ISO 8601")
     parser.add_argument("--hours-until-reset", action="store_true",
                         help="Print hours until 7-day reset")
+    parser.add_argument("--force", action="store_true",
+                        help="Bypass cache, fetch directly from Anthropic API")
     args = parser.parse_args()
 
-    usage, method = fetch_usage()
+    usage, method, updated_at = fetch_usage(force=args.force)
 
     if args.json:
         rate_limits = {}
         if method == "cookies":
             cookies = get_claude_cookies()
             rate_limits = fetch_rate_limits(cookies)
-        print(json.dumps({"usage": usage, "rate_limits": rate_limits, "method": method}, indent=2))
+        output = {"usage": usage, "rate_limits": rate_limits, "method": method}
+        if updated_at:
+            output["updated_at"] = updated_at
+        print(json.dumps(output, indent=2))
         return
 
     if args.reset_time:
@@ -309,7 +374,7 @@ def main():
         cookies = get_claude_cookies()
         rate_limits = fetch_rate_limits(cookies)
 
-    print_summary(usage, rate_limits, method)
+    print_summary(usage, rate_limits, method, updated_at)
 
 
 if __name__ == "__main__":

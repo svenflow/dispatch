@@ -9,18 +9,51 @@ import {
   TextInput,
   View,
 } from "react-native";
-import { Stack } from "expo-router";
+import { Stack, useRouter } from "expo-router";
 import { getDashboardSkills } from "@/src/api/dashboard";
 import type { DashboardSkill } from "@/src/api/types";
+import { timeAgoMs } from "@/src/utils/time";
 
 const Separator = () => <View style={styles.separator} />;
 
-export default function SkillsDetailScreen() {
+type SortMode = "recent" | "popular" | "name";
+
+const SORT_OPTIONS: { key: SortMode; label: string }[] = [
+  { key: "recent", label: "Recent" },
+  { key: "popular", label: "Popular" },
+  { key: "name", label: "A-Z" },
+];
+
+function sortSkills(skills: DashboardSkill[], mode: SortMode): DashboardSkill[] {
+  const sorted = [...skills];
+  switch (mode) {
+    case "recent":
+      return sorted.sort((a, b) => {
+        if (a.last_used_ms && b.last_used_ms) return b.last_used_ms - a.last_used_ms;
+        if (a.last_used_ms) return -1;
+        if (b.last_used_ms) return 1;
+        return a.name.localeCompare(b.name);
+      });
+    case "popular":
+      return sorted.sort((a, b) => {
+        if (b.total_invocations !== a.total_invocations)
+          return b.total_invocations - a.total_invocations;
+        return a.name.localeCompare(b.name);
+      });
+    case "name":
+      return sorted.sort((a, b) => a.name.localeCompare(b.name));
+  }
+}
+
+export default function SkillsListScreen() {
   const [skills, setSkills] = useState<DashboardSkill[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [sortMode, setSortMode] = useState<SortMode>("recent");
   const mountedRef = useRef(true);
+  const router = useRouter();
 
   const load = useCallback(async () => {
     try {
@@ -34,9 +67,17 @@ export default function SkillsDetailScreen() {
         setError(err instanceof Error ? err.message : "Failed to load");
       }
     } finally {
-      if (mountedRef.current) setIsLoading(false);
+      if (mountedRef.current) {
+        setIsLoading(false);
+        setRefreshing(false);
+      }
     }
   }, []);
+
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    load();
+  }, [load]);
 
   useEffect(() => {
     load();
@@ -44,37 +85,63 @@ export default function SkillsDetailScreen() {
   }, [load]);
 
   const filteredSkills = useMemo(() => {
-    if (!searchQuery.trim()) return skills;
+    const sorted = sortSkills(skills, sortMode);
+    if (!searchQuery.trim()) return sorted;
     const q = searchQuery.trim().toLowerCase();
-    return skills.filter(
+    return sorted.filter(
       (s) =>
         s.name.toLowerCase().includes(q) ||
         s.description.toLowerCase().includes(q),
     );
-  }, [skills, searchQuery]);
+  }, [skills, searchQuery, sortMode]);
 
   const renderSkill = useCallback(
     ({ item }: { item: DashboardSkill }) => (
-      <View style={styles.skillRow}>
+      <Pressable
+        style={({ pressed }) => [styles.skillRow, pressed && styles.skillRowPressed]}
+        accessibilityRole="button"
+        accessibilityLabel={`${item.name} skill, ${item.total_invocations} uses`}
+        onPress={() =>
+          router.push({
+            pathname: "/dashboard/skill-detail",
+            params: { name: item.name },
+          })
+        }
+      >
         <View style={styles.skillHeader}>
-          <Text style={styles.skillName}>{item.name}</Text>
-          {item.has_scripts && (
-            <Text style={styles.scriptCount}>
-              {item.script_count} script{item.script_count !== 1 ? "s" : ""}
-            </Text>
-          )}
+          <View style={styles.skillNameRow}>
+            <Text style={styles.skillName}>{item.name}</Text>
+            {item.total_invocations > 0 && (
+              <View style={styles.usageBadge}>
+                <Text style={styles.usageBadgeText}>{item.total_invocations}</Text>
+              </View>
+            )}
+          </View>
+          <View style={styles.skillMeta}>
+            {item.last_used_ms ? (
+              <Text style={styles.lastUsed}>{timeAgoMs(item.last_used_ms)}</Text>
+            ) : (
+              <Text style={styles.neverUsed}>never used</Text>
+            )}
+            <Text style={styles.chevron}>›</Text>
+          </View>
         </View>
         {item.description ? (
-          <Text style={styles.description} numberOfLines={3}>
+          <Text style={styles.description} numberOfLines={2}>
             {item.description}
           </Text>
         ) : null}
-      </View>
+        {item.has_scripts && (
+          <Text style={styles.scriptCount}>
+            {item.script_count} script{item.script_count !== 1 ? "s" : ""}
+          </Text>
+        )}
+      </Pressable>
     ),
-    [],
+    [router],
   );
 
-  const ListHeader = useCallback(
+  const ListHeader = useMemo(
     () => (
       <View>
         <View style={styles.searchContainer}>
@@ -89,13 +156,34 @@ export default function SkillsDetailScreen() {
             clearButtonMode="while-editing"
           />
         </View>
-        <Text style={styles.countHeader}>
-          {filteredSkills.length} skill{filteredSkills.length !== 1 ? "s" : ""}
-          {searchQuery ? ` matching "${searchQuery}"` : ""}
-        </Text>
+        {/* Sort picker */}
+        <View style={styles.sortRow}>
+          {SORT_OPTIONS.map((opt) => (
+            <Pressable
+              key={opt.key}
+              style={[styles.sortPill, sortMode === opt.key && styles.sortPillActive]}
+              onPress={() => setSortMode(opt.key)}
+              accessibilityRole="button"
+              accessibilityLabel={`Sort by ${opt.label}`}
+              accessibilityState={{ selected: sortMode === opt.key }}
+            >
+              <Text
+                style={[
+                  styles.sortPillText,
+                  sortMode === opt.key && styles.sortPillTextActive,
+                ]}
+              >
+                {opt.label}
+              </Text>
+            </Pressable>
+          ))}
+          <Text style={styles.countLabel}>
+            {filteredSkills.length} skill{filteredSkills.length !== 1 ? "s" : ""}
+          </Text>
+        </View>
       </View>
     ),
-    [searchQuery, filteredSkills.length],
+    [searchQuery, filteredSkills.length, sortMode],
   );
 
   return (
@@ -117,7 +205,7 @@ export default function SkillsDetailScreen() {
           <>
             {error && (
               <View style={styles.errorBanner}>
-                <Text style={styles.errorBannerText}>⚠️ {error}</Text>
+                <Text style={styles.errorBannerText}>{error}</Text>
               </View>
             )}
             <FlatList
@@ -127,6 +215,8 @@ export default function SkillsDetailScreen() {
               ItemSeparatorComponent={Separator}
               ListHeaderComponent={ListHeader}
               contentContainerStyle={styles.listContent}
+              refreshing={refreshing}
+              onRefresh={onRefresh}
               ListEmptyComponent={
                 <View style={styles.emptyCenter}>
                   <Text style={styles.emptyText}>
@@ -175,22 +265,57 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#3f3f46",
   },
-  countHeader: {
-    color: "#52525b",
-    fontSize: 13,
-    fontWeight: "600",
+  sortRow: {
+    flexDirection: "row",
+    alignItems: "center",
     paddingHorizontal: 16,
     paddingVertical: 8,
+    gap: 6,
+  },
+  sortPill: {
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 14,
+    backgroundColor: "#18181b",
+    borderWidth: 1,
+    borderColor: "#27272a",
+  },
+  sortPillActive: {
+    backgroundColor: "#1e3a5f",
+    borderColor: "#3b82f6",
+  },
+  sortPillText: {
+    color: "#71717a",
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  sortPillTextActive: {
+    color: "#60a5fa",
+  },
+  countLabel: {
+    color: "#52525b",
+    fontSize: 12,
+    fontWeight: "600",
+    marginLeft: "auto",
   },
   skillRow: {
     paddingHorizontal: 16,
     paddingVertical: 14,
     gap: 4,
   },
+  skillRowPressed: {
+    backgroundColor: "#18181b",
+  },
   skillHeader: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+  },
+  skillNameRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    flex: 1,
   },
   skillName: {
     color: "#fafafa",
@@ -198,14 +323,45 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
   },
-  scriptCount: {
-    color: "#52525b",
+  usageBadge: {
+    backgroundColor: "#1e3a5f",
+    borderRadius: 10,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+  },
+  usageBadgeText: {
+    color: "#60a5fa",
+    fontSize: 11,
+    fontWeight: "700",
+  },
+  skillMeta: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  lastUsed: {
+    color: "#a1a1aa",
     fontSize: 12,
+  },
+  neverUsed: {
+    color: "#3f3f46",
+    fontSize: 12,
+    fontStyle: "italic",
+  },
+  chevron: {
+    color: "#52525b",
+    fontSize: 18,
+    fontWeight: "600",
   },
   description: {
     color: "#71717a",
     fontSize: 13,
     lineHeight: 18,
+  },
+  scriptCount: {
+    color: "#52525b",
+    fontSize: 12,
+    marginTop: 2,
   },
   separator: {
     height: StyleSheet.hairlineWidth,

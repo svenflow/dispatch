@@ -27,6 +27,8 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
+from collections import deque
+from enum import Enum
 from typing import Optional, Dict, Any, List
 
 from assistant.common import (
@@ -1501,14 +1503,15 @@ class IPCServer:
             state = qm.state
             override = qm.get_override_info()
             cb = self.backend.haiku_circuit_breaker
-            # Get current quota if available
+            # Read from quota cache only — never triggers an API call
             try:
-                from assistant.health import fetch_quota_oauth
-                usage = fetch_quota_oauth()
+                from assistant.health import get_quota_cached
+                usage, quota_updated = get_quota_cached()
                 quota_5h = (usage.get("five_hour") or {}).get("utilization") if usage else None
                 quota_7d_opus = (usage.get("seven_day_opus") or {}).get("utilization") if usage else None
             except Exception:
                 quota_5h = quota_7d_opus = None
+                quota_updated = None
             return {
                 "ok": True,
                 "state": state,
@@ -1516,6 +1519,7 @@ class IPCServer:
                 "circuit_breaker": cb.state,
                 "quota_5h_pct": quota_5h,
                 "quota_7d_opus_pct": quota_7d_opus,
+                "quota_updated_at": quota_updated,
             }
 
         elif cmd == "set_model":
@@ -1622,6 +1626,297 @@ class IPCServer:
             return {"ok": False, "error": str(e)}
 
 
+class StartupResult(Enum):
+    """Result of a child process startup attempt."""
+    READY = "ready"          # /health returned 200 within timeout
+    SLOW_START = "slow"      # Process alive but no /health after timeout
+    FAILED = "failed"        # Process exited during probe or spawn failed
+
+
+class ChildSupervisor:
+    """Supervises a single child process with readiness probes and auto-restart.
+
+    Owns the full lifecycle of one child process:
+    - Spawns the process and verifies it starts healthy (readiness probe)
+    - Monitors process liveness every POLL_INTERVAL seconds
+    - Auto-restarts on crash with exponential backoff
+    - Enters degraded mode after MAX_FAST_RESTARTS in RESTART_WINDOW
+    - Coordinates with the 300s deep health check via asyncio.Lock
+
+    Usage:
+        supervisor = ChildSupervisor("dispatch_api", spawn_fn, "http://localhost:9091/health")
+        result = await supervisor.start()          # In Manager.run()
+        task = asyncio.create_task(supervisor.run_forever())  # Background supervision
+        await supervisor.stop()                    # On shutdown
+    """
+
+    MAX_FAST_RESTARTS = 5        # Max restarts in rolling window before degraded
+    RESTART_WINDOW = 300         # Rolling window (seconds)
+    POLL_INTERVAL = 10           # Liveness check interval (seconds)
+    READINESS_TIMEOUT = 15       # Max wait for /health after spawn (seconds)
+    READINESS_POLL = 0.5         # Poll interval during readiness check (seconds)
+    BACKOFF_SEQUENCE = [0, 10, 30, 60]  # Seconds, capped at last value
+
+    def __init__(self, name: str, spawn_fn, health_url: str,
+                 alert_fn=None, producer=None, health_timeout: float = 2.0):
+        """
+        Args:
+            name: Identifier for logging (e.g. "dispatch_api", "metro")
+            spawn_fn: Callable that returns subprocess.Popen or None
+            health_url: HTTP endpoint to probe for readiness (e.g. "http://localhost:9091/health")
+            alert_fn: Optional callable(str) to alert admin (e.g. send SMS). Called via to_thread.
+            producer: Optional bus producer for emitting lifecycle events
+            health_timeout: HTTP request timeout for health probes (seconds)
+        """
+        self.name = name
+        self._spawn_fn = spawn_fn
+        self._health_url = health_url
+        self._health_timeout = health_timeout
+        self._alert_fn = alert_fn
+        self._producer = producer
+        self._proc: Optional[subprocess.Popen] = None
+        self._lock = asyncio.Lock()
+        self._restart_timestamps: deque = deque(maxlen=50)
+        self._degraded = False
+
+    @property
+    def proc(self) -> Optional[subprocess.Popen]:
+        """Current child process (read-only access for external code)."""
+        return self._proc
+
+    @property
+    def degraded(self) -> bool:
+        """Whether the supervisor is in degraded mode."""
+        return self._degraded
+
+    # ── Health checks ──
+
+    def _check_health_sync(self) -> bool:
+        """Sync HTTP health check — only called via asyncio.to_thread."""
+        try:
+            import urllib.request
+            with urllib.request.urlopen(self._health_url, timeout=self._health_timeout) as resp:
+                return resp.status == 200
+        except Exception:
+            return False
+
+    async def _check_health_async(self) -> bool:
+        """Non-blocking HTTP health check."""
+        try:
+            return await asyncio.to_thread(self._check_health_sync)
+        except Exception:
+            return False
+
+    # ── Process lifecycle ──
+
+    async def _cleanup_process(self):
+        """Ensure old process is fully stopped and port is released.
+
+        MUST be called WITHOUT holding self._lock (contains async sleeps).
+        """
+        if self._proc is None:
+            return
+        try:
+            if self._proc.poll() is None:
+                # Try graceful SIGTERM to process group first
+                try:
+                    pgid = os.getpgid(self._proc.pid)
+                    os.killpg(pgid, signal.SIGTERM)
+                except (ProcessLookupError, OSError):
+                    try:
+                        self._proc.terminate()
+                    except (ProcessLookupError, OSError):
+                        pass
+                try:
+                    await asyncio.to_thread(self._proc.wait, timeout=5)
+                except subprocess.TimeoutExpired:
+                    try:
+                        pgid = os.getpgid(self._proc.pid)
+                        os.killpg(pgid, signal.SIGKILL)
+                    except (ProcessLookupError, OSError):
+                        try:
+                            self._proc.kill()
+                        except (ProcessLookupError, OSError):
+                            pass
+                    try:
+                        await asyncio.to_thread(self._proc.wait, timeout=2)
+                    except Exception:
+                        pass
+        except (ProcessLookupError, OSError):
+            pass
+        self._proc = None
+        # Port release grace period
+        await asyncio.sleep(0.5)
+
+    def _recent_restarts(self) -> list:
+        """Restarts within the rolling window."""
+        cutoff = time.time() - self.RESTART_WINDOW
+        return [t for t in self._restart_timestamps if t > cutoff]
+
+    # ── Startup ──
+
+    async def start(self) -> StartupResult:
+        """Spawn the child process and wait for it to become healthy.
+
+        Returns StartupResult indicating whether the process started successfully.
+        """
+        # Cleanup any existing process (lock-free, contains sleeps)
+        await self._cleanup_process()
+
+        # Spawn under lock (brief, no I/O)
+        async with self._lock:
+            try:
+                self._proc = self._spawn_fn()
+            except Exception as e:
+                lifecycle_log.error(f"{self.name} | SPAWN_ERROR | {e}")
+                self._proc = None
+                return StartupResult.FAILED
+            if self._proc is None:
+                lifecycle_log.error(f"{self.name} | SPAWN_FAILED | spawn_fn returned None")
+                return StartupResult.FAILED
+            lifecycle_log.info(f"{self.name} | SPAWNED | pid={self._proc.pid}")
+            produce_event(self._producer, "system", "health.service_spawned",
+                service_spawned_payload(self.name, self._proc.pid), source="daemon")
+
+        # Readiness probe (lock-free)
+        result = await self._readiness_probe()
+        if result == StartupResult.READY:
+            # Fresh initial start — clear restart history
+            self._restart_timestamps.clear()
+            self._degraded = False
+        return result
+
+    async def _readiness_probe(self) -> StartupResult:
+        """Poll /health until the process is ready, exits, or times out."""
+        start_time = time.monotonic()
+        for _ in range(int(self.READINESS_TIMEOUT / self.READINESS_POLL)):
+            await asyncio.sleep(self.READINESS_POLL)
+            if self._proc is None or self._proc.poll() is not None:
+                exit_code = self._proc.returncode if self._proc else -1
+                lifecycle_log.info(f"{self.name} | STARTUP_CRASH | exit_code={exit_code}")
+                return StartupResult.FAILED
+            if await self._check_health_async():
+                elapsed = time.monotonic() - start_time
+                lifecycle_log.info(f"{self.name} | READY | startup_ms={int(elapsed * 1000)}")
+                return StartupResult.READY
+        lifecycle_log.warning(f"{self.name} | STARTUP_TIMEOUT | waited={self.READINESS_TIMEOUT}s")
+        # Process alive but slow — let run_forever monitor it.
+        # The 300s deep health check will detect if it never becomes healthy.
+        return StartupResult.SLOW_START
+
+    # ── Main supervision loop ──
+
+    async def run_forever(self):
+        """Main supervision loop — runs as asyncio.create_task.
+
+        Checks process liveness every POLL_INTERVAL seconds. On crash,
+        restarts with exponential backoff. Enters degraded mode after
+        MAX_FAST_RESTARTS in RESTART_WINDOW to prevent restart storms.
+        """
+        while True:
+            await asyncio.sleep(self.POLL_INTERVAL)
+
+            # Quick liveness check (no lock, no HTTP, just .poll())
+            if self._proc is None:
+                continue
+            if self._proc.poll() is None:
+                continue  # Process alive
+
+            # Process exited — handle crash
+            await self._handle_crash()
+
+    async def _handle_crash(self):
+        """Handle a detected child process crash with backoff and restart."""
+        exit_code = self._proc.returncode if self._proc else -1
+        lifecycle_log.info(json.dumps({
+            "event": "child_exited",
+            "process": self.name,
+            "exit_code": exit_code,
+            "recent_restarts": len(self._recent_restarts()),
+        }))
+        produce_event(self._producer, "system", "health.service_restarted",
+            service_restarted_payload(self.name, f"exited(rc={exit_code})"), source="health")
+
+        if self._degraded:
+            lifecycle_log.info(f"{self.name} | DEGRADED_SKIP | waiting for deep health check")
+            return
+
+        # Phase 1: Backoff (lock-free, no state mutation)
+        recent = self._recent_restarts()
+        idx = min(len(recent), len(self.BACKOFF_SEQUENCE) - 1)
+        backoff = self.BACKOFF_SEQUENCE[idx]
+        if backoff > 0:
+            lifecycle_log.info(f"{self.name} | BACKOFF_WAIT | {backoff}s before restart")
+            await asyncio.sleep(backoff)
+
+        # Phase 2: Cleanup old process (lock-free, contains sleeps)
+        await self._cleanup_process()
+
+        # Phase 3: Restart (under lock, brief, no blocking I/O)
+        alert_msg = None
+        async with self._lock:
+            # Re-check: maybe someone else already restarted
+            if self._proc is not None and self._proc.poll() is None:
+                return
+
+            self._restart_timestamps.append(time.time())
+            recent = self._recent_restarts()
+            if len(recent) > self.MAX_FAST_RESTARTS:
+                self._degraded = True
+                alert_msg = (
+                    f"🚨 {self.name} crashed {len(recent)}x in "
+                    f"{self.RESTART_WINDOW}s — entering degraded mode. "
+                    f"Check logs/{self.name.replace('_', '-')}.log"
+                )
+                lifecycle_log.error(f"{self.name} | DEGRADED | {len(recent)} restarts in window")
+            else:
+                try:
+                    self._proc = self._spawn_fn()
+                except Exception as e:
+                    lifecycle_log.error(f"{self.name} | RESTART_SPAWN_ERROR | {e}")
+                    self._proc = None
+                if self._proc:
+                    lifecycle_log.info(
+                        f"{self.name} | RESTARTED | pid={self._proc.pid} "
+                        f"attempt={len(recent)}"
+                    )
+
+        # Phase 4: Post-lock actions (alert + readiness probe)
+        if alert_msg and self._alert_fn:
+            try:
+                await asyncio.to_thread(self._alert_fn, alert_msg)
+            except Exception:
+                pass  # Best-effort alert
+
+        if self._proc and not self._degraded:
+            await self._readiness_probe()
+
+    # ── Deep health check integration ──
+
+    def clear_degraded(self):
+        """Clear degraded mode — called by the 300s deep health check.
+
+        Does NOT restart the process. The next run_forever iteration will
+        detect the dead process and restart with the rolling window budget.
+        Timestamp history is preserved so a persistent crasher re-enters
+        degraded mode quickly.
+
+        Thread-safety: This is called from an async task on the same event loop.
+        Since asyncio is cooperative and _degraded is a boolean, no lock needed.
+        The supervisor's _handle_crash re-checks _degraded under the lock.
+        """
+        if self._degraded:
+            self._degraded = False
+            lifecycle_log.info(f"{self.name} | DEGRADED_CLEARED | by deep health check")
+
+    # ── Shutdown ──
+
+    async def stop(self):
+        """Graceful shutdown — stop the child process."""
+        await self._cleanup_process()
+        lifecycle_log.info(f"{self.name} | STOPPED")
+
+
 class Manager:
     """Main manager that orchestrates everything."""
 
@@ -1645,6 +1940,16 @@ class Manager:
         self._producer = self._bus.producer()
         self._dlq_retry_counts: dict[str, int] = {}  # offset_key -> retry_count
 
+        # Seed quota cache from disk so get_quota_cached() works immediately
+        try:
+            quota_file = STATE_DIR / "quota_cache.json"
+            if quota_file.exists():
+                raw = json.loads(quota_file.read_text())
+                from assistant.health import seed_quota_cache
+                seed_quota_cache(raw.get("data"), raw.get("updated_at"))
+        except Exception as e:
+            log.warning("QUOTA | Failed to seed from disk: %s", e)
+
         self.sessions = SDKBackend(
             registry=self.registry,
             contacts_manager=self.contacts,
@@ -1654,11 +1959,27 @@ class Manager:
         self.ipc = IPCServer(self.sessions, self.registry, self.contacts)
         self.ipc.restart_api_callback = self._restart_dispatch_api
 
-        # Spawn Dispatch API as child process
-        self.dispatch_api_daemon = self._spawn_dispatch_api_daemon()
-
-        # Spawn Expo Metro dev server (serves JS bundles to mobile app)
-        self.metro_daemon = self._spawn_metro_daemon()
+        # Child process supervisors (spawned in run(), not here — needs event loop)
+        self.dispatch_api_supervisor = ChildSupervisor(
+            name="dispatch_api",
+            spawn_fn=self._create_dispatch_api_process,
+            health_url=f"http://localhost:{DISPATCH_API_PORT}/health",
+            alert_fn=self._alert_admin,
+            producer=self._producer,
+        )
+        self.metro_supervisor = ChildSupervisor(
+            name="metro",
+            spawn_fn=self._create_metro_process,
+            health_url=f"http://localhost:{METRO_PORT}/status",
+            alert_fn=self._alert_admin,
+            producer=self._producer,
+        )
+        # Backward compat: expose process refs for resource registry / external code
+        self.dispatch_api_daemon = None  # Set after start() in run()
+        self.metro_daemon = None
+        # Supervisor background tasks (set in run())
+        self._dispatch_api_supervisor_task: Optional[asyncio.Task] = None
+        self._metro_supervisor_task: Optional[asyncio.Task] = None
 
         # Signal integration
         self.signal_queue = queue.Queue()
@@ -1790,6 +2111,15 @@ class Manager:
                 action=actions.call_function(handle_tweet_scheduled),
                 max_retries=2,
                 error_action=actions.dead_letter(self._bus, "dead-letters"),
+                commit_interval_s=5,
+            ),
+            # Quota handler: processes quota.fetched events from health check.
+            # Writes cache file, checks thresholds for SMS alerts, runs model degradation.
+            ConsumerConfig(
+                topic="system",
+                group="quota-handler",
+                filter=lambda r: r.type == "quota.fetched",
+                action=actions.call_function(self._handle_quota_event),
                 commit_interval_s=5,
             ),
         ]
@@ -2084,6 +2414,113 @@ class Manager:
                                                               compaction_epoch=compaction_epoch)
             except Exception as e:
                 log.error(f"COMPACTION_CONSUMER | error processing record: {e}")
+
+    def _handle_quota_event(self, records):
+        """Bus consumer handler for quota.fetched events.
+
+        Processes quota data in 4 independently error-isolated steps:
+        1. Write quota_cache.json for dispatch-api to serve
+        2. Check thresholds → SMS alerts if crossed
+        3. QuotaManager model degradation transitions
+        4. Perf gauge metrics
+        """
+        from assistant.health import check_quota_thresholds, format_quota_alert
+        from assistant import config
+
+        for record in records:
+            try:
+                usage = json.loads(record.value) if isinstance(record.value, str) else record.value
+            except Exception as e:
+                log.error("QUOTA_HANDLER | Failed to parse record: %s", e)
+                continue
+
+            admin_phone = config.get("owner.phone")
+
+            # Step 1: Write quota_cache.json (for dispatch-api to serve to app)
+            try:
+                import tempfile
+                quota_path = STATE_DIR / "quota_cache.json"
+                # Strip backoff metadata from the cached data — only usage buckets
+                cache_data = {k: v for k, v in usage.items()
+                              if k not in ("backoff_seconds", "consecutive_failures")}
+                quota_payload = json.dumps({
+                    "data": cache_data,
+                    "updated_at": datetime.now().isoformat(),
+                    "error": None,
+                })
+                fd, tmp = tempfile.mkstemp(dir=STATE_DIR, suffix=".tmp")
+                try:
+                    os.write(fd, quota_payload.encode())
+                    os.close(fd)
+                    os.replace(tmp, str(quota_path))
+                except Exception:
+                    try:
+                        os.close(fd)
+                    except OSError:
+                        pass
+                    try:
+                        os.unlink(tmp)
+                    except OSError:
+                        pass
+                    raise
+                log.debug("QUOTA_CACHE | Written to %s", quota_path)
+            except Exception as e:
+                log.error("QUOTA_CACHE | Failed: %s", e)
+
+            # Step 2: Threshold alerts (80/90/95% → SMS)
+            try:
+                alerts = check_quota_thresholds(cache_data)
+                if alerts and admin_phone:
+                    lines = [format_quota_alert(a) for a in alerts]
+                    msg = "[SVEN] Usage alert:\n" + "\n".join(lines)
+                    self._send_sms(admin_phone, msg)
+                    log.warning("QUOTA_ALERT | Sent %d alert(s) to admin", len(alerts))
+            except Exception as e:
+                log.error("QUOTA_ALERT | Failed: %s", e)
+
+            # Step 3: Model degradation (QuotaManager state machine)
+            try:
+                quota_5h = (usage.get("five_hour") or {}).get("utilization", 0)
+                quota_7d_opus = (usage.get("seven_day_opus") or {}).get("utilization", 0)
+                qm = self.sessions.quota_manager
+                qm_actions = qm.check_and_transition(quota_5h, quota_7d_opus)
+                if admin_phone:
+                    for action in qm_actions:
+                        if action == "sms_degraded":
+                            override = qm.get_override_info()
+                            trigger = override.get("trigger", "unknown") if override else "unknown"
+                            self._send_sms(admin_phone,
+                                f"[SVEN] ⚠️ Quota at danger level — auto-downgrading all sessions to sonnet.\n"
+                                f"Trigger: {trigger}\n"
+                                f"5h={quota_5h:.0f}% | 7d-opus={quota_7d_opus:.0f}%\n"
+                                f"New sessions will use sonnet. Existing sessions switch on next restart.\n"
+                                f"Reminders auto-paused to conserve tokens.\n"
+                                f"Manual override: claude-assistant set-global-model opus")
+                        elif action == "sms_recovered":
+                            self._send_sms(admin_phone,
+                                f"[SVEN] ✅ Quota recovered — back to opus.\n"
+                                f"5h={quota_5h:.0f}% | 7d-opus={quota_7d_opus:.0f}%\n"
+                                f"New sessions will use opus. Reminders re-enabled.")
+                        elif action == "sms_still_degraded":
+                            hours = getattr(qm, "last_degraded_hours", None)
+                            duration = f" ({hours:.1f}h)" if hours else ""
+                            self._send_sms(admin_phone,
+                                f"[SVEN] ⚠️ Still in degraded mode (sonnet){duration}.\n"
+                                f"5h={quota_5h:.0f}% | 7d-opus={quota_7d_opus:.0f}%\n"
+                                f"Run: claude-assistant set-global-model --clear  to force opus")
+                perf.gauge("quota_state_degraded", 1 if qm.state == "degraded" else 0, component="daemon")
+                log.debug("QUOTA_DEGRADE | state=%s", qm.state)
+            except Exception as e:
+                log.error("QUOTA_DEGRADE | Failed: %s", e)
+
+            # Step 4: Perf gauges
+            try:
+                for key in ("five_hour", "seven_day"):
+                    util = (usage.get(key) or {}).get("utilization")
+                    if util is not None:
+                        perf.gauge(f"quota_{key}_pct", util, component="daemon")
+            except Exception:
+                pass
 
     @staticmethod
     def _is_transient_error(error: Exception) -> bool:
@@ -2984,9 +3421,20 @@ class Manager:
                 pass
             setattr(self, attr_name, None)
 
-    def _spawn_dispatch_api_daemon(self) -> Optional[subprocess.Popen]:
-        """Spawn the Dispatch API server as a child process.
+    def _alert_admin(self, message: str):
+        """Send an alert SMS to admin. Sync — called via asyncio.to_thread by supervisors."""
+        try:
+            from assistant import config
+            admin_phone = config.get("owner.phone")
+            if admin_phone:
+                self._send_sms(admin_phone, message)
+        except Exception as e:
+            log.error(f"Failed to alert admin: {e}")
 
+    def _create_dispatch_api_process(self) -> Optional[subprocess.Popen]:
+        """Create the Dispatch API server process (Popen only, no lifecycle management).
+
+        Called by ChildSupervisor.start() and ChildSupervisor._handle_crash().
         Returns the Popen object or None if spawn failed.
         """
         if not DISPATCH_API_SCRIPT.exists():
@@ -3013,12 +3461,8 @@ class Manager:
                         pass
         except Exception:
             pass  # Best-effort cleanup
-        # Give the OS time to release the port after killing orphans.
-        # Note: This is a sync sleep. Called from async _run_health_checks every 5min,
-        # so 1s event loop block is acceptable. Also called from sync __init__.
         if killed_any:
-            import time as _time
-            _time.sleep(1)
+            time.sleep(1)  # Sync sleep OK — called from supervisor which handles async context
 
         try:
             proc = subprocess.Popen(
@@ -3032,15 +3476,8 @@ class Manager:
             self._close_log_fh('_dispatch_api_log_fh')
             raise
 
-        try:
-            log.info(f"Spawned Dispatch API daemon (PID: {proc.pid})")
-            lifecycle_log.info(f"DISPATCH_API | SPAWNED | pid={proc.pid}")
-            produce_event(getattr(self, '_producer', None), "system", "health.service_spawned",
-                service_spawned_payload("dispatch_api", proc.pid), source="daemon")
-            return proc
-        except Exception as e:
-            log.error(f"Failed to spawn Dispatch API daemon: {e}")
-            return None
+        log.info(f"Spawned Dispatch API process (PID: {proc.pid})")
+        return proc
 
     def _check_dispatch_api_health(self) -> bool:
         """Check if Dispatch API is responding."""
@@ -3052,11 +3489,78 @@ class Manager:
         except Exception:
             return False
 
-    def _spawn_metro_daemon(self) -> Optional[subprocess.Popen]:
-        """Spawn the Expo Metro dev server as a child process.
+    def _check_signal_health(self):
+        """Check Signal daemon health and restart if needed."""
+        if self.signal_daemon is None:
+            return
+        if self.signal_daemon.poll() is not None:
+            log.warning("Signal daemon died, restarting...")
+            lifecycle_log.info("SIGNAL_DAEMON | DIED | restarting")
+            produce_event(self._producer, "system", "health.service_restarted",
+                service_restarted_payload("signal_daemon", "died"), source="health")
+            self.signal_daemon = self._spawn_signal_daemon()
+            if self.signal_daemon:
+                self._start_signal_listener()
+        elif not SIGNAL_SOCKET.exists():
+            log.warning("Signal socket missing, restarting daemon...")
+            lifecycle_log.info("SIGNAL_DAEMON | SOCKET_MISSING | restarting")
+            produce_event(self._producer, "system", "health.service_restarted",
+                service_restarted_payload("signal_daemon", "socket_missing"), source="health")
+            self.signal_daemon.terminate()
+            try:
+                self.signal_daemon.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.signal_daemon.kill()
+            self.signal_daemon = self._spawn_signal_daemon()
+            if self.signal_daemon:
+                self._start_signal_listener()
 
-        Serves JS bundles to the mobile app via fast refresh.
-        Returns the Popen object or None if spawn failed.
+    def _check_discord_health(self):
+        """Check Discord listener health and restart if needed."""
+        if self.discord_listener is None:
+            return
+        if not self.discord_listener.is_alive():
+            log.warning("Discord listener died, restarting...")
+            lifecycle_log.info("DISCORD_LISTENER | DIED | restarting")
+            produce_event(self._producer, "system", "health.service_restarted",
+                service_restarted_payload("discord_listener", "died"), source="health")
+            self._start_discord_listener()
+
+    def _check_dispatch_api(self):
+        """Deep health check for Dispatch API — diagnostic only, no restarts.
+
+        The ChildSupervisor handles all restarts. This check:
+        - Clears degraded mode if the process is now healthy
+        - Clears degraded mode if the process is dead (lets supervisor retry)
+        """
+        sv = self.dispatch_api_supervisor
+        proc = sv.proc
+        if proc and proc.poll() is None:
+            if sv._check_health_sync():
+                # Healthy — clear degraded if set
+                sv.clear_degraded()
+            else:
+                log.warning("DISPATCH_API | deep check: process alive but /health failed")
+        elif sv.degraded:
+            # Process dead + degraded — clear so supervisor can retry
+            lifecycle_log.info("DISPATCH_API | DEGRADED_RECOVERY | clearing for supervisor retry")
+            sv.clear_degraded()
+
+    def _check_metro(self):
+        """Deep health check for Metro — diagnostic only, no restarts."""
+        sv = self.metro_supervisor
+        proc = sv.proc
+        if proc and proc.poll() is None:
+            if not self._check_metro_health():
+                log.warning("METRO | deep check: process alive but /status failed")
+        elif sv.degraded:
+            lifecycle_log.info("METRO | DEGRADED_RECOVERY | clearing for supervisor retry")
+            sv.clear_degraded()
+
+    def _create_metro_process(self) -> Optional[subprocess.Popen]:
+        """Create the Metro dev server process (Popen only, no lifecycle management).
+
+        Called by ChildSupervisor. Returns the Popen object or None.
         """
         if not DISPATCH_APP_DIR.exists():
             log.warning(f"Dispatch app dir not found at {DISPATCH_APP_DIR}")
@@ -3079,7 +3583,6 @@ class Manager:
             else:
                 log.info("bun install completed successfully")
         except FileNotFoundError:
-            # bun not installed, try npm
             try:
                 log.info("bun not found, falling back to npm install...")
                 subprocess.run(
@@ -3119,15 +3622,8 @@ class Manager:
             self._close_log_fh('_metro_log_fh')
             raise
 
-        try:
-            log.info(f"Spawned Metro dev server (PID: {proc.pid})")
-            lifecycle_log.info(f"METRO | SPAWNED | pid={proc.pid}")
-            produce_event(getattr(self, '_producer', None), "system", "health.service_spawned",
-                service_spawned_payload("metro", proc.pid), source="daemon")
-            return proc
-        except Exception as e:
-            log.error(f"Failed to spawn Metro dev server: {e}")
-            return None
+        log.info(f"Spawned Metro process (PID: {proc.pid})")
+        return proc
 
     def _check_metro_health(self) -> bool:
         """Check if Metro dev server is responding."""
@@ -3140,24 +3636,26 @@ class Manager:
             return False
 
     def _stop_metro(self):
-        """Stop the Metro dev server (kills entire process group)."""
-        if self.metro_daemon:
+        """Stop the Metro dev server — sync fallback for shutdown path."""
+        proc = self.metro_supervisor.proc
+        if proc:
             try:
-                pgid = os.getpgid(self.metro_daemon.pid)
+                pgid = os.getpgid(proc.pid)
                 os.killpg(pgid, signal.SIGTERM)
             except (ProcessLookupError, OSError):
                 pass
             try:
-                self.metro_daemon.wait(timeout=5)
+                proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 try:
-                    pgid = os.getpgid(self.metro_daemon.pid)
+                    pgid = os.getpgid(proc.pid)
                     os.killpg(pgid, signal.SIGKILL)
                 except (ProcessLookupError, OSError):
                     try:
-                        self.metro_daemon.kill()
+                        proc.kill()
                     except (ProcessLookupError, OSError):
                         pass
+            self.metro_supervisor._proc = None
             self.metro_daemon = None
             log.info("Stopped Metro dev server")
         self._close_log_fh('_metro_log_fh')
@@ -3306,42 +3804,41 @@ class Manager:
             SIGNAL_SOCKET.unlink()
 
     def _restart_dispatch_api(self) -> dict:
-        """Restart the dispatch API server. Called via IPC."""
+        """Restart the dispatch API server. Called via IPC (sync context).
+
+        Uses asyncio.run_coroutine_threadsafe if called from IPC thread,
+        or falls back to sync spawn for backward compat.
+        """
         log.info("DISPATCH_API | restarting via CLI")
-        self._stop_dispatch_api()
-        self.dispatch_api_daemon = self._spawn_dispatch_api_daemon()
-        ok = self.dispatch_api_daemon is not None
-        pid = self.dispatch_api_daemon.pid if self.dispatch_api_daemon else None
+        sv = self.dispatch_api_supervisor
+        # Stop existing process synchronously
+        if sv.proc and sv.proc.poll() is None:
+            try:
+                pgid = os.getpgid(sv.proc.pid)
+                os.killpg(pgid, signal.SIGTERM)
+            except (ProcessLookupError, OSError):
+                pass
+            try:
+                sv.proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                try:
+                    sv.proc.kill()
+                except (ProcessLookupError, OSError):
+                    pass
+        sv._proc = None
+        time.sleep(0.5)
+        # Spawn new process
+        try:
+            sv._proc = self._create_dispatch_api_process()
+        except Exception as e:
+            log.error(f"DISPATCH_API | restart spawn error: {e}")
+            sv._proc = None
+        self.dispatch_api_daemon = sv.proc  # Update compat ref
+        ok = sv.proc is not None
+        pid = sv.proc.pid if sv.proc else None
         msg = f"Dispatch API restarted (PID: {pid})" if ok else "Failed to restart Dispatch API"
         log.info(f"DISPATCH_API | {msg}")
         return {"ok": ok, "message": msg}
-
-    def _stop_dispatch_api(self):
-        """Stop Dispatch API daemon (kills entire process group, not just wrapper)."""
-        if self.dispatch_api_daemon:
-            # Kill the entire process group (wrapper + child processes)
-            # since start_new_session=True creates a new process group
-            try:
-                pgid = os.getpgid(self.dispatch_api_daemon.pid)
-                os.killpg(pgid, signal.SIGTERM)
-            except (ProcessLookupError, OSError):
-                # Process already dead
-                pass
-            try:
-                self.dispatch_api_daemon.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                try:
-                    pgid = os.getpgid(self.dispatch_api_daemon.pid)
-                    os.killpg(pgid, signal.SIGKILL)
-                except (ProcessLookupError, OSError):
-                    try:
-                        self.dispatch_api_daemon.kill()
-                    except (ProcessLookupError, OSError):
-                        pass
-            self.dispatch_api_daemon = None
-            log.info("Stopped Dispatch API daemon")
-
-        self._close_log_fh('_dispatch_api_log_fh')
 
     async def _run_health_checks(self):
         """Run all health checks in background (non-blocking).
@@ -3366,70 +3863,27 @@ class Manager:
             except Exception as e:
                 log.error(f"Deep health check failed: {e}")
 
-            # Check Signal daemon health
-            if self.signal_daemon is not None:
-                if self.signal_daemon.poll() is not None:
-                    log.warning("Signal daemon died, restarting...")
-                    lifecycle_log.info(f"SIGNAL_DAEMON | DIED | restarting")
-                    produce_event(self._producer, "system", "health.service_restarted",
-                        service_restarted_payload("signal_daemon", "died"), source="health")
-                    self.signal_daemon = self._spawn_signal_daemon()
-                    if self.signal_daemon:
-                        self._start_signal_listener()
-                elif not SIGNAL_SOCKET.exists():
-                    log.warning("Signal socket missing, restarting daemon...")
-                    lifecycle_log.info(f"SIGNAL_DAEMON | SOCKET_MISSING | restarting")
-                    produce_event(self._producer, "system", "health.service_restarted",
-                        service_restarted_payload("signal_daemon", "socket_missing"), source="health")
-                    self.signal_daemon.terminate()
-                    try:
-                        self.signal_daemon.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        self.signal_daemon.kill()
-                    self.signal_daemon = self._spawn_signal_daemon()
-                    if self.signal_daemon:
-                        self._start_signal_listener()
+            # --- Service health checks (each isolated so one failure can't block others) ---
 
-            # Check Discord listener health
-            if self.discord_listener is not None:
-                if not self.discord_listener.is_alive():
-                    log.warning("Discord listener died, restarting...")
-                    lifecycle_log.info("DISCORD_LISTENER | DIED | restarting")
-                    produce_event(self._producer, "system", "health.service_restarted",
-                        service_restarted_payload("discord_listener", "died"), source="health")
-                    self._start_discord_listener()
+            try:
+                self._check_signal_health()
+            except Exception as e:
+                log.error(f"Signal health check failed: {e}")
 
-            # Check Dispatch API health
-            if self.dispatch_api_daemon is not None:
-                if self.dispatch_api_daemon.poll() is not None:
-                    log.warning("Dispatch API died, restarting...")
-                    lifecycle_log.info(f"DISPATCH_API | DIED | restarting")
-                    produce_event(self._producer, "system", "health.service_restarted",
-                        service_restarted_payload("dispatch_api", "died"), source="health")
-                    self.dispatch_api_daemon = self._spawn_dispatch_api_daemon()
-                elif not self._check_dispatch_api_health():
-                    log.warning("Dispatch API not responding, restarting...")
-                    lifecycle_log.info(f"DISPATCH_API | UNRESPONSIVE | restarting")
-                    produce_event(self._producer, "system", "health.service_restarted",
-                        service_restarted_payload("dispatch_api", "unresponsive"), source="health")
-                    self.dispatch_api_daemon.kill()
-                    self.dispatch_api_daemon = self._spawn_dispatch_api_daemon()
+            try:
+                self._check_discord_health()
+            except Exception as e:
+                log.error(f"Discord health check failed: {e}")
 
-            # Check Metro dev server health (death + unresponsiveness, mirroring dispatch-api pattern)
-            if self.metro_daemon is not None:
-                if self.metro_daemon.poll() is not None:
-                    log.warning("Metro dev server died, restarting...")
-                    lifecycle_log.info(f"METRO | DIED | restarting")
-                    produce_event(self._producer, "system", "health.service_restarted",
-                        service_restarted_payload("metro", "died"), source="health")
-                    self.metro_daemon = self._spawn_metro_daemon()
-                elif not self._check_metro_health():
-                    log.warning("Metro dev server not responding, restarting...")
-                    lifecycle_log.info(f"METRO | UNRESPONSIVE | restarting")
-                    produce_event(self._producer, "system", "health.service_restarted",
-                        service_restarted_payload("metro", "unresponsive"), source="health")
-                    self.metro_daemon.kill()
-                    self.metro_daemon = self._spawn_metro_daemon()
+            try:
+                self._check_dispatch_api()
+            except Exception as e:
+                log.error(f"Dispatch API health check failed: {e}")
+
+            try:
+                self._check_metro()
+            except Exception as e:
+                log.error(f"Metro health check failed: {e}")
 
             # Proactive FD monitoring via ResourceRegistry — calibrated leak detection
             try:
@@ -3477,88 +3931,39 @@ class Manager:
             except Exception as e:
                 log.error(f"Disk space check failed: {e}")
 
-            # Quota monitoring — alert admin when approaching usage limits
+            # Quota monitoring — fetch and emit bus event (consumers handle the rest)
             try:
-                from assistant.health import (
-                    fetch_quota_oauth, check_quota_thresholds, format_quota_alert,
-                )
+                from assistant.health import fetch_quota, get_quota_backoff_state
+                from assistant.bus_helpers import produce_event
+                usage, _quota_ts, is_fresh = fetch_quota()
+                if usage and is_fresh:
+                    # Emit quota.fetched bus event — consumers handle cache, alerts, degradation
+                    backoff = get_quota_backoff_state()
+                    produce_event(self._producer, "system", "quota.fetched",
+                                  payload={**usage, **backoff},
+                                  source="daemon")
+                    log.debug("QUOTA | Emitted quota.fetched bus event")
+                elif not is_fresh:
+                    # Check if this was a soft API failure (not just a cache hit)
+                    backoff = get_quota_backoff_state()
+                    if backoff["consecutive_failures"] > 0:
+                        produce_event(self._producer, "system", "quota.fetch_failed",
+                                      payload={"error": "API call failed (soft)", **backoff},
+                                      source="daemon")
+                        log.debug("QUOTA | Emitted quota.fetch_failed (soft failure)")
+            except Exception as e:
+                log.error("QUOTA | Fetch failed: %s", e)
+                try:
+                    produce_event(self._producer, "system", "quota.fetch_failed",
+                                  payload={"error": str(e), **get_quota_backoff_state()},
+                                  source="daemon")
+                except Exception:
+                    pass
+
+            # Process circuit breaker actions from deep_health_check
+            try:
                 from assistant import config
-                usage = fetch_quota_oauth()
-                if usage:
-                    # Persist quota to shared file for dispatch-api to serve
-                    try:
-                        import tempfile
-                        quota_path = self.state_dir / "quota_cache.json"
-                        quota_payload = json.dumps({
-                            "data": usage,
-                            "updated_at": datetime.now().isoformat(),
-                            "error": None,
-                        })
-                        fd, tmp = tempfile.mkstemp(dir=self.state_dir, suffix=".tmp")
-                        try:
-                            os.write(fd, quota_payload.encode())
-                            os.close(fd)
-                            os.replace(tmp, str(quota_path))
-                        except Exception:
-                            os.close(fd) if not os.get_inheritable(fd) else None
-                            try: os.unlink(tmp)
-                            except OSError: pass
-                            raise
-                        log.debug("Quota cache written to %s", quota_path)
-                    except Exception as e:
-                        log.error(f"Failed to write quota cache: {e}")
-
-                    alerts = check_quota_thresholds(usage)
-                    if alerts:
-                        admin_phone = config.get("owner.phone")
-                        if admin_phone:
-                            # Group all alerts into one message
-                            lines = [format_quota_alert(a) for a in alerts]
-                            msg = "[SVEN] Usage alert:\n" + "\n".join(lines)
-                            self._send_sms(admin_phone, msg)
-                            log.warning(f"QUOTA_ALERT | Sent {len(alerts)} alert(s) to admin")
-
-                    # Log current utilization for perf tracking
-                    for key in ("five_hour", "seven_day"):
-                        util = (usage.get(key) or {}).get("utilization")
-                        if util is not None:
-                            perf.gauge(f"quota_{key}_pct", util, component="daemon")
-
-                    # Quota-aware model degradation — check if we need to transition
-                    quota_5h = (usage.get("five_hour") or {}).get("utilization", 0)
-                    quota_7d_opus = (usage.get("seven_day_opus") or {}).get("utilization", 0)
-                    qm = self.sessions.quota_manager
-                    qm_actions = qm.check_and_transition(quota_5h, quota_7d_opus)
-                    admin_phone = config.get("owner.phone")
-                    if admin_phone:
-                        for action in qm_actions:
-                            if action == "sms_degraded":
-                                override = qm.get_override_info()
-                                trigger = override.get("trigger", "unknown") if override else "unknown"
-                                self._send_sms(admin_phone,
-                                    f"[SVEN] ⚠️ Quota at danger level — auto-downgrading all sessions to sonnet.\n"
-                                    f"Trigger: {trigger}\n"
-                                    f"5h={quota_5h:.0f}% | 7d-opus={quota_7d_opus:.0f}%\n"
-                                    f"New sessions will use sonnet. Existing sessions switch on next restart.\n"
-                                    f"Reminders auto-paused to conserve tokens.\n"
-                                    f"Manual override: claude-assistant set-global-model opus")
-                            elif action == "sms_recovered":
-                                self._send_sms(admin_phone,
-                                    f"[SVEN] ✅ Quota recovered — back to opus.\n"
-                                    f"5h={quota_5h:.0f}% | 7d-opus={quota_7d_opus:.0f}%\n"
-                                    f"New sessions will use opus. Reminders re-enabled.")
-                            elif action == "sms_still_degraded":
-                                hours = getattr(qm, "last_degraded_hours", None)
-                                duration = f" ({hours:.1f}h)" if hours else ""
-                                self._send_sms(admin_phone,
-                                    f"[SVEN] ⚠️ Still in degraded mode (sonnet){duration}.\n"
-                                    f"5h={quota_5h:.0f}% | 7d-opus={quota_7d_opus:.0f}%\n"
-                                    f"Run: claude-assistant set-global-model --clear  to force opus")
-
-                    # Log quota manager state
-                    perf.gauge("quota_state_degraded", 1 if qm.state == "degraded" else 0, component="daemon")
-
-                # Process circuit breaker actions from deep_health_check
+                admin_phone = config.get("owner.phone")
                 cb_actions = getattr(self.sessions, '_circuit_breaker_actions', [])
                 if cb_actions and admin_phone:
                     for action in cb_actions:
@@ -3567,16 +3972,13 @@ class Manager:
                                 "[SVEN] 🚨 Deep heal circuit breaker OPEN — Haiku calls failing.\n"
                                 "API may be down. Haiku health checks paused for 5 min.")
                     self.sessions._circuit_breaker_actions = []
-
             except Exception as e:
-                log.error(f"Quota check failed: {e}")
+                log.error(f"Circuit breaker notification failed: {e}")
 
             log.info("Health check completed (background)")
 
         except Exception as e:
             log.error(f"Background health check failed: {e}")
-        finally:
-            self._health_check_running = False
 
     def _resolve_signal_uuid(self, uuid: str) -> Optional[str]:
         """Resolve a Signal UUID to a profile display name via signal-cli's recipient DB.
@@ -4206,11 +4608,23 @@ You have 15 minutes. Work efficiently.
             self.discord_listener.stop()
             self.discord_listener = None
 
-        # Stop Metro dev server
-        self._stop_metro()
+        # Cancel supervisor background tasks
+        for task_ref in [self._dispatch_api_supervisor_task, self._metro_supervisor_task]:
+            if task_ref and not task_ref.done():
+                task_ref.cancel()
+                try:
+                    await task_ref
+                except (asyncio.CancelledError, Exception):
+                    pass
 
-        # Stop dispatch api daemon (kills entire process group, not just wrapper)
-        self._stop_dispatch_api()
+        # Stop child processes via supervisors
+        await self.dispatch_api_supervisor.stop()
+        self._close_log_fh('_dispatch_api_log_fh')
+        self.dispatch_api_daemon = None
+
+        await self.metro_supervisor.stop()
+        self._close_log_fh('_metro_log_fh')
+        self.metro_daemon = None
 
         # Wait for signal daemon
         if self.signal_daemon:
@@ -4296,17 +4710,9 @@ You have 15 minutes. Work efficiently.
         resource_registry.register('producer', self._producer, self._producer.close)
         resource_registry.register('consumer_runner', self._consumer_runner, self._consumer_runner.stop)
 
-        # Register log file handles from subprocess spawns (created in __init__)
-        for attr_name, resource_name in [
-            ('_dispatch_api_log_fh', 'dispatch_api_log_fh'),
-        ]:
-            fh = getattr(self, attr_name, None)
-            if fh is not None:
-                resource_registry.register(resource_name, fh, fh.close)
-
-        # Register subprocesses
-        if self.dispatch_api_daemon:
-            resource_registry.register('dispatch_api_daemon', self.dispatch_api_daemon, self.dispatch_api_daemon.terminate)
+        # Note: dispatch_api and metro log file handles + subprocesses are now
+        # managed by ChildSupervisor instances. They are registered in the
+        # supervisor startup section below (after await supervisor.start()).
 
         # ── Create ManagedSQLiteReader for chat.db (single reader, dedicated thread) ──
         self._chat_reader = ManagedSQLiteReader(
@@ -4414,8 +4820,30 @@ You have 15 minutes. Work efficiently.
         # Start Discord listener (if configured)
         self._start_discord_listener()
 
-        # Track last health check time
-        last_health_check = time.time()
+        # Start child process supervisors (dispatch-api + metro)
+        log.info("Starting child process supervisors...")
+        api_result = await self.dispatch_api_supervisor.start()
+        self.dispatch_api_daemon = self.dispatch_api_supervisor.proc  # Compat ref
+        log.info(f"Dispatch API startup: {api_result.value}")
+        if self.dispatch_api_daemon:
+            resource_registry.register('dispatch_api_daemon', self.dispatch_api_daemon, self.dispatch_api_daemon.terminate)
+
+        metro_result = await self.metro_supervisor.start()
+        self.metro_daemon = self.metro_supervisor.proc  # Compat ref
+        log.info(f"Metro startup: {metro_result.value}")
+
+        # Start supervisor background tasks (10s liveness monitoring)
+        self._dispatch_api_supervisor_task = asyncio.create_task(
+            self.dispatch_api_supervisor.run_forever(),
+            name="supervisor-dispatch-api",
+        )
+        self._metro_supervisor_task = asyncio.create_task(
+            self.metro_supervisor.run_forever(),
+            name="supervisor-metro",
+        )
+
+        # Track last health check time — first check 30s after start (not full 300s wait)
+        last_health_check = time.time() - 270  # 300 - 30 = triggers in 30s
         HEALTH_CHECK_INTERVAL = 300  # 5 minutes
 
         # Track fast health check (Tier 1: regex-based fatal error detection)
@@ -4596,8 +5024,18 @@ You have 15 minutes. Work efficiently.
                 if time.time() - last_health_check > HEALTH_CHECK_INTERVAL:
                     if not self._health_check_running:
                         self._health_check_running = True
+                        async def _health_with_timeout():
+                            try:
+                                await asyncio.wait_for(
+                                    self._run_health_checks(),
+                                    timeout=120,  # 2 min max
+                                )
+                            except asyncio.TimeoutError:
+                                log.error("Health check timed out after 120s — force-clearing lock")
+                            finally:
+                                self._health_check_running = False
                         asyncio.create_task(
-                            self._run_health_checks(),
+                            _health_with_timeout(),
                             name="health-check-background"
                         )
                     else:

@@ -259,6 +259,53 @@ reply-app <chat_id> "message" --audio /path/to/audio.mp3
 
 **Audio attachments** are stored in `~/dispatch/state/dispatch-audio/{chat_id}/` via `copy_audio_to_canonical()` in `dispatch_db.py`. The app renders them with an inline waveform player (works for both user and assistant messages).
 
+### reply-widget CLI
+
+Location: `~/.claude/skills/dispatch-app/scripts/reply-widget`
+
+Send interactive widgets to the app. Reads JSON from stdin, validates via pydantic, stores with plain-text fallback, sends push notification.
+
+```bash
+# Send an ask_question widget (2 questions, each gets "Other" by default)
+cat <<'EOF' | reply-widget <chat_id> ask_question
+{"questions": [{"question": "Which approach?", "options": [{"label": "Incremental", "description": "Small PRs"}, {"label": "Big bang"}]}, {"question": "Timeline?", "options": [{"label": "1 week"}, {"label": "2 weeks"}]}]}
+EOF
+
+# Multi-select + hide Other option
+cat <<'EOF' | reply-widget <chat_id> ask_question
+{"questions": [{"question": "Which features?", "options": [{"label": "Auth"}, {"label": "Search"}, {"label": "Cache"}], "multi_select": true, "include_other": false}]}
+EOF
+```
+
+**When to use:** Need specific choice from options -> widget. Open-ended question -> plain text.
+
+**UX behavior:**
+- All questions rendered at once (not paginated)
+- Each question has its options + "Other" with text input (default on, set `include_other: false` to hide)
+- Single "Save" button at bottom -- no auto-submit
+- 3 states: unanswered -> pending -> answered
+
+**Response format:** Widget responses arrive as multi-line:
+```
+[Widget Response {message_id}]
+Q: "Which approach?" -> Incremental
+Q: "Timeline?" -> Other: "3 weeks, need to sync with deploy"
+```
+
+**Dedup rule:** If you see `[Widget Response {id}]` for a message_id you already processed, ignore it. This can happen after session resume.
+
+**Limits:** 1-4 questions per widget, 2-4 options per question, other_text max 500 chars.
+
+**Error handling:** On validation failure: prints error to stderr, exit code 1, no DB write.
+
+### Widget System Architecture
+
+- **Shared models**: `~/.claude/skills/dispatch-app/scripts/widget_models.py` -- pydantic models, per-type descriptor pattern, FormResponse with batch answers
+- **DB columns**: `widget_data TEXT`, `widget_response TEXT`, `responded_at DATETIME` on messages table
+- **API endpoint**: `POST /conversations/{chat_id}/messages/{message_id}/widget-response` -- validates, injects, persists
+- **App component**: `AskQuestionWidget.tsx` -- form UI, radio/checkbox + Other text input, Save button, 3 states
+- **Graceful degradation**: Old clients see plain-text fallback in `content` column
+
 ### Sessions (Multi-Chat)
 
 Each chat in the app gets its own dedicated SDK session:
@@ -440,6 +487,14 @@ These items still reference "sven" and need future refactoring:
 7. ~~**`common.py`** — Has `sven-app` source check for reply command routing.~~ ✅ Done — handles both names.
 
 ---
+
+## Related Projects
+
+- **house-app** at `~/code/house-app/` — also known as "Church app" or "The Church" app
+  - Expo/React Native frontend with FastAPI backend
+  - Backend runs on **port 9092** (separate from dispatch-api on 9091)
+  - LaunchAgent `com.house.api` manages the backend process
+  - Not part of the dispatch system — standalone project with its own API
 
 ---
 
@@ -769,34 +824,62 @@ This ensures the phone picks up changes via fast refresh automatically.
 
 ---
 
-## OTA Updates (EAS Update)
+## Deploying to Devices
 
-### Deploying Updates (OTA / Device Build)
+### CRITICAL: Two separate deploy targets
 
-**NO EXPO_TOKEN is configured. EAS OTA is NOT available. Always use local device builds.**
+| Target | Command | When to use |
+|--------|---------|-------------|
+| **Web** | `npx expo export --platform web` then `claude-assistant restart` | Web UI at localhost:9091 |
+| **iOS** | `npx expo run:ios --device "<UDID>" --configuration Release --no-bundler` | Native iOS app |
+
+**These are independent!** A web export does NOT update the iOS app. An iOS build does NOT update the web UI. If changes affect both, run both.
+
+### iOS Device Build — ALWAYS use the deploy script
+
+**NEVER manually run `npx expo run:ios` with a hardcoded UDID.** Always use the deploy script:
+
+```bash
+# Full clean deploy (auto-detects device, cleans build + pods, fresh bundle)
+~/dispatch/apps/dispatch-app/scripts/deploy-ios
+
+# Quick deploy (skip pod reinstall — faster when only JS changed)
+~/dispatch/apps/dispatch-app/scripts/deploy-ios --quick
+```
+
+The script handles:
+- **Auto-detecting** the connected iPhone (no hardcoded UDIDs that go stale)
+- **Cleaning ios/build** (prevents stale native bundle cache)
+- **Cleaning ios/Pods** on full deploy (prevents stale pod artifacts)
+- **Exporting fresh JS bundle** with `--clear`
+- **Building and installing** to the detected device
+
+**Common issues:**
+- "Device is locked" — build installed successfully, user just needs to unlock phone
+- Device disconnected — phone sleeping. Build may still have installed.
+- "No physical iPhone connected" — plug in the phone or check USB connection
+
+### Web Deploy
 
 ```bash
 cd ~/dispatch/apps/dispatch-app
-
-# 1. Verify build passes first
-npx expo export --platform ios
-
-# 2. Find connected devices
-xcrun xctrace list devices 2>&1 | grep -i iphone
-
-# 3. Deploy directly to device (use UDID from step 2)
-npx expo run:ios --device "<UDID>" --configuration Release --no-bundler
+npx expo export --platform web    # Build static web bundle
+claude-assistant restart           # Restart daemon to serve new bundle
 ```
 
-**Device UDIDs** (for reference):
-- Nicklaude's iPhone: `00008140-001A75A936E8801C`
-- Nikhil iPhone 16: `00008150-000C31AA2E52401C`
+### CRITICAL: NO TestFlight, NO EAS — Direct Device Deploy ONLY
 
-If EAS OTA is ever set up in the future, store the token:
+**NEVER use TestFlight or EAS for the dispatch app.** Always use the deploy script:
+
 ```bash
-echo 'EXPO_TOKEN=your-token-here' >> ~/.claude/secrets.env
+# Quick deploy (JS-only changes — most common)
+~/dispatch/apps/dispatch-app/scripts/deploy-ios --quick
+
+# Full clean deploy (native changes, new pods, etc.)
+~/dispatch/apps/dispatch-app/scripts/deploy-ios
 ```
-Then use: `EXPO_TOKEN=$(grep EXPO_TOKEN ~/.claude/secrets.env | cut -d= -f2) eas update --branch production --message "desc"`
+
+When someone says "push app" or "deploy app", use `deploy-ios`. Do NOT invoke the ios-app skill or attempt TestFlight/archive workflows.
 
 ### Web compatibility for native modules
 

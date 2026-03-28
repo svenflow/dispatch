@@ -61,15 +61,7 @@ $SONOS play --file output.wav
 $SONOS list
 ```
 
-Output:
-```
-Available speakers:
-  Basement Sonos: 10.10.10.53
-  Bathroom: 10.10.10.47
-  Family Room 2: 10.10.10.38
-  Family Room: 10.10.10.152
-  Kitchen: 10.10.10.162
-```
+Output lists all speakers with their IPs (loaded from `config.local.yaml` under `sonos.speakers`).
 
 ### Check Status
 

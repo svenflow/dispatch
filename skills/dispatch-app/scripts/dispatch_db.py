@@ -82,6 +82,12 @@ def init_db():
         conn.execute("ALTER TABLE messages ADD COLUMN status TEXT DEFAULT 'complete'")
     if "failure_reason" not in columns:
         conn.execute("ALTER TABLE messages ADD COLUMN failure_reason TEXT")
+    if "widget_data" not in columns:
+        conn.execute("ALTER TABLE messages ADD COLUMN widget_data TEXT")
+    if "widget_response" not in columns:
+        conn.execute("ALTER TABLE messages ADD COLUMN widget_response TEXT")
+    if "responded_at" not in columns:
+        conn.execute("ALTER TABLE messages ADD COLUMN responded_at DATETIME")
 
     # Ensure indexes exist
     conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_chat_id ON messages(chat_id)")
@@ -166,12 +172,13 @@ def store_message(
     chat_id: str = "voice",
     audio_path: str | None = None,
     image_path: str | None = None,
+    widget_data: str | None = None,
 ):
     """Store a message in the dispatch-messages.db database."""
     conn = _get_conn()
     conn.execute(
-        "INSERT INTO messages (id, role, content, audio_path, chat_id, image_path) VALUES (?, ?, ?, ?, ?, ?)",
-        (message_id, role, content, audio_path, chat_id, image_path),
+        "INSERT INTO messages (id, role, content, audio_path, chat_id, image_path, widget_data) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (message_id, role, content, audio_path, chat_id, image_path, widget_data),
     )
     conn.execute(
         "UPDATE chats SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",

@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  ActionSheetIOS,
   ActivityIndicator,
   Animated,
   FlatList,
@@ -28,7 +29,7 @@ import { EmptyState } from "@/src/components/EmptyState";
 import { useAudioPlayer } from "@/src/hooks/useAudioPlayer";
 import { useVoiceConversation } from "@/src/hooks/useVoiceConversation";
 import { useSdkEvents } from "@/src/hooks/useSdkEvents";
-import { updateChat, markChatAsOpened, forkChat, deleteChat, generateChatImage, restartSession } from "@/src/api/chats";
+import { updateChat, markChatAsOpened, forkChat, deleteChat, generateChatImage, restartSession, setChatModel, reactToMessage } from "@/src/api/chats";
 import { ApiError } from "@/src/api/client";
 import { startDebugSession } from "@/src/utils/debugSession";
 import { screenStyles } from "@/src/styles/shared";
@@ -39,16 +40,20 @@ import { setActiveChatId, dismissNotificationsForChat } from "@/src/hooks/usePus
 import { impactMedium } from "@/src/utils/haptics";
 import { BubbleMenu, type BubbleMenuItem } from "@/src/components/BubbleMenu";
 import { Toast } from "@/src/components/Toast";
+import { RenameModal } from "@/src/components/RenameModal";
 
 export default function ChatDetailScreen() {
-  const { id, chatTitle } = useLocalSearchParams<{
+  const { id, chatTitle, chatModel } = useLocalSearchParams<{
     id: string;
     chatTitle?: string;
+    chatModel?: string;
   }>();
 
   const [currentTitle, setCurrentTitle] = useState(chatTitle || id || "Chat");
+  const [currentModel, setCurrentModel] = useState(chatModel || "opus");
+  const modelLabel = currentModel || null;
   const adapter = useMemo(() => chatAdapter(id ?? ""), [id]);
-  const { messages, isLoading, error, isThinking, sendMessage, sendMessageWithImage, retryMessage } =
+  const { messages, isLoading, error, isThinking, sendMessage, sendMessageWithImage, retryMessage, toggleReaction } =
     useMessages(adapter, id ? `chat:${id}` : undefined);
 
   const audioPlayer = useAudioPlayer();
@@ -66,6 +71,7 @@ export default function ChatDetailScreen() {
   const [menuPosition, setMenuPosition] = useState({ x: 0, y: 0 });
   const [isCreatingDebugSession, setIsCreatingDebugSession] = useState(false);
   const [isForking, setIsForking] = useState(false);
+  const [renameModalVisible, setRenameModalVisible] = useState(false);
   const menuButtonRef = useRef<View>(null);
 
   // Message context menu (long-press)
@@ -121,16 +127,18 @@ export default function ChatDetailScreen() {
     [id, sendMessageWithImage],
   );
 
-  const handleRename = useCallback(async () => {
-    const newTitle = await showPrompt("Rename Chat", "Enter a new title:", currentTitle);
-    if (!newTitle || newTitle === currentTitle) return;
+  const handleRename = useCallback(() => {
+    setRenameModalVisible(true);
+  }, []);
+
+  const handleRenameSave = useCallback(async (newTitle: string) => {
     try {
       await updateChat(id ?? "", newTitle);
       setCurrentTitle(newTitle);
     } catch (err) {
       showAlert("Error", err instanceof Error ? err.message : "Failed to rename chat");
     }
-  }, [id, currentTitle]);
+  }, [id]);
 
   const handleFork = useCallback(async () => {
     const forkTitle = await showPrompt("Fork Chat", "Title for the forked chat:", `${currentTitle} (fork)`);
@@ -196,6 +204,30 @@ export default function ChatDetailScreen() {
       showAlert("Error", "Failed to restart session.");
     }
   }, [id]);
+
+  const handleChangeModel = useCallback(() => {
+    const models = ["opus", "sonnet", "haiku"];
+    const options = [...models.map(m => m === currentModel ? `${m} ✓` : m), "Cancel"];
+    const cancelIndex = options.length - 1;
+
+    if (Platform.OS === "ios") {
+      ActionSheetIOS.showActionSheetWithOptions(
+        { options, cancelButtonIndex: cancelIndex, title: "Change Model" },
+        async (index) => {
+          if (index === cancelIndex) return;
+          const selected = models[index];
+          if (selected === currentModel) return;
+          try {
+            await setChatModel(id ?? "", selected);
+            setCurrentModel(selected);
+            showAlert("Model Changed", `Switched to ${selected}. Session will restart.`);
+          } catch {
+            showAlert("Error", "Failed to change model.");
+          }
+        },
+      );
+    }
+  }, [id, currentModel]);
 
   const handleDelete = useCallback(async () => {
     const confirmed = await showDestructiveConfirm(
@@ -281,17 +313,33 @@ export default function ChatDetailScreen() {
     return null;
   }, [messages]);
 
+  const handleReact = useCallback(
+    async (messageId: string, emoji: string) => {
+      // Optimistic UI update — instant feedback
+      toggleReaction(messageId, emoji);
+      try {
+        await reactToMessage(messageId, emoji);
+      } catch {
+        // Revert on failure
+        toggleReaction(messageId, emoji);
+      }
+    },
+    [toggleReaction],
+  );
+
   const renderItem = useCallback(
     ({ item }: { item: DisplayMessage }) => (
       <MessageBubble
         message={item}
+        chatId={id}
         audioState={audioPlayer}
         onRetry={retryMessage}
         onLongPress={handleMessageLongPress}
+        onReact={handleReact}
         showDelivered={item.id === lastDeliveredUserMsgId}
       />
     ),
-    [audioPlayer, retryMessage, handleMessageLongPress, lastDeliveredUserMsgId],
+    [audioPlayer, retryMessage, handleMessageLongPress, handleReact, lastDeliveredUserMsgId],
   );
 
   const keyExtractor = useCallback((item: DisplayMessage) => item.id, []);
@@ -302,6 +350,18 @@ export default function ChatDetailScreen() {
       <Stack.Screen
         options={{
           title: currentTitle,
+          headerTitle: () => (
+            <View style={{ alignItems: "center", justifyContent: "center" }}>
+              <Text style={{ color: "#fafafa", fontSize: 17, fontWeight: "600" }} numberOfLines={1}>
+                {currentTitle}
+              </Text>
+              {modelLabel ? (
+                <Text style={{ color: "#71717a", fontSize: 12, marginTop: 1 }}>
+                  {modelLabel}
+                </Text>
+              ) : null}
+            </View>
+          ),
           headerBackVisible: false,
           headerLeft: () => (
             <Pressable
@@ -407,9 +467,8 @@ export default function ChatDetailScreen() {
               style={({ pressed }) => [localStyles.menuItem, pressed && localStyles.menuItemPressed]}
               onPress={() => {
                 setMenuVisible(false);
-                // Longer delay needed: Modal must fully dismiss AND release the
-                // responder chain before Alert.prompt can acquire keyboard focus
-                setTimeout(handleRename, 600);
+                // Short delay for menu dismiss animation before showing rename modal
+                setTimeout(handleRename, 200);
               }}
             >
               <SymbolView
@@ -425,7 +484,7 @@ export default function ChatDetailScreen() {
               disabled={isForking || messages.length === 0}
               onPress={() => {
                 setMenuVisible(false);
-                InteractionManager.runAfterInteractions(handleFork);
+                setTimeout(handleFork, 600);
               }}
             >
               <SymbolView
@@ -474,7 +533,7 @@ export default function ChatDetailScreen() {
               disabled={isCreatingDebugSession}
               onPress={() => {
                 setMenuVisible(false);
-                InteractionManager.runAfterInteractions(handleDebugChat);
+                setTimeout(handleDebugChat, 600);
               }}
             >
               <SymbolView
@@ -498,6 +557,21 @@ export default function ChatDetailScreen() {
                 size={16}
               />
               <Text style={localStyles.menuItemText}>Restart Session</Text>
+            </Pressable>
+            <View style={localStyles.menuDivider} />
+            <Pressable
+              style={({ pressed }) => [localStyles.menuItem, pressed && localStyles.menuItemPressed]}
+              onPress={() => {
+                setMenuVisible(false);
+                setTimeout(handleChangeModel, 400);
+              }}
+            >
+              <SymbolView
+                name={{ ios: "cpu", android: "memory", web: "memory" }}
+                tintColor="#fafafa"
+                size={16}
+              />
+              <Text style={localStyles.menuItemText}>Model: {currentModel}</Text>
             </Pressable>
             <View style={localStyles.menuDivider} />
             <Pressable
@@ -531,6 +605,14 @@ export default function ChatDetailScreen() {
         icon="checkmark"
         visible={!!toastMsg}
         onHide={() => setToastMsg(null)}
+      />
+
+      <RenameModal
+        visible={renameModalVisible}
+        chatId={id ?? ""}
+        currentTitle={currentTitle}
+        onSave={handleRenameSave}
+        onClose={() => setRenameModalVisible(false)}
       />
 
       {isCreatingDebugSession && (

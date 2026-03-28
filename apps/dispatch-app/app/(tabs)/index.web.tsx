@@ -115,7 +115,7 @@ export default function ChatListWebScreen() {
       if (isDesktop) {
         selectChat(chat.id, chat.title);
       } else {
-        router.push({ pathname: "/chat/[id]", params: { id: chat.id, chatTitle: chat.title } });
+        router.push({ pathname: "/chat/[id]", params: { id: chat.id, chatTitle: chat.title, chatModel: chat.model || undefined } });
       }
     }
   }, [createConversation, router, isDesktop, selectChat]);
@@ -127,7 +127,7 @@ export default function ChatListWebScreen() {
       } else {
         router.push({
           pathname: "/chat/[id]",
-          params: { id: conversation.id, chatTitle: conversation.title },
+          params: { id: conversation.id, chatTitle: conversation.title, chatModel: conversation.model || undefined },
         });
       }
     },

@@ -37,7 +37,7 @@ import subprocess
 import threading
 import time
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -1502,11 +1502,16 @@ async def react_to_message(message_id: str, request: ReactRequest, token: Option
         raise HTTPException(status_code=400, detail="Invalid emoji")
 
     conn = get_db()
-    # Check message exists
-    row = conn.execute("SELECT id FROM messages WHERE id = ?", (message_id,)).fetchone()
+    # Check message exists and get chat_id + content preview
+    row = conn.execute(
+        "SELECT id, chat_id, role, content FROM messages WHERE id = ?", (message_id,)
+    ).fetchone()
     if not row:
         conn.close()
         raise HTTPException(status_code=404, detail="Message not found")
+    msg_chat_id = row[1]
+    msg_role = row[2]
+    msg_preview = (row[3] or "")[:100]
 
     # Toggle: if reaction exists, remove it; otherwise add it
     existing = conn.execute(
@@ -1524,6 +1529,23 @@ async def react_to_message(message_id: str, request: ReactRequest, token: Option
         action = "added"
     conn.commit()
     conn.close()
+
+    # Inject reaction notification into the session (non-blocking)
+    if action == "added" and msg_role == "assistant":
+        try:
+            session_name = f"{APP_SESSION_PREFIX}:{msg_chat_id}"
+            react_prompt = f"[User reacted {emoji} to your message: \"{msg_preview}{'...' if len(row[3] or '') > 100 else ''}\"]"
+            subprocess.Popen(
+                [
+                    CLAUDE_ASSISTANT_CLI, "inject-prompt",
+                    session_name,
+                    "--sms", react_prompt,
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception as e:
+            logger.warning(f"react: failed to inject reaction: {e}")
 
     return {"status": "ok", "action": action, "emoji": emoji, "message_id": message_id}
 
@@ -2425,9 +2447,18 @@ async def suggest_chat_title(chat_id: str, token: str = None):
     if not rows:
         raise HTTPException(status_code=400, detail="Chat has no messages")
 
-    # Reverse to chronological order
+    # Reverse to chronological order, build conversation string
     rows = list(reversed(rows))
-    conversation = "\n".join(f"{r[0].upper()}: {r[1]}" for r in rows)
+    # Include full messages but cap total to avoid timeout on very long chats
+    lines = []
+    total_chars = 0
+    for r in rows:
+        line = f"{r[0].upper()}: {r[1]}"
+        lines.append(line)
+        total_chars += len(line)
+        if total_chars > 12000:
+            break
+    conversation = "\n".join(lines)
     prompt_text = (
         "What is the user trying to accomplish in this conversation? Based on their goal, "
         "generate exactly 3 short titles (1-2 words each, max 3 words) that describe what they're doing. "
@@ -2448,25 +2479,32 @@ async def suggest_chat_title(chat_id: str, token: str = None):
                 "--no-session-persistence",
             ],
             input=prompt_text,
-            timeout=30,
+            timeout=60,
             capture_output=True,
             text=True,
             env=env,
         )
         if result.returncode != 0:
+            logger.error(f"suggest-title: haiku failed rc={result.returncode} stderr={result.stderr[:300]}")
             raise HTTPException(status_code=500, detail="Title generation failed")
 
         raw = result.stdout.strip()
+        logger.info(f"suggest-title: haiku raw output: {raw!r}")
         titles = [t.strip().strip('"\'').strip() for t in raw.splitlines() if t.strip()]
         # Filter out empty or too-long titles
         titles = [t for t in titles if t and len(t) <= 50][:3]
 
         if not titles:
+            logger.warning(f"suggest-title: no valid titles from: {raw!r}")
             raise HTTPException(status_code=500, detail="No valid titles generated")
 
+        logger.info(f"suggest-title: returning {titles}")
         return {"titles": titles}
     except HTTPException:
         raise
+    except subprocess.TimeoutExpired:
+        logger.error(f"suggest-title: haiku subprocess timed out (60s) for chat {chat_id}")
+        raise HTTPException(status_code=504, detail="Title generation timed out")
     except Exception as e:
         logger.error(f"suggest-title: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -2703,6 +2741,17 @@ IPC_SOCKET = Path("/tmp/claude-assistant.sock")
 SESSIONS_JSON = Path.home() / "dispatch" / "state" / "sessions.json"
 REMINDERS_JSON = Path.home() / "dispatch" / "state" / "reminders.json"
 DAEMON_PID_FILE = Path.home() / "dispatch" / "state" / "daemon.pid"
+
+# Health check constants
+WATCHDOG_LAUNCHD_LABEL = "com.dispatch.watchdog"
+WATCHDOG_LOG_PATH = Path.home() / "dispatch" / "logs" / "watchdog.log"
+WATCHDOG_CRASH_FILE = Path("/tmp/dispatch-watchdog-crashes.txt")
+SIGNAL_PID_FILE = Path("/tmp/signal-cli.pid")
+SIGNAL_SOCKET_PATH = Path("/tmp/signal-cli.sock")
+SUBPROCESS_TIMEOUT = 5  # seconds for launchctl/pgrep calls
+STUCK_SESSION_THRESHOLD_SECONDS = 300  # 5 min — injection with no response = possibly stuck
+# Matches watchdog log lines like "[WATCHDOG] Recovery complete!" or "[WATCHDOG] CRITICAL: ..."
+WATCHDOG_RECOVERY_PATTERN = re.compile(r"\[WATCHDOG\].*(?:Recovery|recovery|auto-recovery|back online|CRITICAL)")
 PERF_LOG_DIR = Path.home() / "dispatch" / "logs"
 SKILLS_DIR = Path.home() / ".claude" / "skills"
 DISPATCH_LOGS_DIR = Path.home() / "dispatch" / "logs"
@@ -2734,6 +2783,158 @@ async def dashboard():
     if not html_path.exists():
         raise HTTPException(status_code=404, detail="Dashboard not found")
     return HTMLResponse(content=html_path.read_text())
+
+
+# ---------------------------------------------------------------------------
+# Health check helpers (each never raises — returns defaults on failure)
+# ---------------------------------------------------------------------------
+
+def _check_watchdog() -> dict:
+    """Check watchdog launchd job, crash state, and recent recovery info."""
+    defaults = {
+        "watchdog_running": False,
+        "watchdog_last_check_seconds": None,
+        "watchdog_crash_count": 0,
+        "watchdog_last_recovery": None,
+        "watchdog_backoff_seconds": 0,
+    }
+    try:
+        result = subprocess.run(
+            ["launchctl", "list"],
+            capture_output=True, text=True, timeout=SUBPROCESS_TIMEOUT,
+        )
+        defaults["watchdog_running"] = WATCHDOG_LAUNCHD_LABEL in result.stdout
+
+        # Last check time from log mtime
+        if WATCHDOG_LOG_PATH.exists():
+            defaults["watchdog_last_check_seconds"] = round(
+                time.time() - WATCHDOG_LOG_PATH.stat().st_mtime, 1
+            )
+            # Search last 4KB for recovery info
+            try:
+                with open(WATCHDOG_LOG_PATH, "rb") as f:
+                    f.seek(0, 2)  # end
+                    size = f.tell()
+                    f.seek(max(0, size - 4096))
+                    tail = f.read().decode("utf-8", errors="replace")
+                for line in reversed(tail.splitlines()):
+                    if WATCHDOG_RECOVERY_PATTERN.search(line):
+                        defaults["watchdog_last_recovery"] = line.strip()
+                        break
+            except Exception:
+                pass
+
+        # Crash state file
+        if WATCHDOG_CRASH_FILE.exists():
+            try:
+                parts = WATCHDOG_CRASH_FILE.read_text().strip().split()
+                if len(parts) >= 1:
+                    defaults["watchdog_crash_count"] = int(parts[0])
+                if len(parts) >= 2:
+                    crash_ts = float(parts[1])
+                    elapsed = time.time() - crash_ts
+                    # Compute backoff: 60 * 2^(count-1), capped at 900
+                    count = defaults["watchdog_crash_count"]
+                    if count > 0 and elapsed < 900:
+                        backoff = min(900, 60 * (2 ** (count - 1)))
+                        remaining = max(0, backoff - elapsed)
+                        defaults["watchdog_backoff_seconds"] = round(remaining, 0)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return defaults
+
+
+def _check_signal() -> dict:
+    """Check signal-cli process and socket status."""
+    defaults = {
+        "signal_running": False,
+        "signal_socket_age_seconds": None,
+    }
+    try:
+        # Check PID file first (most reliable)
+        if SIGNAL_PID_FILE.exists():
+            try:
+                pid = int(SIGNAL_PID_FILE.read_text().strip())
+                os.kill(pid, 0)  # check alive
+                defaults["signal_running"] = True
+            except (ValueError, OSError, PermissionError):
+                pass
+
+        # Socket check (fallback + age metric)
+        if SIGNAL_SOCKET_PATH.exists():
+            defaults["signal_socket_age_seconds"] = round(
+                time.time() - SIGNAL_SOCKET_PATH.stat().st_mtime, 1
+            )
+            if not defaults["signal_running"]:
+                defaults["signal_running"] = True  # socket exists = likely running
+    except Exception:
+        pass
+    return defaults
+
+
+def _check_session_health(sessions: dict) -> dict:
+    """Summarize session health from session registry metadata."""
+    defaults = {
+        "healthy": 0,
+        "degraded": 0,
+        "unhealthy": 0,
+        "degraded_sessions": [],
+    }
+    try:
+        now_ts = time.time()
+        for chat_id, s in sessions.items():
+            # Determine health from session metadata
+            status = "healthy"
+            issue = None
+
+            # Check if session has a health_status field (set by health.py)
+            if s.get("health_status") in ("degraded", "unhealthy", "fatal"):
+                status = "degraded" if s["health_status"] == "degraded" else "unhealthy"
+                issue = s.get("health_issue", "unknown")
+
+            # Check for stale sessions (no message in >30 min but should be active)
+            lmt = s.get("last_message_time") or s.get("updated_at")
+            if lmt and status == "healthy":
+                try:
+                    dt = datetime.fromisoformat(lmt.replace("Z", "+00:00"))
+                    age = now_ts - dt.timestamp()
+                    # Session with recent injection but no response = possibly stuck
+                    if s.get("last_injection_time"):
+                        inj_dt = datetime.fromisoformat(
+                            s["last_injection_time"].replace("Z", "+00:00")
+                        )
+                        inj_age = now_ts - inj_dt.timestamp()
+                        if inj_age > STUCK_SESSION_THRESHOLD_SECONDS and age > STUCK_SESSION_THRESHOLD_SECONDS:
+                            status = "degraded"
+                            issue = "stuck"
+                except Exception:
+                    pass
+
+            if status == "healthy":
+                defaults["healthy"] += 1
+            elif status == "degraded":
+                defaults["degraded"] += 1
+                defaults["degraded_sessions"].append({
+                    "name": s.get("session_name", chat_id),
+                    "contact": s.get("contact_name", "Unknown"),
+                    "status": status,
+                    "last_check_seconds": round(now_ts - (s.get("last_health_check", now_ts)), 1),
+                    "issue": issue or "unknown",
+                })
+            else:
+                defaults["unhealthy"] += 1
+                defaults["degraded_sessions"].append({
+                    "name": s.get("session_name", chat_id),
+                    "contact": s.get("contact_name", "Unknown"),
+                    "status": status,
+                    "last_check_seconds": round(now_ts - (s.get("last_health_check", now_ts)), 1),
+                    "issue": issue or "unknown",
+                })
+    except Exception:
+        pass
+    return defaults
 
 
 @app.get("/api/dashboard/health")
@@ -2843,13 +3044,35 @@ async def dashboard_health():
     except Exception:
         pass
 
-    # Health status
+    # Health status (base logic)
     if result["daemon_running"] and result["last_event_age_seconds"] is not None and result["last_event_age_seconds"] < 300:
         result["health_status"] = "healthy"
     elif result["daemon_running"]:
         result["health_status"] = "degraded"
     else:
         result["health_status"] = "down"
+
+    # Watchdog health
+    watchdog = _check_watchdog()
+    result.update(watchdog)
+
+    # Signal health
+    signal = _check_signal()
+    result.update(signal)
+
+    # Session health
+    try:
+        sessions = _load_sessions()
+    except Exception:
+        sessions = {}
+    result["session_health"] = _check_session_health(sessions)
+
+    # Escalate health_status if subsystems are unhealthy
+    if result["health_status"] == "healthy":
+        if not result.get("watchdog_running") or not result.get("signal_running"):
+            result["health_status"] = "degraded"
+        if result.get("watchdog_crash_count", 0) > 0:
+            result["health_status"] = "degraded"
 
     return result
 
@@ -4101,8 +4324,63 @@ async def dashboard_quota_history(hours: int = 24):
     except Exception:
         pass
 
+    # Heavy hitters: find sessions with most activity between quota snapshots
+    # Build raw window data from the original query results (before downsampling)
+    raw_windows = []
+    for i in range(len(rows) - 1):
+        raw_windows.append({
+            "t1": rows[i]["timestamp"],
+            "t2": rows[i + 1]["timestamp"],
+            "fh1": rows[i]["five_hour"] or 0,
+            "fh2": rows[i + 1]["five_hour"] or 0,
+            "sd1": rows[i]["seven_day"] or 0,
+            "sd2": rows[i + 1]["seven_day"] or 0,
+        })
+
+    heavy_sessions = []
+    if raw_windows:
+        try:
+            conn3 = get_bus_db()
+            # Limit to last 10 windows to keep response fast
+            for w in raw_windows[-10:]:
+                t1 = w["t1"]
+                t2 = w["t2"]
+                fh_delta = w["fh2"] - w["fh1"]
+                sd_delta = w["sd2"] - w["sd1"]
+
+                session_rows = conn3.execute(
+                    "SELECT session_name,"
+                    " COUNT(*) AS event_count,"
+                    " SUM(CASE WHEN duration_ms IS NOT NULL THEN duration_ms ELSE 0 END) / 1000.0 AS total_sec,"
+                    " GROUP_CONCAT(DISTINCT tool_name) AS tools"
+                    " FROM sdk_events"
+                    " WHERE timestamp BETWEEN ? AND ?"
+                    "   AND event_type = 'tool_result'"
+                    " GROUP BY session_name"
+                    " ORDER BY total_sec DESC"
+                    " LIMIT 5",
+                    (t1, t2),
+                ).fetchall()
+
+                if session_rows:
+                    for sr in session_rows:
+                        heavy_sessions.append({
+                            "window_start": datetime.fromtimestamp(t1 / 1000, tz=timezone.utc).isoformat(),
+                            "window_end": datetime.fromtimestamp(t2 / 1000, tz=timezone.utc).isoformat(),
+                            "five_hour_delta": round(fh_delta, 1),
+                            "seven_day_delta": round(sd_delta, 1),
+                            "session_name": sr["session_name"],
+                            "event_count": sr["event_count"],
+                            "duration_sec": round(sr["total_sec"], 1),
+                            "tools": [t for t in (sr["tools"] or "").split(",") if t],
+                        })
+            conn3.close()
+        except Exception as e:
+            logger.warning(f"quota-history heavy_sessions query failed: {e}")
+
     return {
         "snapshots": snapshots,
+        "heavy_sessions": heavy_sessions,
         "current_backoff": {
             "backoff_seconds": int(backoff_seconds),
             "consecutive_failures": int(consecutive_failures),

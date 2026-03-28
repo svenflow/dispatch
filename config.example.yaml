@@ -56,6 +56,20 @@ chrome:
       name: "owner"
       email: "you@example.com"
 
+bloomin8:
+  ip: "10.10.10.X"
+  keepalive_enabled: true
+  keepalive_interval: 60
+  wake_proxy_ip: "10.10.10.X"  # ESP32 BLE wake proxy
+
+sonos:
+  speakers:
+    "Living Room": "10.10.10.X"
+    "Kitchen": "10.10.10.X"
+  all_devices:
+    "Speaker: Living Room": "10.10.10.X"
+    "Sub: Living Room": "10.10.10.X"
+
 ruview:
   repo_path: "~/code/RuView"
   esp32:

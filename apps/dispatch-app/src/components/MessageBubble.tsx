@@ -12,6 +12,9 @@ import { buildImageUrl, buildVideoUrl } from "../api/images";
 import { relativeTime } from "../utils/time";
 import { PulsingDots } from "./PulsingDots";
 import { SimpleMarkdown } from "./SimpleMarkdown";
+import { AskQuestionWidget } from "./AskQuestionWidget";
+import { submitWidgetResponse } from "../api/chats";
+import type { AskQuestionWidgetData, FormResponse } from "../api/types";
 
 const URL_REGEX = /https?:\/\/[^\s<>\"'\])},]+/gi;
 
@@ -84,10 +87,13 @@ function LinkedText({
   );
 }
 
-const MAX_COLLAPSED_LENGTH = 840;
+const MAX_COLLAPSED_LENGTH = 1500;
+const COLLAPSED_HEAD_CHARS = 800;
+const COLLAPSED_TAIL_CHARS = 400;
 
 interface MessageBubbleProps {
   message: DisplayMessage;
+  chatId?: string;
   audioState?: {
     isPlaying: boolean;
     isPaused: boolean;
@@ -98,11 +104,12 @@ interface MessageBubbleProps {
   };
   onRetry?: (messageId: string) => void;
   onLongPress?: (items: BubbleMenuItem[], pageY: number) => void;
+  onReact?: (messageId: string, emoji: string) => void;
   /** Show "Delivered" indicator under this message */
   showDelivered?: boolean;
 }
 
-export function MessageBubble({ message, audioState, onRetry, onLongPress, showDelivered }: MessageBubbleProps) {
+export function MessageBubble({ message, chatId, audioState, onRetry, onLongPress, onReact, showDelivered }: MessageBubbleProps) {
   const { role, content, timestamp, isPending, sendFailed, audioUrl, imageUrl, videoUrl, localImageUri, status } = message;
   const isUser = role === "user";
   const isGenerating = status === "generating";
@@ -248,7 +255,7 @@ export function MessageBubble({ message, audioState, onRetry, onLongPress, showD
   const isLong = (content || "").length > MAX_COLLAPSED_LENGTH;
   const displayText =
     isLong && !expanded
-      ? (content || "").slice(0, MAX_COLLAPSED_LENGTH) + "..."
+      ? (content || "").slice(0, COLLAPSED_HEAD_CHARS) + "\n\n⋯\n\n" + (content || "").slice(-COLLAPSED_TAIL_CHARS)
       : content || "";
 
   const isCurrentMessage = audioState?.currentMessageId === message.id;
@@ -322,10 +329,20 @@ export function MessageBubble({ message, audioState, onRetry, onLongPress, showD
       });
     }
 
+    // Thumbs up for assistant messages
+    if (!isUser && !isPending && onReact) {
+      const hasThumbsUp = message.reactions?.includes("👍");
+      items.push({
+        label: hasThumbsUp ? "Remove 👍" : "👍",
+        icon: hasThumbsUp ? "hand.thumbsup" : "hand.thumbsup.fill",
+        onPress: () => onReact(message.id, "👍"),
+      });
+    }
+
     if (items.length > 0) {
       onLongPress(items, e.nativeEvent.pageY);
     }
-  }, [content, canPlayAudio, isPlayingThis, audioState, imageSource, isUser, isPending, handleSaveImage, onLongPress, handleAudioPress]);
+  }, [content, canPlayAudio, isPlayingThis, audioState, imageSource, isUser, isPending, handleSaveImage, onLongPress, onReact, handleAudioPress]);
 
   return (
     <Animated.View
@@ -440,6 +457,18 @@ export function MessageBubble({ message, audioState, onRetry, onLongPress, showD
               </Text>
             </Pressable>
           )}
+          {/* Widget rendering */}
+          {message.widgetData?.type === "ask_question" && chatId && (
+            <AskQuestionWidget
+              data={message.widgetData as AskQuestionWidgetData}
+              messageId={message.id}
+              chatId={chatId}
+              response={message.widgetResponse as FormResponse | null}
+              onRespond={async (resp) => {
+                await submitWidgetResponse(chatId, message.id, resp);
+              }}
+            />
+          )}
           {/* Inline audio player for uploaded audio (user or assistant) */}
           {audioUrl && audioState ? (
             <Pressable
@@ -474,6 +503,14 @@ export function MessageBubble({ message, audioState, onRetry, onLongPress, showD
             </Pressable>
           ) : null}
         </Pressable>
+        {/* Reaction badge — positioned outside bubble to avoid overflow:hidden clipping */}
+        {message.reactions && message.reactions.length > 0 && (
+          <View style={[styles.reactionBadge, isUser && styles.reactionBadgeUser]}>
+            <Text style={styles.reactionBadgeText}>
+              {message.reactions.join("")}
+            </Text>
+          </View>
+        )}
         {/* Side buttons removed — actions now in long-press context menu */}
       </View>
       {showDelivered && !sendFailed && (
@@ -707,6 +744,26 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: "700",
     marginTop: -1,
+  },
+  reactionBadge: {
+    position: "absolute",
+    top: -6,
+    right: -6,
+    backgroundColor: "#27272a",
+    borderRadius: 10,
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+    borderWidth: 1,
+    borderColor: "#3f3f46",
+    zIndex: 10,
+  },
+  reactionBadgeUser: {
+    right: undefined,
+    left: -6,
+  },
+  reactionBadgeText: {
+    fontSize: 14,
+    lineHeight: 18,
   },
   deliveredText: {
     color: "#71717a",

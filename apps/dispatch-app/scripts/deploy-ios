@@ -1,0 +1,55 @@
+#!/bin/bash
+# deploy-ios — Build and deploy dispatch-app to a connected iPhone
+# Auto-detects device, cleans caches, and does a fresh build.
+#
+# Usage:
+#   deploy-ios              # Full clean build + deploy
+#   deploy-ios --quick      # Skip pod reinstall (faster, use when only JS changed)
+
+set -euo pipefail
+
+APP_DIR="$HOME/dispatch/apps/dispatch-app"
+cd "$APP_DIR"
+
+QUICK=false
+if [[ "${1:-}" == "--quick" ]]; then
+  QUICK=true
+fi
+
+# 1. Auto-detect connected physical iPhone
+echo "🔍 Detecting connected iPhone..."
+DEVICE_LINE=$(xcrun xctrace list devices 2>&1 | grep -E "iPhone.*\([0-9]+\.[0-9]+(\.[0-9]+)?\) \(" | grep -v Simulator | head -1)
+
+if [[ -z "$DEVICE_LINE" ]]; then
+  echo "❌ No physical iPhone connected"
+  exit 1
+fi
+
+# Extract UDID (last parenthesized value)
+UDID=$(echo "$DEVICE_LINE" | grep -oE '\([A-F0-9-]+\)$' | tr -d '()')
+DEVICE_NAME=$(echo "$DEVICE_LINE" | sed 's/ ([^)]*) ([^)]*)$//')
+
+echo "📱 Found: $DEVICE_NAME ($UDID)"
+
+# 2. Kill any existing expo build
+pkill -f "expo run:ios" 2>/dev/null || true
+
+# 3. Clean build artifacts
+echo "🧹 Cleaning build artifacts..."
+rm -rf ios/build
+
+if [[ "$QUICK" == false ]]; then
+  echo "🧹 Cleaning pods..."
+  rm -rf ios/Pods
+  npx pod-install 2>&1 | tail -3
+fi
+
+# 4. Export fresh JS bundle
+echo "📦 Exporting JS bundle..."
+npx expo export --platform ios --clear 2>&1 | tail -3
+
+# 5. Build and deploy
+echo "🔨 Building and deploying to $DEVICE_NAME..."
+npx expo run:ios --device "$UDID" --configuration Release --no-bundler 2>&1 | tail -5
+
+echo "✅ Deployed to $DEVICE_NAME"

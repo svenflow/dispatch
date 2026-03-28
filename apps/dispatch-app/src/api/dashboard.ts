@@ -5,8 +5,10 @@ import type {
   DashboardSessionsResponse,
   DashboardTasksResponse,
   DashboardSkillsResponse,
+  DashboardSkillDetail,
   DashboardEventsResponse,
   DashboardCcuResponse,
+  QuotaHistoryResponse,
 } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -28,6 +30,17 @@ const DEFAULT_HEALTH: DashboardHealth = {
   active_reminders: 0,
   facts_count: 0,
   skills_count: 0,
+  // Watchdog
+  watchdog_running: false,
+  watchdog_last_check_seconds: null,
+  watchdog_crash_count: 0,
+  watchdog_last_recovery: null,
+  watchdog_backoff_seconds: 0,
+  // Signal
+  signal_running: false,
+  signal_socket_age_seconds: null,
+  // Session health
+  session_health: { healthy: 0, degraded: 0, unhealthy: 0, degraded_sessions: [] },
 };
 
 const DEFAULT_SESSIONS_RESPONSE: DashboardSessionsResponse = {
@@ -62,6 +75,15 @@ const DEFAULT_CCU_RESPONSE: DashboardCcuResponse = {
   _updated_at: null,
   _error: null,
   _quota_error: null,
+  _quota_updated_at: null,
+};
+
+const DEFAULT_QUOTA_HISTORY: QuotaHistoryResponse = {
+  snapshots: [],
+  heavy_sessions: [],
+  current_backoff: { backoff_seconds: 900, consecutive_failures: 0 },
+  current_quota: null,
+  _quota_updated_at: null,
 };
 
 // ---------------------------------------------------------------------------
@@ -90,6 +112,17 @@ export async function getDashboardCcu(): Promise<DashboardCcuResponse> {
     "/api/dashboard/ccu",
   );
   return withDefaults(DEFAULT_CCU_RESPONSE, data);
+}
+
+/** Fetch quota utilization history from bus events. */
+export async function getDashboardQuotaHistory(
+  hours = 24,
+): Promise<QuotaHistoryResponse> {
+  const data = await apiRequest<Partial<QuotaHistoryResponse>>(
+    "/api/dashboard/quota-history",
+    { params: { hours } },
+  );
+  return withDefaults(DEFAULT_QUOTA_HISTORY, data);
 }
 
 /** Fetch tasks and reminders */
@@ -126,4 +159,25 @@ export async function getDashboardSkills(): Promise<DashboardSkillsResponse> {
     "/api/dashboard/skills",
   );
   return withDefaults(DEFAULT_SKILLS_RESPONSE, data);
+}
+
+/** Fetch detailed usage metrics for a single skill */
+export async function getDashboardSkillDetail(
+  skillName: string,
+  days = 30,
+): Promise<DashboardSkillDetail> {
+  const data = await apiRequest<Partial<DashboardSkillDetail>>(
+    `/api/dashboard/skills/${encodeURIComponent(skillName)}`,
+    { params: { days } },
+  );
+  return {
+    name: data.name ?? skillName,
+    total_invocations: data.total_invocations ?? 0,
+    last_used_ms: data.last_used_ms ?? null,
+    avg_duration_ms: data.avg_duration_ms ?? null,
+    error_count: data.error_count ?? 0,
+    invocations_by_session: data.invocations_by_session ?? [],
+    recent_invocations: data.recent_invocations ?? [],
+    skill_md: data.skill_md ?? null,
+  };
 }
