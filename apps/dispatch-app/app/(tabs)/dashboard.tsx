@@ -107,6 +107,37 @@ function UsageBar({
   );
 }
 
+/** Estimated usage bar (same visual as UsageBar but shows value instead of %) */
+function EstimatedBar({
+  label,
+  value,
+  pct,
+}: {
+  label: string;
+  value: string;
+  pct: number;
+}) {
+  return (
+    <View style={usageStyles.barRow}>
+      <View style={usageStyles.labelRow}>
+        <Text style={usageStyles.label}>{label}</Text>
+        <Text style={usageStyles.percentage}>{value}</Text>
+      </View>
+      <View style={usageStyles.barTrack}>
+        <View
+          style={[
+            usageStyles.barFill,
+            {
+              width: `${Math.min(100, pct)}%`,
+              backgroundColor: quotaBarColor(pct),
+            },
+          ]}
+        />
+      </View>
+    </View>
+  );
+}
+
 /** Skeleton placeholder for loading state */
 function SkeletonCard({ rows = 3 }: { rows?: number }) {
   const pulseAnim = React.useRef(new Animated.Value(0.3)).current;
@@ -258,14 +289,46 @@ function UsageSection({
     bars.push({ label: "7-Day Sonnet", utilization: quota.seven_day_sonnet.utilization, resetsAt: quota.seven_day_sonnet.resets_at });
   }
 
-  // Extract active block data for fallback display
+  // Extract active block data for estimated bars when quota is unavailable
   const activeBlock = ccu?.active_block as Record<string, unknown> | null;
+  const blockTokens = (activeBlock?.totalTokens as number) ?? 0;
+  const maxTokens = (ccu as Record<string, unknown> | null)?.max_tokens_observed as number ?? 0;
   const blockCost = activeBlock?.costUSD as number | undefined;
   const burnRate = activeBlock?.burnRate as { costPerHour?: number } | null;
   const projection = activeBlock?.projection as { totalCost?: number; remainingMinutes?: number } | null;
   const dailyTotals = ccu?.daily_totals as { totalCost?: number } | undefined;
 
   const hasBlockData = blockCost != null;
+
+  // Build estimated bars from local CCU data
+  const estimatedBars: Array<{ label: string; value: string; pct: number }> = [];
+  if (hasBlockData) {
+    // 5h block: tokens as % of historical max
+    const blockPct = maxTokens > 0 ? Math.min(100, (blockTokens / maxTokens) * 100) : 0;
+    estimatedBars.push({
+      label: "5h Block",
+      value: formatCost(blockCost!),
+      pct: blockPct,
+    });
+    // Burn rate bar: cost/hr scaled (assume $50/hr = 100%)
+    if (burnRate?.costPerHour != null) {
+      const burnPct = Math.min(100, (burnRate.costPerHour / 50) * 100);
+      estimatedBars.push({
+        label: "Burn Rate",
+        value: `${formatCost(burnRate.costPerHour)}/hr`,
+        pct: burnPct,
+      });
+    }
+    // 7-day total: scaled (assume $5000 = 100%)
+    if (dailyTotals?.totalCost != null) {
+      const weekPct = Math.min(100, (dailyTotals.totalCost / 5000) * 100);
+      estimatedBars.push({
+        label: "7-Day",
+        value: formatCost(dailyTotals.totalCost),
+        pct: weekPct,
+      });
+    }
+  }
 
   return (
     <Pressable style={styles.section} onPress={onRefresh}>
@@ -289,21 +352,21 @@ function UsageSection({
               </React.Fragment>
             ))}
           </View>
-        ) : hasBlockData ? (
+        ) : estimatedBars.length > 0 ? (
           <View style={styles.quotaContainer}>
-            {/* Compact approximation row: block cost · burn rate · 7d total */}
-            <View style={styles.approxRow}>
-              <Text style={styles.approxLabel}>~{formatCost(blockCost!)} block</Text>
-              {burnRate?.costPerHour != null && (
-                <Text style={styles.approxLabel}> · {formatCost(burnRate.costPerHour)}/hr</Text>
-              )}
-              {dailyTotals?.totalCost != null && (
-                <Text style={styles.approxLabel}> · {formatCost(dailyTotals.totalCost)} 7d</Text>
-              )}
-            </View>
-            <Text style={styles.approxNote}>
-              Estimated from local usage data
+            <Text style={styles.estimateNotice}>
+              Official quota unavailable — estimated from local data
             </Text>
+            {estimatedBars.map((bar, i) => (
+              <React.Fragment key={bar.label}>
+                {i > 0 && <View style={styles.quotaSeparator} />}
+                <EstimatedBar
+                  label={bar.label}
+                  value={bar.value}
+                  pct={bar.pct}
+                />
+              </React.Fragment>
+            ))}
           </View>
         ) : (
           <View style={styles.row}>
@@ -623,22 +686,12 @@ const styles = StyleSheet.create({
     marginHorizontal: 16,
     marginVertical: 2,
   },
-  approxRow: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    paddingHorizontal: 16,
-    paddingTop: 10,
-    paddingBottom: 2,
-  },
-  approxLabel: {
-    color: "#a1a1aa",
-    fontSize: 13,
-  },
-  approxNote: {
+  estimateNotice: {
     color: "#52525b",
     fontSize: 11,
     paddingHorizontal: 16,
-    paddingBottom: 10,
+    paddingTop: 8,
+    paddingBottom: 4,
   },
 
   // Warning banner
