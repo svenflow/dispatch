@@ -678,7 +678,7 @@ class SDKSession:
             permission_mode=perm_mode,
             setting_sources=["project"],  # Load CLAUDE.md + skills from cwd
             model=self.model,
-            fallback_model="sonnet",  # Only triggers on 529 (server overloaded), not normal usage
+            fallback_model=None if self.model == "sonnet" else "sonnet",  # Only triggers on 529; skip if already on sonnet
             max_turns=turn_limit,
             max_buffer_size=10 * 1024 * 1024,  # 10MB - prevents crash on large Task outputs
             hooks={
