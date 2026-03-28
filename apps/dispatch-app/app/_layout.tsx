@@ -100,6 +100,7 @@ function RootLayoutNav() {
           <Stack.Screen name="dashboard/tasks" options={{ headerShown: true, title: "Tasks & Reminders", headerBackTitle: "Dashboard" }} />
           <Stack.Screen name="dashboard/skills" options={{ headerShown: true, title: "Skills", headerBackTitle: "Dashboard" }} />
           <Stack.Screen name="dashboard/events" options={{ headerShown: true, title: "Events", headerBackTitle: "Dashboard" }} />
+          <Stack.Screen name="dashboard/task-detail" options={{ headerShown: true, title: "Task Detail", headerBackTitle: "Tasks" }} />
           <Stack.Screen name="image-viewer" options={{ presentation: "modal" }} />
           <Stack.Screen name="modal" options={{ presentation: "modal" }} />
         </Stack>

@@ -9,7 +9,7 @@ import {
   TextInput,
   View,
 } from "react-native";
-import { Stack } from "expo-router";
+import { Stack, router } from "expo-router";
 import { getDashboardTasks } from "@/src/api/dashboard";
 import type { DashboardReminder } from "@/src/api/types";
 import { relativeTime } from "@/src/utils/time";
@@ -197,10 +197,25 @@ export default function TasksDetailScreen() {
     ({ item }: { item: DashboardReminder }) => {
       const nextFireText = formatNextFire(item.next_fire);
       const isOverdue = item.next_fire && new Date(item.next_fire).getTime() < Date.now();
-      const isOneShot = !item.schedule.match(/^[\d*\/,-]+\s/); // not cron-like
-
       return (
-        <View style={styles.reminderRow}>
+        <Pressable
+          style={styles.reminderRow}
+          onPress={() =>
+            router.push({
+              pathname: "/dashboard/task-detail",
+              params: {
+                id: item.id,
+                title: item.title,
+                schedule: item.schedule,
+                status: item.status,
+                next_fire: item.next_fire ?? "",
+                last_fired: item.last_fired ?? "",
+                fired_count: String(item.fired_count),
+                last_error: item.last_error ?? "",
+              },
+            } as never)
+          }
+        >
           {/* Title + status dot */}
           <View style={styles.titleRow}>
             <View
@@ -251,7 +266,7 @@ export default function TasksDetailScreen() {
               {item.last_error}
             </Text>
           )}
-        </View>
+        </Pressable>
       );
     },
     [],
