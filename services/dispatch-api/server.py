@@ -2451,6 +2451,53 @@ async def dashboard_health():
     return result
 
 
+@app.get("/api/dashboard/events-histogram")
+async def dashboard_events_histogram(hours: int = 24):
+    """Hourly event counts for the last N hours (default 24).
+
+    Returns an array of {hour: ISO8601, count: int} buckets, oldest first.
+    Used for the dashboard area chart.
+    """
+    hours = min(hours, 168)  # cap at 7 days
+    try:
+        conn = get_bus_db()
+        now_ms = int(time.time() * 1000)
+        start_ms = now_ms - (hours * 3600_000)
+
+        # Single query: group by hour bucket
+        rows = conn.execute(
+            """
+            SELECT (timestamp / 3600000) AS hour_bucket, COUNT(*) AS cnt
+            FROM records
+            WHERE timestamp > ?
+            GROUP BY hour_bucket
+            ORDER BY hour_bucket
+            """,
+            (start_ms,),
+        ).fetchall()
+        conn.close()
+
+        # Build a dict of hour_bucket → count
+        counts = {r[0]: r[1] for r in rows}
+
+        # Fill in all hours (including zeros)
+        from datetime import timezone, timedelta
+        now_hour = int(now_ms / 3600_000)
+        start_hour = now_hour - hours + 1
+        buckets = []
+        for h in range(start_hour, now_hour + 1):
+            ts = datetime.fromtimestamp(h * 3600, tz=timezone.utc)
+            buckets.append({
+                "hour": ts.isoformat(),
+                "count": counts.get(h, 0),
+            })
+
+        return {"buckets": buckets, "hours": hours}
+    except Exception as e:
+        logger.error(f"Events histogram error: {e}")
+        return {"buckets": [], "hours": hours}
+
+
 @app.get("/api/dashboard/events")
 async def dashboard_events(
     limit: int = 100,

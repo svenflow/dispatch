@@ -96,10 +96,10 @@ function RootLayoutNav() {
           <Stack.Screen name="chat/[id]" options={{ headerShown: true }} />
           <Stack.Screen name="agents/[id]" options={{ headerShown: true }} />
           <Stack.Screen name="logs" options={{ headerShown: true, title: "Logs" }} />
-          <Stack.Screen name="dashboard/sessions" options={{ headerShown: true, title: "Sessions" }} />
-          <Stack.Screen name="dashboard/tasks" options={{ headerShown: true, title: "Tasks & Reminders" }} />
-          <Stack.Screen name="dashboard/skills" options={{ headerShown: true, title: "Skills" }} />
-          <Stack.Screen name="dashboard/events" options={{ headerShown: true, title: "Events" }} />
+          <Stack.Screen name="dashboard/sessions" options={{ headerShown: true, title: "Sessions", headerBackTitle: "Dashboard" }} />
+          <Stack.Screen name="dashboard/tasks" options={{ headerShown: true, title: "Tasks & Reminders", headerBackTitle: "Dashboard" }} />
+          <Stack.Screen name="dashboard/skills" options={{ headerShown: true, title: "Skills", headerBackTitle: "Dashboard" }} />
+          <Stack.Screen name="dashboard/events" options={{ headerShown: true, title: "Events", headerBackTitle: "Dashboard" }} />
           <Stack.Screen name="image-viewer" options={{ presentation: "modal" }} />
           <Stack.Screen name="modal" options={{ presentation: "modal" }} />
         </Stack>

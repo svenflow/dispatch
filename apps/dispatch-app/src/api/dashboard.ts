@@ -111,6 +111,15 @@ export async function getDashboardEvents(
   return withDefaults(DEFAULT_EVENTS_RESPONSE, data);
 }
 
+/** Fetch hourly event histogram for the last 24h */
+export async function getDashboardHistogram(): Promise<{ buckets: Array<{ hour: string; count: number }>; hours: number }> {
+  const data = await apiRequest<{ buckets: Array<{ hour: string; count: number }>; hours: number }>(
+    "/api/dashboard/events-histogram",
+    { params: { hours: 24 } },
+  );
+  return { buckets: data.buckets ?? [], hours: data.hours ?? 24 };
+}
+
 /** Fetch skills list */
 export async function getDashboardSkills(): Promise<DashboardSkillsResponse> {
   const data = await apiRequest<Partial<DashboardSkillsResponse>>(

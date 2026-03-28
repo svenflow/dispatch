@@ -16,6 +16,10 @@ import { relativeTime } from "@/src/utils/time";
 
 const Separator = () => <View style={styles.separator} />;
 
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
 function statusColor(status: string): string {
   switch (status) {
     case "healthy":
@@ -28,6 +32,119 @@ function statusColor(status: string): string {
       return "#71717a";
   }
 }
+
+/** Convert a cron-style schedule string to human-readable text. */
+function humanSchedule(schedule: string): string {
+  const parts = schedule.trim().split(/\s+/);
+  if (parts.length < 5) {
+    // Not a standard cron — return as-is (could be a one-shot date)
+    if (schedule.match(/^\d{4}-\d{2}-\d{2}/)) {
+      try {
+        const d = new Date(schedule);
+        return d.toLocaleDateString("en-US", {
+          month: "short",
+          day: "numeric",
+          year: "numeric",
+          hour: "numeric",
+          minute: "2-digit",
+        });
+      } catch {
+        return schedule;
+      }
+    }
+    return schedule;
+  }
+
+  const [min, hour, dom, mon, dow] = parts;
+  const isEveryMin = min === "*";
+  const isEveryHour = hour === "*";
+  const isEveryDom = dom === "*";
+  const isEveryMon = mon === "*";
+  const isEveryDow = dow === "*";
+
+  // Format time
+  const formatTime = (h: string, m: string): string => {
+    if (h === "*" && m === "*") return "";
+    const hr = parseInt(h, 10);
+    const mn = parseInt(m, 10);
+    if (isNaN(hr)) return "";
+    const ampm = hr >= 12 ? "PM" : "AM";
+    const h12 = hr === 0 ? 12 : hr > 12 ? hr - 12 : hr;
+    return isNaN(mn) ? `${h12} ${ampm}` : `${h12}:${mn.toString().padStart(2, "0")} ${ampm}`;
+  };
+
+  const dayNames: Record<string, string> = {
+    "0": "Sun", "1": "Mon", "2": "Tue", "3": "Wed",
+    "4": "Thu", "5": "Fri", "6": "Sat", "7": "Sun",
+  };
+
+  const timeStr = formatTime(hour, min);
+
+  // Every minute
+  if (isEveryMin && isEveryHour && isEveryDom && isEveryMon && isEveryDow) {
+    return "Every minute";
+  }
+
+  // Every N minutes
+  if (min.startsWith("*/") && isEveryHour) {
+    return `Every ${min.slice(2)} min`;
+  }
+
+  // Every hour at :MM
+  if (!isEveryMin && isEveryHour && isEveryDom && isEveryMon && isEveryDow) {
+    return `Every hour at :${min.padStart(2, "0")}`;
+  }
+
+  // Daily at HH:MM
+  if (!isEveryHour && isEveryDom && isEveryMon && isEveryDow) {
+    return timeStr ? `Daily at ${timeStr}` : `Daily`;
+  }
+
+  // Weekly on specific days
+  if (!isEveryDow && isEveryDom && isEveryMon) {
+    const days = dow.split(",").map((d) => dayNames[d] || d).join(", ");
+    return timeStr ? `${days} at ${timeStr}` : days;
+  }
+
+  // Monthly on specific day
+  if (!isEveryDom && isEveryMon && isEveryDow) {
+    const ordinal = dom === "1" ? "1st" : dom === "2" ? "2nd" : dom === "3" ? "3rd" : `${dom}th`;
+    return timeStr ? `Monthly on the ${ordinal} at ${timeStr}` : `Monthly on the ${ordinal}`;
+  }
+
+  // Fallback — show the cron but more compact
+  return schedule;
+}
+
+/** Format next fire time prominently */
+function formatNextFire(nextFire: string | null): string {
+  if (!nextFire) return "Not scheduled";
+  const diff = new Date(nextFire).getTime() - Date.now();
+  if (diff < 0) return "Overdue";
+  if (diff < 60_000) return "In < 1 min";
+  if (diff < 3600_000) return `In ${Math.round(diff / 60_000)} min`;
+  if (diff < 86_400_000) {
+    const hours = Math.floor(diff / 3600_000);
+    const mins = Math.round((diff % 3600_000) / 60_000);
+    return mins > 0 ? `In ${hours}h ${mins}m` : `In ${hours}h`;
+  }
+  // Show date for >24h away
+  try {
+    const d = new Date(nextFire);
+    return d.toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  } catch {
+    return relativeTime(nextFire);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
 
 export default function TasksDetailScreen() {
   const [reminders, setReminders] = useState<DashboardReminder[]>([]);
@@ -57,21 +174,34 @@ export default function TasksDetailScreen() {
     return () => { mountedRef.current = false; };
   }, [load]);
 
-  const filteredReminders = useMemo(() => {
-    if (!searchQuery.trim()) return reminders;
+  // Sort by next_fire (soonest first), null/missing at end
+  const sortedReminders = useMemo(() => {
+    const sorted = [...reminders].sort((a, b) => {
+      if (!a.next_fire && !b.next_fire) return 0;
+      if (!a.next_fire) return 1;
+      if (!b.next_fire) return -1;
+      return new Date(a.next_fire).getTime() - new Date(b.next_fire).getTime();
+    });
+    if (!searchQuery.trim()) return sorted;
     const q = searchQuery.trim().toLowerCase();
-    return reminders.filter(
+    return sorted.filter(
       (r) =>
         r.title.toLowerCase().includes(q) ||
         r.schedule.toLowerCase().includes(q) ||
+        humanSchedule(r.schedule).toLowerCase().includes(q) ||
         r.status.toLowerCase().includes(q),
     );
   }, [reminders, searchQuery]);
 
   const renderReminder = useCallback(
-    ({ item }: { item: DashboardReminder }) => (
-      <View style={styles.reminderRow}>
-        <View style={styles.reminderLeft}>
+    ({ item }: { item: DashboardReminder }) => {
+      const nextFireText = formatNextFire(item.next_fire);
+      const isOverdue = item.next_fire && new Date(item.next_fire).getTime() < Date.now();
+      const isOneShot = !item.schedule.match(/^[\d*\/,-]+\s/); // not cron-like
+
+      return (
+        <View style={styles.reminderRow}>
+          {/* Title + status dot */}
           <View style={styles.titleRow}>
             <View
               style={[
@@ -83,49 +213,72 @@ export default function TasksDetailScreen() {
               {item.title}
             </Text>
           </View>
-          <Text style={styles.schedule}>{item.schedule}</Text>
-          <View style={styles.metaRow}>
-            {item.next_fire && (
-              <Text style={styles.metaText}>
-                Next: {relativeTime(item.next_fire)}
-              </Text>
-            )}
-            {item.last_fired && (
-              <Text style={styles.metaText}>
-                Last: {relativeTime(item.last_fired)}
-              </Text>
-            )}
-            <Text style={styles.metaText}>
-              Fired: {item.fired_count}×
+
+          {/* Next fire — prominent */}
+          <View style={styles.nextFireRow}>
+            <Text
+              style={[
+                styles.nextFireText,
+                isOverdue && styles.nextFireOverdue,
+              ]}
+            >
+              {nextFireText}
+            </Text>
+            <Text style={styles.scheduleText}>
+              {humanSchedule(item.schedule)}
             </Text>
           </View>
+
+          {/* Meta: last fired + fired count */}
+          {(item.last_fired || item.fired_count > 0) && (
+            <View style={styles.metaRow}>
+              {item.last_fired && (
+                <Text style={styles.metaText}>
+                  Last: {relativeTime(item.last_fired)}
+                </Text>
+              )}
+              {item.fired_count > 0 && (
+                <Text style={styles.metaText}>
+                  {item.fired_count}× fired
+                </Text>
+              )}
+            </View>
+          )}
+
+          {/* Error line */}
           {item.last_error && (
             <Text style={styles.errorLine} numberOfLines={2}>
               {item.last_error}
             </Text>
           )}
         </View>
-      </View>
-    ),
+      );
+    },
     [],
   );
 
   const ListHeader = useCallback(
     () => (
-      <View style={styles.searchContainer}>
-        <TextInput
-          style={styles.searchInput}
-          value={searchQuery}
-          onChangeText={setSearchQuery}
-          placeholder="Search reminders..."
-          placeholderTextColor="#52525b"
-          autoCapitalize="none"
-          autoCorrect={false}
-          clearButtonMode="while-editing"
-        />
+      <View>
+        <View style={styles.searchContainer}>
+          <TextInput
+            style={styles.searchInput}
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            placeholder="Search reminders..."
+            placeholderTextColor="#52525b"
+            autoCapitalize="none"
+            autoCorrect={false}
+            clearButtonMode="while-editing"
+          />
+        </View>
+        <Text style={styles.countHeader}>
+          {sortedReminders.length} reminder{sortedReminders.length !== 1 ? "s" : ""}
+          {searchQuery ? ` matching "${searchQuery}"` : ""} · sorted by next fire
+        </Text>
       </View>
     ),
-    [searchQuery],
+    [searchQuery, sortedReminders.length],
   );
 
   return (
@@ -151,7 +304,7 @@ export default function TasksDetailScreen() {
               </View>
             )}
             <FlatList
-              data={filteredReminders}
+              data={sortedReminders}
               keyExtractor={(r) => r.id}
               renderItem={renderReminder}
               ItemSeparatorComponent={Separator}
@@ -193,7 +346,7 @@ const styles = StyleSheet.create({
   searchContainer: {
     paddingHorizontal: 16,
     paddingTop: 12,
-    paddingBottom: 8,
+    paddingBottom: 4,
   },
   searchInput: {
     backgroundColor: "#27272a",
@@ -205,12 +358,17 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#3f3f46",
   },
+  countHeader: {
+    color: "#52525b",
+    fontSize: 13,
+    fontWeight: "600",
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+  },
   reminderRow: {
     paddingHorizontal: 16,
     paddingVertical: 14,
-  },
-  reminderLeft: {
-    gap: 4,
+    gap: 6,
   },
   titleRow: {
     flexDirection: "row",
@@ -228,17 +386,28 @@ const styles = StyleSheet.create({
     fontWeight: "500",
     flex: 1,
   },
-  schedule: {
-    color: "#71717a",
-    fontSize: 13,
-    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+  nextFireRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
     marginLeft: 16,
+  },
+  nextFireText: {
+    color: "#3b82f6",
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  nextFireOverdue: {
+    color: "#ef4444",
+  },
+  scheduleText: {
+    color: "#71717a",
+    fontSize: 12,
   },
   metaRow: {
     flexDirection: "row",
     gap: 12,
     marginLeft: 16,
-    marginTop: 2,
   },
   metaText: {
     color: "#52525b",
@@ -248,7 +417,6 @@ const styles = StyleSheet.create({
     color: "#ef4444",
     fontSize: 12,
     marginLeft: 16,
-    marginTop: 2,
   },
   separator: {
     height: StyleSheet.hairlineWidth,

@@ -1,8 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppState, type AppStateStatus } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
-import { getDashboardHealth, getDashboardCcu } from "../api/dashboard";
+import { getDashboardHealth, getDashboardCcu, getDashboardHistogram } from "../api/dashboard";
 import type { DashboardHealth, DashboardCcuResponse } from "../api/types";
+
+export interface HistogramBucket {
+  hour: string;
+  count: number;
+}
 
 const HEALTH_POLL_INTERVAL = 10_000; // 10 seconds
 const CCU_POLL_INTERVAL = 60_000; // 60 seconds
@@ -11,6 +16,7 @@ const DEBOUNCE_MS = 3_000; // skip fetch if last was <3s ago
 interface UseDashboardReturn {
   health: DashboardHealth | null;
   ccu: DashboardCcuResponse | null;
+  histogram: HistogramBucket[];
   isLoading: boolean;
   ccuLoading: boolean;
   error: string | null;
@@ -32,6 +38,7 @@ interface UseDashboardReturn {
 export function useDashboard(): UseDashboardReturn {
   const [health, setHealth] = useState<DashboardHealth | null>(null);
   const [ccu, setCcu] = useState<DashboardCcuResponse | null>(null);
+  const [histogram, setHistogram] = useState<HistogramBucket[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [ccuLoading, setCcuLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -53,9 +60,13 @@ export function useDashboard(): UseDashboardReturn {
     if (!force && now - lastHealthFetchRef.current < DEBOUNCE_MS) return;
 
     try {
-      const healthData = await getDashboardHealth();
+      const [healthData, histData] = await Promise.all([
+        getDashboardHealth(),
+        getDashboardHistogram(),
+      ]);
       if (!mountedRef.current) return;
       setHealth(healthData);
+      setHistogram(histData.buckets);
       setError(null);
       setLastUpdated(new Date());
       lastHealthFetchRef.current = Date.now();
@@ -192,5 +203,5 @@ export function useDashboard(): UseDashboardReturn {
     };
   }, []);
 
-  return { health, ccu, isLoading, ccuLoading, error, lastUpdated, refresh, refreshCcu };
+  return { health, ccu, histogram, isLoading, ccuLoading, error, lastUpdated, refresh, refreshCcu };
 }

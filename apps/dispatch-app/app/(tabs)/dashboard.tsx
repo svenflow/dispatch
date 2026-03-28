@@ -12,6 +12,7 @@ import {
 } from "react-native";
 import { router } from "expo-router";
 import { useDashboard } from "@/src/hooks/useDashboard";
+import type { HistogramBucket } from "@/src/hooks/useDashboard";
 import type { DashboardHealth, DashboardCcuResponse } from "@/src/api/types";
 
 // ---------------------------------------------------------------------------
@@ -216,6 +217,95 @@ function InfoRow({ label, value }: { label: string; value: string }) {
 }
 
 // ---------------------------------------------------------------------------
+// Mini area chart (View-based, no external deps)
+// ---------------------------------------------------------------------------
+
+const CHART_HEIGHT = 48;
+const CHART_BAR_GAP = 1;
+
+function MiniAreaChart({ buckets }: { buckets: HistogramBucket[] }) {
+  const max = Math.max(1, ...buckets.map((b) => b.count));
+  const total = buckets.reduce((s, b) => s + b.count, 0);
+
+  if (buckets.length === 0) return null;
+
+  return (
+    <View style={chartStyles.container}>
+      <View style={chartStyles.labelRow}>
+        <Text style={chartStyles.title}>Events (24h)</Text>
+        <Text style={chartStyles.total}>{total.toLocaleString()}</Text>
+      </View>
+      <View style={chartStyles.chart}>
+        {buckets.map((b, i) => {
+          const h = Math.max(1, (b.count / max) * CHART_HEIGHT);
+          const isRecent = i >= buckets.length - 1;
+          return (
+            <View
+              key={i}
+              style={[
+                chartStyles.bar,
+                {
+                  height: h,
+                  backgroundColor: isRecent ? "#3b82f6" : "#2563eb80",
+                  marginRight: i < buckets.length - 1 ? CHART_BAR_GAP : 0,
+                },
+              ]}
+            />
+          );
+        })}
+      </View>
+      <View style={chartStyles.xLabels}>
+        <Text style={chartStyles.xLabel}>24h ago</Text>
+        <Text style={chartStyles.xLabel}>12h</Text>
+        <Text style={chartStyles.xLabel}>Now</Text>
+      </View>
+    </View>
+  );
+}
+
+const chartStyles = StyleSheet.create({
+  container: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  labelRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  title: {
+    color: "#a1a1aa",
+    fontSize: 13,
+    fontWeight: "500",
+  },
+  total: {
+    color: "#fafafa",
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  chart: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    height: CHART_HEIGHT,
+  },
+  bar: {
+    flex: 1,
+    borderRadius: 1.5,
+    minWidth: 2,
+  },
+  xLabels: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginTop: 4,
+  },
+  xLabel: {
+    color: "#52525b",
+    fontSize: 10,
+  },
+});
+
+// ---------------------------------------------------------------------------
 // Section renderers (memoized)
 // ---------------------------------------------------------------------------
 
@@ -228,7 +318,13 @@ function DaemonWarningBanner({ running }: { running: boolean }) {
   );
 }
 
-function SystemStatusSection({ health }: { health: DashboardHealth }) {
+function SystemStatusSection({
+  health,
+  histogram,
+}: {
+  health: DashboardHealth;
+  histogram: HistogramBucket[];
+}) {
   const statusColor = healthColor(health.health_status);
   return (
     <View style={styles.section}>
@@ -247,11 +343,12 @@ function SystemStatusSection({ health }: { health: DashboardHealth }) {
         </View>
         <View style={styles.separator} />
         <InfoRow label="Uptime" value={formatUptime(health.uptime_seconds)} />
-        <View style={styles.separator} />
-        <InfoRow
-          label="Events / Hour"
-          value={`${health.events_last_hour}`}
-        />
+        {histogram.length > 0 && (
+          <>
+            <View style={styles.separator} />
+            <MiniAreaChart buckets={histogram} />
+          </>
+        )}
       </View>
     </View>
   );
@@ -445,7 +542,7 @@ function SystemSection() {
 // ---------------------------------------------------------------------------
 
 export default function DashboardScreen() {
-  const { health, ccu, isLoading, ccuLoading, error, lastUpdated, refresh, refreshCcu } =
+  const { health, ccu, histogram, isLoading, ccuLoading, error, lastUpdated, refresh, refreshCcu } =
     useDashboard();
 
   // First load — no cached data yet
@@ -511,7 +608,7 @@ export default function DashboardScreen() {
         {health && <DaemonWarningBanner running={health.daemon_running} />}
 
         {/* Main sections */}
-        {health && <SystemStatusSection health={health} />}
+        {health && <SystemStatusSection health={health} histogram={histogram} />}
         <UsageSection ccu={ccu} loading={ccuLoading} onRefresh={refreshCcu} />
         {health && (
           <SessionsSection count={health.active_sessions} />
