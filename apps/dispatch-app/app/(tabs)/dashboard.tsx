@@ -231,6 +231,13 @@ function SystemStatusSection({ health }: { health: DashboardHealth }) {
   );
 }
 
+function formatCost(usd: number): string {
+  if (usd >= 1000) return `$${(usd / 1000).toFixed(1)}k`;
+  if (usd >= 100) return `$${Math.round(usd)}`;
+  if (usd >= 10) return `$${usd.toFixed(1)}`;
+  return `$${usd.toFixed(2)}`;
+}
+
 function UsageSection({
   ccu,
   loading,
@@ -256,6 +263,15 @@ function UsageSection({
     bars.push({ label: "7-Day Sonnet", utilization: quota.seven_day_sonnet.utilization, resetsAt: quota.seven_day_sonnet.resets_at });
   }
 
+  // Extract active block data for fallback display
+  const activeBlock = ccu?.active_block as Record<string, unknown> | null;
+  const blockCost = activeBlock?.costUSD as number | undefined;
+  const burnRate = activeBlock?.burnRate as { costPerHour?: number } | null;
+  const projection = activeBlock?.projection as { totalCost?: number; remainingMinutes?: number } | null;
+  const dailyTotals = ccu?.daily_totals as { totalCost?: number } | undefined;
+
+  const hasBlockData = blockCost != null;
+
   return (
     <Pressable style={styles.section} onPress={onRefresh}>
       <View style={styles.sectionHeaderRow}>
@@ -277,6 +293,63 @@ function UsageSection({
                 />
               </React.Fragment>
             ))}
+          </View>
+        ) : hasBlockData ? (
+          <View style={styles.quotaContainer}>
+            {/* Current 5h block cost */}
+            <View style={styles.row}>
+              <Text style={styles.rowLabel}>Current Block</Text>
+              <Text style={styles.rowValue}>{formatCost(blockCost!)}</Text>
+            </View>
+            {/* Burn rate */}
+            {burnRate?.costPerHour != null && (
+              <>
+                <View style={styles.separator} />
+                <View style={styles.row}>
+                  <Text style={styles.rowLabel}>Burn Rate</Text>
+                  <Text style={styles.rowValue}>
+                    {formatCost(burnRate.costPerHour)}/hr
+                  </Text>
+                </View>
+              </>
+            )}
+            {/* Projected block cost */}
+            {projection?.totalCost != null && (
+              <>
+                <View style={styles.separator} />
+                <View style={styles.row}>
+                  <Text style={styles.rowLabel}>Block Projection</Text>
+                  <Text style={styles.rowValue}>
+                    {formatCost(projection.totalCost)}
+                    {projection.remainingMinutes != null &&
+                      ` · ${projection.remainingMinutes}m left`}
+                  </Text>
+                </View>
+              </>
+            )}
+            {/* 7-day rolling cost */}
+            {dailyTotals?.totalCost != null && (
+              <>
+                <View style={styles.separator} />
+                <View style={styles.row}>
+                  <Text style={styles.rowLabel}>7-Day Total</Text>
+                  <Text style={styles.rowValue}>
+                    {formatCost(dailyTotals.totalCost)}
+                  </Text>
+                </View>
+              </>
+            )}
+            {/* Quota error notice */}
+            {ccu?._quota_error && (
+              <>
+                <View style={styles.separator} />
+                <View style={styles.row}>
+                  <Text style={[styles.rowValueMuted, { fontSize: 12 }]}>
+                    Quota bars unavailable (rate limited)
+                  </Text>
+                </View>
+              </>
+            )}
           </View>
         ) : (
           <View style={styles.row}>
