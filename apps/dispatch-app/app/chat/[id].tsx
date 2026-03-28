@@ -185,7 +185,7 @@ export default function ChatDetailScreen() {
   const handleRestartSession = useCallback(async () => {
     const confirmed = await showDestructiveConfirm(
       "Restart Session",
-      "Restart the Claude session? This will clear the conversation context.",
+      "Restart the Claude session? It will pick up context from the conversation history.",
       "Restart",
     );
     if (!confirmed) return;
