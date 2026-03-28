@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Alert, Animated, Pressable, Share, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Alert, Animated, Platform, Pressable, Share, StyleSheet, Text, type TextLayoutEventData, type NativeSyntheticEvent, View } from "react-native";
 import { Image } from "expo-image";
 import { useRouter } from "expo-router";
 import * as Clipboard from "expo-clipboard";
@@ -14,6 +14,11 @@ import { PulsingDots } from "./PulsingDots";
 import { SimpleMarkdown } from "./SimpleMarkdown";
 
 const URL_REGEX = /https?:\/\/[^\s<>\"'\])},]+/gi;
+
+// Horizontal padding inside the bubble (must match styles.bubble.paddingHorizontal)
+const BUBBLE_PADDING_H = 12;
+// Extra width buffer for rounding, borders, and inline formatting
+const BUBBLE_WIDTH_BUFFER = 4;
 
 
 /** Parse text into segments of plain text and URLs */
@@ -49,17 +54,19 @@ function LinkedText({
   text,
   style,
   linkColor,
+  onTextLayout,
 }: {
   text: string;
   style: any;
   linkColor: string;
+  onTextLayout?: (e: NativeSyntheticEvent<TextLayoutEventData>) => void;
 }) {
   const segments = parseLinks(text);
   if (segments.length === 1 && segments[0].type === "text") {
-    return <Text style={style}>{text}</Text>;
+    return <Text style={style} onTextLayout={onTextLayout}>{text}</Text>;
   }
   return (
-    <Text style={style}>
+    <Text style={style} onTextLayout={onTextLayout}>
       {segments.map((seg, i) =>
         seg.type === "link" ? (
           <Text
@@ -153,6 +160,44 @@ export function MessageBubble({ message, audioState, onRetry, onLongPress, showD
   const [showTimestamp, setShowTimestamp] = useState(false);
   const [isGeneratingAudio, setIsGeneratingAudio] = useState(false);
   const [isSavingImage, setIsSavingImage] = useState(false);
+
+  // -- Shrink-wrap: measure text line widths to compute tightest bubble width --
+  // Only for text-only messages (no images/video/audio attachments).
+  const hasMedia = !!(imageUrl || videoUrl || localImageUri || audioUrl);
+  const [measuredBubbleWidth, setMeasuredBubbleWidth] = useState<number | undefined>(undefined);
+  const maxLineWidthRef = useRef(0);
+  // Reset measurement when content changes
+  const prevContentRef = useRef(content);
+  if (prevContentRef.current !== content) {
+    prevContentRef.current = content;
+    maxLineWidthRef.current = 0;
+    setMeasuredBubbleWidth(undefined);
+  }
+
+  /** Called by text components (LinkedText / SimpleMarkdown) with the max line
+   *  width from each text block. We track the overall max across all blocks. */
+  const handleMaxLineWidth = useCallback((lineWidth: number) => {
+    if (hasMedia) return; // Don't shrink-wrap media messages
+    if (lineWidth > maxLineWidthRef.current) {
+      maxLineWidthRef.current = lineWidth;
+    }
+    const newWidth = Math.ceil(maxLineWidthRef.current) + BUBBLE_PADDING_H * 2 + BUBBLE_WIDTH_BUFFER;
+    if (measuredBubbleWidth === undefined || Math.abs(newWidth - measuredBubbleWidth) > 2) {
+      setMeasuredBubbleWidth(newWidth);
+    }
+  }, [hasMedia, measuredBubbleWidth]);
+
+  /** onTextLayout handler for user messages (LinkedText) */
+  const handleUserTextLayout = useCallback((e: NativeSyntheticEvent<TextLayoutEventData>) => {
+    if (hasMedia) return;
+    const lines = e.nativeEvent.lines;
+    if (lines.length === 0) return;
+    let max = 0;
+    for (const line of lines) {
+      if (line.width > max) max = line.width;
+    }
+    handleMaxLineWidth(max);
+  }, [hasMedia, handleMaxLineWidth]);
 
   const handleSaveImage = useCallback(async () => {
     if (!imageSource) return;
@@ -285,7 +330,12 @@ export function MessageBubble({ message, audioState, onRetry, onLongPress, showD
         },
       ]}
     >
-      <View style={[styles.bubbleRow, isUser && styles.bubbleRowUser, !isUser && displayText && displayText.includes("\n") && styles.bubbleRowMultiLine]}>
+      <View style={[
+        styles.bubbleRow,
+        isUser && styles.bubbleRowUser,
+        // Shrink-wrap: apply measured width if available (text-only messages)
+        !hasMedia && measuredBubbleWidth !== undefined && { width: measuredBubbleWidth, maxWidth: isUser ? "75%" : "90%" },
+      ]}>
         {sendFailed && (
           <Pressable
             onPress={() => onRetry?.(message.id)}
@@ -304,7 +354,6 @@ export function MessageBubble({ message, audioState, onRetry, onLongPress, showD
           style={[
             styles.bubble,
             isUser ? styles.bubbleUser : styles.bubbleAssistant,
-            !isUser && displayText && displayText.includes("\n") && styles.bubbleMultiLine,
             isFailed && styles.bubbleGenerationFailed,
             isPlayingThis && styles.bubblePlaying,
             (imageSource || videoSource) && !displayText && styles.bubbleMediaOnly,
@@ -356,9 +405,10 @@ export function MessageBubble({ message, audioState, onRetry, onLongPress, showD
                 text={displayText}
                 style={[styles.text, styles.textUser]}
                 linkColor="#d4e8ff"
+                onTextLayout={handleUserTextLayout}
               />
             ) : (
-              <SimpleMarkdown>{displayText}</SimpleMarkdown>
+              <SimpleMarkdown onMaxLineWidth={handleMaxLineWidth}>{displayText}</SimpleMarkdown>
             )
           ) : null}
           {isLong && (
@@ -537,9 +587,6 @@ const styles = StyleSheet.create({
     flexDirection: "row-reverse",
     maxWidth: "75%",
   },
-  bubbleRowMultiLine: {
-    width: "90%",
-  },
   bubble: {
     flexShrink: 1,
     paddingHorizontal: 12,
@@ -611,9 +658,6 @@ const styles = StyleSheet.create({
   bubbleAssistant: {
     backgroundColor: "#27272a",
     borderBottomLeftRadius: 4,
-  },
-  bubbleMultiLine: {
-    flexGrow: 1,
   },
   bubbleGenerationFailed: {
     borderLeftWidth: 2,

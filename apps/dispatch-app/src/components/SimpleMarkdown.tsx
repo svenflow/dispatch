@@ -14,15 +14,18 @@ const URL_RE = /https?:\/\/[^\s<>"'\])},]+/gi;
 
 interface Props {
   children: string;
+  /** Called with the maximum line width (px) across all text blocks.
+   *  Used by MessageBubble to shrink-wrap the bubble to text content. */
+  onMaxLineWidth?: (width: number) => void;
 }
 
 /** Top-level component: splits text into blocks and renders each. */
-export function SimpleMarkdown({ children }: Props) {
+export function SimpleMarkdown({ children, onMaxLineWidth }: Props) {
   const blocks = parseBlocks(children);
   return (
     <View>
       {blocks.map((block, i) => (
-        <BlockRenderer key={i} block={block} />
+        <BlockRenderer key={i} block={block} onMaxLineWidth={onMaxLineWidth} />
       ))}
     </View>
   );
@@ -135,11 +138,27 @@ function parseBlocks(raw: string): Block[] {
 // Block rendering
 // ---------------------------------------------------------------------------
 
-function BlockRenderer({ block }: { block: Block }) {
+/** Extract max line width from onTextLayout event and report it. */
+function makeTextLayoutHandler(onMaxLineWidth?: (width: number) => void) {
+  if (!onMaxLineWidth) return undefined;
+  return (e: { nativeEvent: { lines: Array<{ width: number }> } }) => {
+    const lines = e.nativeEvent.lines;
+    if (lines.length === 0) return;
+    let max = 0;
+    for (const line of lines) {
+      if (line.width > max) max = line.width;
+    }
+    onMaxLineWidth(max);
+  };
+}
+
+function BlockRenderer({ block, onMaxLineWidth }: { block: Block; onMaxLineWidth?: (width: number) => void }) {
+  const handleTextLayout = makeTextLayoutHandler(onMaxLineWidth);
+
   switch (block.type) {
     case "paragraph":
       return (
-        <Text style={s.paragraph}>
+        <Text style={s.paragraph} onTextLayout={handleTextLayout}>
           <InlineRenderer text={block.text} />
         </Text>
       );
@@ -147,7 +166,7 @@ function BlockRenderer({ block }: { block: Block }) {
       const hs =
         block.level === 1 ? s.h1 : block.level === 2 ? s.h2 : s.h3;
       return (
-        <Text style={hs}>
+        <Text style={hs} onTextLayout={handleTextLayout}>
           <InlineRenderer text={block.text} />
         </Text>
       );
@@ -155,13 +174,13 @@ function BlockRenderer({ block }: { block: Block }) {
     case "code_block":
       return (
         <View style={s.codeBlock}>
-          <Text style={s.codeBlockText}>{block.text}</Text>
+          <Text style={s.codeBlockText} onTextLayout={handleTextLayout}>{block.text}</Text>
         </View>
       );
     case "blockquote":
       return (
         <View style={s.blockquote}>
-          <Text style={s.body}>
+          <Text style={s.body} onTextLayout={handleTextLayout}>
             <InlineRenderer text={block.text} />
           </Text>
         </View>
@@ -174,7 +193,7 @@ function BlockRenderer({ block }: { block: Block }) {
           <Text style={s.listBullet}>
             {block.ordered ? `${block.index}.` : "•"}
           </Text>
-          <Text style={[s.body, s.listText]}>
+          <Text style={[s.body, s.listText]} onTextLayout={handleTextLayout}>
             <InlineRenderer text={block.text} />
           </Text>
         </View>
