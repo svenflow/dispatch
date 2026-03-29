@@ -338,7 +338,9 @@ def load_existing_facts(
 def word_overlap(claim: str, messages_lower: str) -> float:
     """
     Compute word overlap. Stop words filtered to avoid trivial passes.
-    Requires >= 60% of content words from claim to appear in messages.
+    Threshold is 35% — Haiku paraphrases (drop→dropping, db→database) so
+    we use a loose threshold here and rely on Pass B (Sonnet) as the main gate.
+    This only catches complete hallucinations with zero message grounding.
     """
     STOP_WORDS = {
         "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
@@ -874,7 +876,7 @@ def consolidate_contact(
         grounded_facts = []
         for fact in valid_new_facts:
             summary = fact.get("summary", "")
-            if word_overlap(summary, messages_lower) < 0.60:
+            if word_overlap(summary, messages_lower) < 0.35:
                 audit.facts.pre_verify_dropped += 1
                 log(f"[{contact_name}] Pre-verify drop (word overlap): {summary[:60]}", verbose=verbose)
             elif not check_entities(summary, messages_lower):
