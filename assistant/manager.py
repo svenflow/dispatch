@@ -70,6 +70,7 @@ from assistant.bus_helpers import (
     health_check_payload, service_restarted_payload, service_spawned_payload,
     reminder_payload, healme_payload,
     compaction_triggered_payload, message_sent_payload, session_injected_payload,
+    quota_alert_payload,
     produce_read_receipt,
 )
 
@@ -2250,7 +2251,12 @@ class Manager:
                     (chat_id,),
                 ).fetchone()
                 conn.close()
-                if row and row[0] != guid:
+                # Normalize GUIDs for comparison: chat.db stores raw UUIDs,
+                # but the prompt injects p:0/UUID format. Strip the prefix.
+                def _strip_guid_prefix(g: str) -> str:
+                    import re
+                    return re.sub(r'^[ps]:\d+/', '', g)
+                if row and _strip_guid_prefix(row[0]) != _strip_guid_prefix(guid):
                     log.warning(
                         f"IMESSAGE_UI | tapback GUID mismatch for {chat_id}: "
                         f"target={guid} latest={row[0]}, skipping to avoid wrong-message reaction"
@@ -2488,13 +2494,17 @@ class Manager:
             except Exception as e:
                 log.error("QUOTA_CACHE | Failed: %s", e)
 
-            # Step 2: Threshold alerts (80/90/95% → SMS)
+            # Step 2: Threshold alerts (80/90/95% → SMS + bus event)
             try:
                 alerts = check_quota_thresholds(cache_data)
-                if alerts and admin_phone:
-                    lines = [format_quota_alert(a) for a in alerts]
-                    msg = "[SVEN] Usage alert:\n" + "\n".join(lines)
-                    self._send_sms(admin_phone, msg)
+                if alerts:
+                    for alert in alerts:
+                        produce_event(self._producer, "system", "health.quota_alert",
+                            quota_alert_payload(alert), source="health")
+                    if admin_phone:
+                        lines = [format_quota_alert(a) for a in alerts]
+                        msg = "[SVEN] Usage alert:\n" + "\n".join(lines)
+                        self._send_sms(admin_phone, msg)
                     log.warning("QUOTA_ALERT | Sent %d alert(s) to admin", len(alerts))
             except Exception as e:
                 log.error("QUOTA_ALERT | Failed: %s", e)
@@ -4759,6 +4769,14 @@ You have 15 minutes. Work efficiently.
             "rowid": self.last_rowid,
             "session_count": len(self.sessions.sessions),
         }, source="daemon")
+        # Startup bus writability canary (startup-only; mid-run bus health
+        # inferred from absence of produce_event warnings in logs)
+        try:
+            produce_event(self._producer, "system", "health.bus_check",
+                {"status": "ok"}, source="health")
+            log.info("bus: OK")
+        except Exception:
+            log.warning("bus: FAILED — diagnostic events will be log-only")
 
         async with ResourceRegistry() as resource_registry:
             self._resource_registry = resource_registry
