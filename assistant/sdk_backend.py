@@ -41,6 +41,7 @@ from assistant.bus_helpers import (
     session_injected_payload, health_check_payload,
     vision_payload,
     compaction_user_waiting_payload,
+    CheckContext, haiku_verdict_payload, circuit_breaker_payload,
 )
 
 log = logging.getLogger(__name__)
@@ -1706,7 +1707,7 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
             return session
         return None
 
-    async def check_session_health(self, chat_id: str) -> bool:
+    async def check_session_health(self, chat_id: str, ctx: CheckContext | None = None) -> bool:
         """Check if a session is healthy. Auto-restarts if not.
 
         For "stuck" sessions (inject pending >10 min), launches a Haiku investigation
@@ -1739,6 +1740,8 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
                 stuck_minutes = (datetime.now() - session.last_inject_at).total_seconds() / 60 if session.last_inject_at else 0
 
                 async def _investigate_and_maybe_restart(cid: str):
+                    # ctx captured from enclosing check_session_health scope —
+                    # safe because ctx is assigned once and never reassigned
                     try:
                         from assistant.health import check_stuck_haiku
                         is_stuck = await check_stuck_haiku(
@@ -1746,7 +1749,13 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
                             session_name, stuck_minutes,
                         )
                         # Haiku call succeeded — record success for circuit breaker
+                        cb_state_before = self.haiku_circuit_breaker.state
                         self.haiku_circuit_breaker.record_success()
+                        if self.haiku_circuit_breaker.state != cb_state_before:
+                            produce_event(self._producer, "system", "health.circuit_breaker",
+                                circuit_breaker_payload(session_name, cid, "closed",
+                                    self.haiku_circuit_breaker.consecutive_failures, ctx),
+                                source="health")
                         if is_stuck:
                             lifecycle_log.info(
                                 f"STUCK_CONFIRMED | {session_name} | Haiku says stuck, restarting"
@@ -1758,6 +1767,9 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
                                 "reason": reason,
                                 "haiku_verdict": "stuck",
                             }, source="daemon")
+                            produce_event(self._producer, "system", "health.haiku_verdict",
+                                haiku_verdict_payload(ctx, "stuck", session_name, cid, "STUCK", "restart"),
+                                source="health")
                             await self.restart_session(cid)
                         else:
                             lifecycle_log.info(
@@ -1769,13 +1781,22 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
                                 "stuck_minutes": stuck_minutes,
                                 "haiku_verdict": "working",
                             }, source="daemon")
+                            produce_event(self._producer, "system", "health.haiku_verdict",
+                                haiku_verdict_payload(ctx, "stuck", session_name, cid, "WORKING", "none"),
+                                source="health")
                             # Clear recently_healed so future health checks can re-examine
                             self._recently_healed.pop(cid, None)
                     except HaikuCallFailed:
                         # Haiku API failed — feed circuit breaker
+                        cb_state_before = self.haiku_circuit_breaker.state
                         cb_actions = self.haiku_circuit_breaker.record_failure()
                         if "sms_circuit_open" in cb_actions:
                             self._circuit_breaker_actions = cb_actions
+                        if self.haiku_circuit_breaker.state != cb_state_before:
+                            produce_event(self._producer, "system", "health.circuit_breaker",
+                                circuit_breaker_payload(session_name, cid, "opened",
+                                    self.haiku_circuit_breaker.consecutive_failures, ctx),
+                                source="health")
                         log.warning(f"Stuck investigation Haiku call failed for {cid}")
                         # Clear recently_healed on failure so session isn't shielded
                         self._recently_healed.pop(cid, None)
@@ -1843,11 +1864,12 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
         except Exception as e:
             log.error(f"AUTH_ERROR_NOTIFY | Failed to send SMS: {e}")
 
-    async def health_check_all(self) -> Dict[str, bool]:
+    async def health_check_all(self, ctx: CheckContext | None = None) -> Dict[str, bool]:
         """Check all sessions. Auto-restarts unhealthy ones."""
+        ctx = ctx or CheckContext()
         results = {}
         for chat_id in list(self.sessions.keys()):
-            results[chat_id] = await self.check_session_health(chat_id)
+            results[chat_id] = await self.check_session_health(chat_id, ctx=ctx)
 
         # Perf: track active session count
         alive_count = sum(1 for s in self.sessions.values() if s.is_alive())
@@ -1857,11 +1879,12 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
         produce_event(self._producer, "system", "health.check_completed",
             health_check_payload(active_sessions=alive_count,
                                  healthy=sum(results.values()),
-                                 total=len(results)),
+                                 total=len(results),
+                                 check_run_id=ctx.check_run_id),
             source="health")
         return results
 
-    async def fast_health_check(self) -> List[str]:
+    async def fast_health_check(self, ctx: CheckContext | None = None) -> List[str]:
         """Tier 1: Regex-based fatal error detection from transcripts.
 
         Reads recent transcript JSONL entries for each session and checks
@@ -1873,6 +1896,7 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
 
         Runs every 60 seconds.
         """
+        ctx = ctx or CheckContext()
         now = datetime.now()
         restarted = []
 
@@ -2002,10 +2026,12 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
         produce_event(self._producer, "system", "health.fast_check_completed", {
             "sessions_checked": len(self.sessions),
             "restarted": len(restarted),
+            "check_run_id": ctx.check_run_id,
         }, source="health")
         return restarted
 
-    async def deep_health_check(self, skip_chat_ids: set | None = None) -> List[str]:
+    async def deep_health_check(self, skip_chat_ids: set | None = None,
+                                ctx: CheckContext | None = None) -> List[str]:
         """Tier 2: Haiku-based deep analysis of session health.
 
         Sends recent assistant messages to Haiku for classification of
@@ -2014,6 +2040,7 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
 
         Runs every 5 minutes alongside the existing health_check_all().
         """
+        ctx = ctx or CheckContext()
         skip = skip_chat_ids or set()
         now = datetime.now()
         restarted = []
@@ -2047,18 +2074,33 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
             try:
                 diagnosis = await check_deep_haiku(entries, session_name)
                 # Haiku call succeeded — record success for circuit breaker
+                cb_state_before = self.haiku_circuit_breaker.state
                 self.haiku_circuit_breaker.record_success()
+                if self.haiku_circuit_breaker.state != cb_state_before:
+                    produce_event(self._producer, "system", "health.circuit_breaker",
+                        circuit_breaker_payload(session_name, chat_id, "closed",
+                            self.haiku_circuit_breaker.consecutive_failures, ctx),
+                        source="health")
             except HaikuCallFailed:
                 # Haiku API call failed — record failure for circuit breaker
+                cb_state_before = self.haiku_circuit_breaker.state
                 cb_actions = self.haiku_circuit_breaker.record_failure()
                 if "sms_circuit_open" in cb_actions:
                     self._circuit_breaker_actions = cb_actions
+                if self.haiku_circuit_breaker.state != cb_state_before:
+                    produce_event(self._producer, "system", "health.circuit_breaker",
+                        circuit_breaker_payload(session_name, chat_id, "opened",
+                            self.haiku_circuit_breaker.consecutive_failures, ctx),
+                        source="health")
                 continue  # skip this session, move to next
 
             if diagnosis:
                 lifecycle_log.info(
                     f"DEEP_HEAL | {session_name} | {diagnosis} | Restarting"
                 )
+                produce_event(self._producer, "system", "health.haiku_verdict",
+                    haiku_verdict_payload(ctx, "deep", session_name, chat_id, "FATAL", "restart"),
+                    source="health")
 
                 self._recently_healed[chat_id] = now
 
@@ -2073,6 +2115,11 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
                     name=f"deep-heal-{chat_id}",
                 )
                 restarted.append(chat_id)
+            else:
+                # Haiku says healthy — emit verdict for tracking
+                produce_event(self._producer, "system", "health.haiku_verdict",
+                    haiku_verdict_payload(ctx, "deep", session_name, chat_id, "HEALTHY", "none"),
+                    source="health")
 
         lifecycle_log.info(
             f"DEEP_HEAL | SCAN | {checked} sessions checked | "
@@ -2081,6 +2128,7 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
         produce_event(self._producer, "system", "health.deep_check_completed", {
             "sessions_checked": checked,
             "restarted": len(restarted),
+            "check_run_id": ctx.check_run_id,
         }, source="health")
         return restarted
 
@@ -2265,6 +2313,15 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
                 f'  EOF\n'
                 f'  1-4 questions, 2-4 options each. Each has "Other" text input by default (include_other:false to hide).\n'
                 f'  All questions shown at once with Save button. Response: [Widget Response <id>] Q: "..." → answer per question.\n'
+                f'- Send progress tracker (display-only, for multi-step tasks):\n'
+                f'  cat <<\'EOF\' | ~/.claude/skills/dispatch-app/scripts/reply-widget "{bare_chat_id}" progress_tracker\n'
+                f'  {{"title":"...","steps":[{{"label":"Step 1","status":"complete"}},{{"label":"Step 2","status":"in_progress"}},{{"label":"Step 3"}}]}}\n'
+                f'  EOF\n'
+                f'  Statuses: pending (default), in_progress, complete, error. 1-10 steps, optional title/detail.\n'
+                f'- Send map pin (display-only, opens Apple Maps on tap):\n'
+                f'  cat <<\'EOF\' | ~/.claude/skills/dispatch-app/scripts/reply-widget "{bare_chat_id}" map_pin\n'
+                f'  {{"title":"...","pins":[{{"latitude":42.36,"longitude":-71.06,"label":"Boston"}}]}}\n'
+                f'  EOF\n'
             )
         else:
             widget_hint = ""
@@ -2332,6 +2389,8 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
 Chat ID: {chat_id}
 {soul_section}{memory_section}{context_section}
 {action_block}
+
+**IMMEDIATELY read** ~/.claude/skills/sms-assistant/{source}.md for backend-specific rules (tapback, reply commands, etc.) before doing anything else.
 
 **If you need more context** about what you were doing before restart:
 uv run ~/.claude/skills/sms-assistant/scripts/read_transcript.py --session {session_name}
@@ -2472,6 +2531,8 @@ You MUST call the send command above via Bash to actually send messages. Text ou
 
 NEVER escape exclamation marks. Write "Hello!" NOT "Hello\\!". The CLI handles escaping. \\! sends a literal backslash.
 
+**IMMEDIATELY read** ~/.claude/skills/sms-assistant/{source}.md for backend-specific rules (tapback, reply commands, etc.) before doing anything else.
+
 Full guidelines: ~/.claude/skills/sms-assistant/SKILL.md
 """
 
@@ -2531,6 +2592,24 @@ EOF
 - 1-4 questions, 2-4 options each. Each question shows "Other" with text input by default (`"include_other": false` to hide).
 - All questions shown at once with a Save button. No auto-submit.
 - Response arrives as multi-line: `[Widget Response <id>]` then `Q: "..." → answer` per question.
+
+### Display-Only Widgets
+
+**Progress tracker** — show multi-step task progress (no user response):
+```bash
+cat <<'EOF' | ~/.claude/skills/dispatch-app/scripts/reply-widget "{{chat_id}}" progress_tracker
+{{"title":"Deploying update","steps":[{{"label":"Building","status":"complete"}},{{"label":"Testing","status":"in_progress"}},{{"label":"Deploying"}}]}}
+EOF
+```
+Statuses: `pending` (default), `in_progress`, `complete`, `error`. 1-10 steps. Optional `title` and `detail` per step.
+
+**Map pin** — show locations, tap opens Apple Maps:
+```bash
+cat <<'EOF' | ~/.claude/skills/dispatch-app/scripts/reply-widget "{{chat_id}}" map_pin
+{{"title":"Meeting spot","pins":[{{"latitude":42.36,"longitude":-71.06,"label":"Boston Common"}}]}}
+EOF
+```
+1-10 pins. Optional `title`, optional `label` per pin, `zoom` 1-20 (default 14).
 """
 
         # Add markdown rendering note for backends that support it

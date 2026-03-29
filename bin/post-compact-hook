@@ -95,8 +95,14 @@ if [[ -n "$SESSION_NAME" ]]; then
       ;;
   esac
 
+  # Build skill read hint for sms backends
+  SKILL_HINT=""
+  if [[ "$SOURCE" == "imessage" || "$SOURCE" == "signal" ]]; then
+    SKILL_HINT="Re-read ~/.claude/skills/sms-assistant/${SOURCE}.md for backend-specific rules (tapback, reply commands, etc.)."$'\n'
+  fi
+
   "$HOME_DIR/dispatch/bin/claude-assistant" inject-prompt "$SESSION_NAME" --admin \
     "Context was just compacted. If you were mid-task, continue where you left off. If you owe the user a reply, send it now.
-**Important:** You are in a text message session. Communicate back with: $REPLY_CMD" \
+${SKILL_HINT}**Important:** You are in a text message session. Communicate back with: $REPLY_CMD" \
     2>/dev/null &
 fi

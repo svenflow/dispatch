@@ -165,15 +165,31 @@ def get_group_session_name_from_participants(participant_names: list) -> str:
   return "-".join(first_names) if first_names else "group-unknown"
 
 
+def _normalize_imessage_guid(guid: str) -> str:
+  """Normalize a raw iMessage GUID to the p:0/UUID format expected by reply --react.
+
+  chat.db stores GUIDs as bare UUIDs (e.g. 608826CD-88B7-...).
+  The reply CLI and osascript tapback require p:0/UUID format.
+  If the GUID already has a recognized prefix (p:, s:, iMessage;), leave it alone.
+  """
+  if not guid:
+    return guid
+  if guid.startswith(("p:", "s:", "iMessage;")):
+    return guid
+  return f"p:0/{guid}"
+
+
 def _guid_decorations(message_guid: str | None) -> tuple[str, str]:
   """Build GUID line and react hint for injected prompts.
 
   Returns (guid_line, react_hint) — both empty strings if no GUID.
+  The GUID is normalized to p:0/UUID format so reply --react works directly.
   """
   if not message_guid:
     return "", ""
-  guid_line = f"\nMessage-GUID: {message_guid}"
-  react_hint = f'\nTo react: reply --react <emoji> --guid "{message_guid}"'
+  normalized = _normalize_imessage_guid(message_guid)
+  guid_line = f"\nMessage-GUID: {normalized}"
+  react_hint = f'\nTo react: reply --react <emoji> --guid "{normalized}"'
   return guid_line, react_hint
 
 
