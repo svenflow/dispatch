@@ -400,15 +400,30 @@ def check_entities(claim: str, messages_lower: str) -> bool:
     return all(e.lower() in messages_lower for e in entities)
 
 
+def _normalize_apostrophes(text: str) -> str:
+    """Normalize smart quotes/apostrophes to ASCII for substring matching."""
+    return (
+        text
+        .replace('\u2019', "'")   # right single quotation mark
+        .replace('\u2018', "'")   # left single quotation mark
+        .replace('\u201c', '"')   # left double quotation mark
+        .replace('\u201d', '"')   # right double quotation mark
+        .replace('\u2014', '-')   # em dash
+        .replace('\u2013', '-')   # en dash
+    )
+
+
 def verify_supporting_quote(quote: str, messages_text: str, max_chars: int = 200) -> bool:
     """
     Check that supporting quote (capped to 200 chars) appears as substring.
+    Normalizes smart apostrophes/quotes before matching.
     Returns True if found, False if not found or quote is empty.
     """
     if not quote or len(quote.strip()) < 5:
         return False
-    snippet = quote[:max_chars].strip().lower()
-    return snippet in messages_text.lower()
+    snippet = _normalize_apostrophes(quote[:max_chars].strip().lower())
+    haystack = _normalize_apostrophes(messages_text.lower())
+    return snippet in haystack
 
 
 # ── Circuit breaker ────────────────────────────────────────────
