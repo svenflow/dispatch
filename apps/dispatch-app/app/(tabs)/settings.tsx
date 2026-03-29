@@ -21,6 +21,7 @@ if (Platform.OS !== "web") {
     Notifications = require("expo-notifications") as typeof import("expo-notifications");
   } catch { /* native module not available */ }
 }
+import { useRouter } from "expo-router";
 import {
   getApiBaseUrl,
   setApiBaseUrl,
@@ -145,6 +146,7 @@ const swipeStyles = StyleSheet.create({
 });
 
 export default function SettingsScreen() {
+  const router = useRouter();
   const [connectionStatus, setConnectionStatus] =
     useState<ConnectionStatus>("checking");
   const [currentUrl, setCurrentUrl] = useState(getApiBaseUrl());
@@ -550,6 +552,20 @@ export default function SettingsScreen() {
             )}
           </View>
         )}
+      </View>
+
+      {/* Soul Section */}
+      <View style={styles.section}>
+        <Text style={styles.sectionHeader}>IDENTITY</Text>
+        <View style={styles.sectionCard}>
+          <Pressable style={styles.row} onPress={() => router.push("/soul")}>
+            <Text style={styles.rowLabel}>Soul</Text>
+            <Text style={styles.chevron}>&rsaquo;</Text>
+          </Pressable>
+        </View>
+        <Text style={styles.sectionFooter}>
+          View the personality and identity definition.
+        </Text>
       </View>
 
       {/* Connection Section */}

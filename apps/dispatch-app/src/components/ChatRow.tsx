@@ -17,8 +17,13 @@ interface ChatRowProps {
   isSelected?: boolean;
 }
 
+const STATUS_COLORS: Record<string, string> = {
+  active: "#22c55e",
+  idle: "#71717a",
+};
+
 export function ChatRow({ conversation, onPress, onLongPress, isUnread, isSelected }: ChatRowProps) {
-  const { title, last_message, last_message_at, last_message_role, is_thinking, image_url, image_status } =
+  const { title, last_message, last_message_at, last_message_role, is_thinking, image_url, image_status, status } =
     conversation;
 
   // Build preview text with "You: " prefix for user messages
@@ -72,24 +77,29 @@ export function ChatRow({ conversation, onPress, onLongPress, isUnread, isSelect
         ) : (
           <View style={styles.unreadDotSpacer} />
         )}
-        {image_url ? (
-          <Image
-            source={{ uri: buildImageUrl(image_url) }}
-            style={styles.avatarImage}
-            contentFit="cover"
-            transition={200}
-          />
-        ) : image_status === "generating" ? (
-          <GeneratingAvatar />
-        ) : image_status === "failed" ? (
-          <View style={[styles.avatar, styles.avatarFailed]}>
-            <Text style={styles.avatarGeneratingText}>⚠️</Text>
-          </View>
-        ) : (
-          <View style={styles.avatar}>
-            <Text style={styles.avatarText}>{initials || "?"}</Text>
-          </View>
-        )}
+        <View style={styles.avatarContainer}>
+          {image_url ? (
+            <Image
+              source={{ uri: buildImageUrl(image_url) }}
+              style={styles.avatarImage}
+              contentFit="cover"
+              transition={200}
+            />
+          ) : image_status === "generating" ? (
+            <GeneratingAvatar />
+          ) : image_status === "failed" ? (
+            <View style={[styles.avatar, styles.avatarFailed]}>
+              <Text style={styles.avatarGeneratingText}>⚠️</Text>
+            </View>
+          ) : (
+            <View style={styles.avatar}>
+              <Text style={styles.avatarText}>{initials || "?"}</Text>
+            </View>
+          )}
+          {status === "active" && (
+            <View style={[styles.statusDot, { backgroundColor: STATUS_COLORS.active }]} />
+          )}
+        </View>
         <View style={styles.content}>
           <View style={styles.topRow}>
             <Text style={[styles.title, isUnread && styles.titleUnread]} numberOfLines={1}>
@@ -182,6 +192,10 @@ const styles = StyleSheet.create({
     width: 10,
     marginRight: 6,
   },
+  avatarContainer: {
+    position: "relative",
+    marginRight: 12,
+  },
   avatar: {
     width: 44,
     height: 44,
@@ -189,14 +203,22 @@ const styles = StyleSheet.create({
     backgroundColor: "#3f3f46",
     alignItems: "center",
     justifyContent: "center",
-    marginRight: 12,
   },
   avatarImage: {
     width: 44,
     height: 44,
     borderRadius: 22,
-    marginRight: 12,
     backgroundColor: "#3f3f46",
+  },
+  statusDot: {
+    position: "absolute",
+    bottom: 0,
+    right: 0,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: "#18181b",
   },
   avatarGenerating: {
     backgroundColor: "#2d2640",

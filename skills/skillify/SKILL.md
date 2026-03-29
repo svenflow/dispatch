@@ -53,7 +53,7 @@ If no active sessions, report "nothing to analyze" and stop.
 
 ### Step 2: Discovery (Single Subagent — Holistic Cross-Chat Analysis)
 
-Spawn **one discovery subagent** that reads ALL active session transcripts and identifies raw skill ideas. This must be a single subagent because skill opportunities often span multiple conversations.
+Spawn **one discovery subagent** (use `model="sonnet"`) that reads ALL active session transcripts and identifies raw skill ideas. This must be a single subagent because skill opportunities often span multiple conversations.
 
 The discovery subagent:
 
@@ -130,7 +130,7 @@ The discovery subagent:
 
 ### Step 3: Refinement (Parallel Subagents — One Per Idea)
 
-For each raw idea from discovery (new skills, skill improvements, AND skill merges), spawn a **refinement subagent** in parallel.
+For each raw idea from discovery (new skills, skill improvements, AND skill merges), spawn a **refinement subagent** (use `model="sonnet"`) in parallel.
 
 #### For new skill ideas, each refinement subagent:
 

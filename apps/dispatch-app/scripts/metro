@@ -1,0 +1,265 @@
+#!/bin/bash
+# metro — Manage the Metro bundler for dispatch-app
+#
+# Usage:
+#   metro start [--clear]    Start Metro (if not already running)
+#   metro stop               Stop Metro
+#   metro restart [--clear]  Restart Metro
+#   metro status             Check Metro status + health
+#   metro logs               Tail Metro logs
+#   metro url                Print the Metro dev server URL
+#
+# Metro binds to the metroHost from app.yaml (e.g. Tailscale IP)
+# so the phone can reach it over the network.
+
+set -euo pipefail
+
+APP_DIR="$HOME/dispatch/apps/dispatch-app"
+METRO_LOG="$APP_DIR/.metro.log"
+METRO_PID_FILE="$APP_DIR/.metro.pid"
+
+# ── Helpers ──────────────────────────────────────────────────────
+
+get_metro_host() {
+  if command -v uv &>/dev/null; then
+    uv run python -c "
+import yaml, pathlib, sys
+p = pathlib.Path('$APP_DIR/app.yaml')
+if p.exists():
+    c = yaml.safe_load(p.read_text()) or {}
+    print(c.get('metroHost', ''))
+" 2>/dev/null || echo ""
+  else
+    echo ""
+  fi
+}
+
+get_metro_port() {
+  echo "8081"
+}
+
+get_pid() {
+  # Check pidfile first
+  if [[ -f "$METRO_PID_FILE" ]]; then
+    local pid
+    pid=$(cat "$METRO_PID_FILE")
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "$pid"
+      return
+    fi
+    rm -f "$METRO_PID_FILE"
+  fi
+  # Fallback: find metro process
+  pgrep -f "expo start" 2>/dev/null | head -1 || true
+}
+
+is_running() {
+  local pid
+  pid=$(get_pid)
+  [[ -n "$pid" ]]
+}
+
+health_check() {
+  local host port url
+  host=$(get_metro_host)
+  port=$(get_metro_port)
+
+  if [[ -z "$host" ]]; then
+    host="localhost"
+  fi
+
+  url="http://${host}:${port}/status"
+
+  # Quick HTTP check (1s timeout)
+  if curl -sf --max-time 1 "$url" &>/dev/null; then
+    return 0
+  fi
+  return 1
+}
+
+# ── Commands ─────────────────────────────────────────────────────
+
+cmd_start() {
+  if is_running; then
+    local pid
+    pid=$(get_pid)
+    echo "✅ Metro already running (PID $pid)"
+    if health_check; then
+      echo "🟢 Health: OK"
+    else
+      echo "🟡 Health: process running but not responding — try: metro restart"
+    fi
+    return 0
+  fi
+
+  local extra_args=()
+  for arg in "$@"; do
+    extra_args+=("$arg")
+  done
+
+  echo "🚀 Starting Metro bundler..."
+
+  cd "$APP_DIR"
+
+  # Start metro in background via the existing start-metro.js wrapper
+  nohup node scripts/start-metro.js "${extra_args[@]}" > "$METRO_LOG" 2>&1 &
+  local pid=$!
+  echo "$pid" > "$METRO_PID_FILE"
+
+  echo "   PID: $pid"
+  echo "   Log: $METRO_LOG"
+
+  # Wait for it to be healthy (up to 15s)
+  echo -n "   Waiting for Metro to be ready"
+  for i in $(seq 1 15); do
+    sleep 1
+    echo -n "."
+    if health_check; then
+      echo ""
+      local host
+      host=$(get_metro_host)
+      [[ -z "$host" ]] && host="localhost"
+      echo "🟢 Metro ready at http://${host}:$(get_metro_port)"
+      return 0
+    fi
+    # Check if process died
+    if ! kill -0 "$pid" 2>/dev/null; then
+      echo ""
+      echo "❌ Metro process died. Last 10 lines of log:"
+      tail -10 "$METRO_LOG"
+      rm -f "$METRO_PID_FILE"
+      return 1
+    fi
+  done
+
+  echo ""
+  echo "⏳ Metro started but not yet responding (may still be loading)"
+  echo "   Check: metro status"
+}
+
+cmd_stop() {
+  local pid
+  pid=$(get_pid)
+
+  if [[ -z "$pid" ]]; then
+    echo "ℹ️  Metro not running"
+    rm -f "$METRO_PID_FILE"
+    return 0
+  fi
+
+  echo "🛑 Stopping Metro (PID $pid)..."
+
+  # Kill the process tree (metro spawns child processes)
+  kill "$pid" 2>/dev/null || true
+
+  # Also kill any expo start processes
+  pkill -f "expo start" 2>/dev/null || true
+
+  # Wait for it to die (up to 5s)
+  for i in $(seq 1 5); do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      echo "✅ Metro stopped"
+      rm -f "$METRO_PID_FILE"
+      return 0
+    fi
+    sleep 1
+  done
+
+  # Force kill if still alive
+  kill -9 "$pid" 2>/dev/null || true
+  pkill -9 -f "expo start" 2>/dev/null || true
+  rm -f "$METRO_PID_FILE"
+  echo "✅ Metro force-stopped"
+}
+
+cmd_restart() {
+  cmd_stop
+  sleep 1
+  cmd_start "$@"
+}
+
+cmd_status() {
+  local pid
+  pid=$(get_pid)
+
+  echo "═══ Metro Status ═══"
+
+  if [[ -z "$pid" ]]; then
+    echo "State:  🔴 Not running"
+    echo ""
+    echo "Start with: metro start"
+    return 1
+  fi
+
+  echo "State:  🟢 Running (PID $pid)"
+
+  local host port
+  host=$(get_metro_host)
+  port=$(get_metro_port)
+  [[ -z "$host" ]] && host="localhost"
+
+  echo "URL:    http://${host}:${port}"
+  echo "Log:    $METRO_LOG"
+
+  if health_check; then
+    echo "Health: 🟢 Responding"
+  else
+    echo "Health: 🟡 Not responding (may be loading or stuck)"
+  fi
+
+  # Show uptime
+  if command -v ps &>/dev/null; then
+    local etime
+    etime=$(ps -p "$pid" -o etime= 2>/dev/null | xargs)
+    if [[ -n "$etime" ]]; then
+      echo "Uptime: $etime"
+    fi
+  fi
+
+  echo ""
+  echo "Last 5 log lines:"
+  tail -5 "$METRO_LOG" 2>/dev/null || echo "  (no log file)"
+}
+
+cmd_logs() {
+  if [[ ! -f "$METRO_LOG" ]]; then
+    echo "No metro log file found at $METRO_LOG"
+    return 1
+  fi
+  tail -f "$METRO_LOG"
+}
+
+cmd_url() {
+  local host port
+  host=$(get_metro_host)
+  port=$(get_metro_port)
+  [[ -z "$host" ]] && host="localhost"
+  echo "http://${host}:${port}"
+}
+
+# ── Main ─────────────────────────────────────────────────────────
+
+case "${1:-status}" in
+  start)   shift; cmd_start "$@" ;;
+  stop)    cmd_stop ;;
+  restart) shift; cmd_restart "$@" ;;
+  status)  cmd_status ;;
+  logs)    cmd_logs ;;
+  url)     cmd_url ;;
+  -h|--help|help)
+    echo "Usage: metro {start|stop|restart|status|logs|url}"
+    echo ""
+    echo "Commands:"
+    echo "  start [--clear]  Start Metro bundler"
+    echo "  stop             Stop Metro"
+    echo "  restart [--clear] Restart Metro"
+    echo "  status           Show status + health check"
+    echo "  logs             Tail Metro logs"
+    echo "  url              Print dev server URL"
+    ;;
+  *)
+    echo "Unknown command: $1"
+    echo "Usage: metro {start|stop|restart|status|logs|url}"
+    exit 1
+    ;;
+esac

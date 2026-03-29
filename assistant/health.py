@@ -131,57 +131,96 @@ def check_fatal_regex(entries: list[dict[str, Any]]) -> Optional[str]:
 
 
 def extract_assistant_text(entries: list[dict[str, Any]], max_chars: int = 4000) -> str:
-    """Extract text from assistant message entries for Haiku analysis.
+    """Extract text and tool use info from assistant message entries for Haiku analysis.
 
-    Concatenates TextBlock content, truncated to max_chars.
+    Groups content by message entry with timestamps, includes both TextBlock content
+    and tool_use block names so the classifier can see chronological progression
+    and distinguish early productive work from later stuck behavior.
     """
-    texts = []
+    messages = []
     total = 0
 
     for entry in entries:
+        ts_str = entry.get('timestamp', '')
+        # Extract just HH:MM:SS for brevity
+        time_label = ""
+        if ts_str:
+            try:
+                from datetime import datetime
+                ts = datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
+                time_label = ts.strftime("%H:%M:%S")
+            except ValueError:
+                pass
+
         content = entry.get('message', {}).get('content', [])
         if not isinstance(content, list):
             continue
 
+        entry_parts = []
         for block in content:
             if not isinstance(block, dict):
                 continue
+
+            # Include tool_use blocks as "[tool: ToolName]" markers with brief input
+            if block.get('type') == 'tool_use':
+                tool_name = block.get('name', 'unknown')
+                # Include a brief snippet of tool input for context
+                tool_input = block.get('input', {})
+                snippet = ""
+                if isinstance(tool_input, dict):
+                    for key in ('command', 'file_path', 'pattern', 'prompt', 'description'):
+                        val = tool_input.get(key, '')
+                        if val:
+                            snippet = f" ({str(val)[:60]})"
+                            break
+                entry_parts.append(f"[tool: {tool_name}{snippet}]")
+                continue
+
             text = block.get('text', '')
             if not text:
                 continue
+            entry_parts.append(text[:200])
 
-            remaining = max_chars - total
-            if remaining <= 0:
-                break
-            chunk = text[:remaining]
-            texts.append(chunk)
-            total += len(chunk)
+        if not entry_parts:
+            continue
 
-        if total >= max_chars:
+        header = f"[{time_label}]" if time_label else "[msg]"
+        msg_text = f"{header} {' | '.join(entry_parts)}"
+
+        remaining = max_chars - total
+        if remaining <= 0:
             break
+        chunk = msg_text[:remaining]
+        messages.append(chunk)
+        total += len(chunk)
 
-    return "\n---\n".join(texts)
+    return "\n".join(messages)
 
 
 # ──────────────────────────────────────────────────────────────
 # Tier 2: Haiku-based deep analysis
 # ──────────────────────────────────────────────────────────────
 
-HAIKU_PROMPT = """You are a session health monitor for an AI assistant that communicates with users via SMS. Analyze these recent assistant messages and determine if the session needs intervention.
+HAIKU_PROMPT = """You are a session health monitor for an AI assistant. Analyze these recent assistant messages and determine if the session needs intervention.
+
+The messages below are timestamped and contain text blocks AND [tool: ToolName] markers showing tool calls. Text between tool calls is internal narration (e.g. "Now update the style:"), NOT messages sent to the user. This is normal — the assistant narrates its plan between tool calls. Focus on the LATEST messages to determine current state.
 
 FATAL means the session is broken and needs a restart:
 - API errors baked into conversation context (image dimensions, context length, invalid content) that will repeat on every retry
 - Authentication or billing errors
-- Repeated identical errors with no progress between them (same error 2+ times)
-- Session crashed mid-task and never sent the user a response — the user is left hanging with no reply
-- Session is stuck in a loop doing the same thing repeatedly without making progress
+- Repeated identical or near-identical text messages (3+ times) WITHOUT meaningful tool calls between them — this indicates the session is stuck in a loop
+- Session outputting the same "waiting" / "no response needed" message repeatedly
 
 HEALTHY means the session is operating normally:
+- Session is actively calling tools (Edit, Read, Bash, Grep, etc.) with different text narration between them — this means it's working, even if text blocks seem incomplete
 - Rate limits (429) or server overload (529) — these are transient
 - Tool execution failures where Claude tries alternatives
 - Normal error handling and recovery
 - A single error followed by successful work
-- Session is actively working on a task and making progress
+- Internal narration like "Now let me update X:" followed by [tool: Edit] — this is normal workflow, NOT incomplete output
+- Messages that end with ":" are typically followed by tool calls — this is normal
+
+IMPORTANT: Err on the side of HEALTHY. Only mark FATAL when you are confident the session is genuinely broken. A session interleaving diverse tool calls with narration text is working fine — even if the text seems terse or incomplete.
 
 Recent assistant messages (last 5 minutes):
 {messages}

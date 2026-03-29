@@ -13,7 +13,7 @@ import {
 import { router } from "expo-router";
 import { useDashboard } from "@/src/hooks/useDashboard";
 import type { HistogramBucket } from "@/src/hooks/useDashboard";
-import type { DashboardHealth, DashboardCcuResponse, SessionHealthSummary } from "@/src/api/types";
+import type { DashboardHealth, DashboardCcuResponse } from "@/src/api/types";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -71,46 +71,8 @@ function quotaBarColor(util: number): string {
   return "#22c55e";
 }
 
-// Signal socket staleness threshold (seconds)
-const SIGNAL_SOCKET_STALE_THRESHOLD = 600;
 
-function watchdogColor(health: DashboardHealth): string {
-  if (!health.watchdog_running) return "#ef4444";
-  if (health.watchdog_crash_count > 0 || health.watchdog_backoff_seconds > 0) return "#eab308";
-  return "#22c55e";
-}
 
-function watchdogSubtext(health: DashboardHealth): string {
-  if (!health.watchdog_running) return "down";
-  if (health.watchdog_backoff_seconds > 0) return "recovering...";
-  if (health.watchdog_crash_count > 0) return `⚠ ${health.watchdog_crash_count} crash${health.watchdog_crash_count > 1 ? "es" : ""}`;
-  if (health.watchdog_last_check_seconds != null) return `last: ${formatAge(health.watchdog_last_check_seconds)}`;
-  return "—";
-}
-
-function signalColor(health: DashboardHealth): string {
-  if (!health.signal_running) return "#ef4444";
-  if (health.signal_socket_age_seconds != null && health.signal_socket_age_seconds > SIGNAL_SOCKET_STALE_THRESHOLD) return "#eab308";
-  return "#22c55e";
-}
-
-function signalSubtext(health: DashboardHealth): string {
-  if (!health.signal_running) return "down";
-  if (health.signal_socket_age_seconds != null) return `sock: ${formatAge(health.signal_socket_age_seconds)}`;
-  return "—";
-}
-
-function formatAge(seconds: number): string {
-  if (seconds < 60) return `${Math.round(seconds)}s`;
-  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
-  return `${Math.round(seconds / 3600)}h`;
-}
-
-function sessionHealthDotColor(status: string): string {
-  if (status === "unhealthy") return "#ef4444";
-  if (status === "degraded") return "#eab308";
-  return "#22c55e";
-}
 
 // ---------------------------------------------------------------------------
 // Sub-components
@@ -363,111 +325,6 @@ const chartStyles = StyleSheet.create({
   },
 });
 
-// ---------------------------------------------------------------------------
-// Subsystems row (Daemon / Watchdog / Signal)
-// ---------------------------------------------------------------------------
-
-function SubsystemsRow({ health }: { health: DashboardHealth }) {
-  const daemonColor = healthColor(health.health_status);
-  const wdColor = watchdogColor(health);
-  const sigColor = signalColor(health);
-
-  return (
-    <View style={subsystemStyles.container}>
-      <View style={subsystemStyles.item}>
-        <View style={subsystemStyles.labelRow}>
-          <View style={[styles.statusDot, { backgroundColor: daemonColor }]} />
-          <Text style={subsystemStyles.label}>Daemon</Text>
-        </View>
-        <Text style={subsystemStyles.subtext}>{formatUptime(health.uptime_seconds)}</Text>
-      </View>
-      <View style={subsystemStyles.item}>
-        <View style={subsystemStyles.labelRow}>
-          <View style={[styles.statusDot, { backgroundColor: wdColor }]} />
-          <Text style={subsystemStyles.label}>Watchdog</Text>
-        </View>
-        <Text style={subsystemStyles.subtext}>{watchdogSubtext(health)}</Text>
-      </View>
-      <View style={subsystemStyles.item}>
-        <View style={subsystemStyles.labelRow}>
-          <View style={[styles.statusDot, { backgroundColor: sigColor }]} />
-          <Text style={subsystemStyles.label}>Signal</Text>
-        </View>
-        <Text style={subsystemStyles.subtext}>{signalSubtext(health)}</Text>
-      </View>
-    </View>
-  );
-}
-
-const subsystemStyles = StyleSheet.create({
-  container: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-  },
-  item: {
-    alignItems: "center",
-    flex: 1,
-  },
-  labelRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 5,
-    marginBottom: 3,
-  },
-  label: {
-    color: "#a1a1aa",
-    fontSize: 13,
-    fontWeight: "500",
-  },
-  subtext: {
-    color: "#52525b",
-    fontSize: 11,
-    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
-  },
-});
-
-// ---------------------------------------------------------------------------
-// Health dots for sessions
-// ---------------------------------------------------------------------------
-
-function HealthDots({ sessionHealth }: { sessionHealth: SessionHealthSummary }) {
-  const total = sessionHealth.healthy + sessionHealth.degraded + sessionHealth.unhealthy;
-  if (total === 0) return null;
-
-  // Build array of colors
-  const dots: string[] = [];
-  for (let i = 0; i < sessionHealth.healthy; i++) dots.push("#22c55e");
-  for (let i = 0; i < sessionHealth.degraded; i++) dots.push("#eab308");
-  for (let i = 0; i < sessionHealth.unhealthy; i++) dots.push("#ef4444");
-
-  return (
-    <View style={healthDotStyles.container}>
-      {dots.map((color, i) => (
-        <View
-          key={i}
-          style={[healthDotStyles.dot, { backgroundColor: color }]}
-        />
-      ))}
-    </View>
-  );
-}
-
-const healthDotStyles = StyleSheet.create({
-  container: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 3,
-    paddingHorizontal: 16,
-    paddingBottom: 12,
-  },
-  dot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-  },
-});
 
 // ---------------------------------------------------------------------------
 // Section renderers (memoized)
@@ -513,8 +370,6 @@ function SystemStatusSection({
             <MiniAreaChart buckets={histogram} />
           </>
         )}
-        <View style={styles.separator} />
-        <SubsystemsRow health={health} />
       </View>
     </View>
   );
@@ -561,8 +416,8 @@ function UsageSection({
   } | undefined;
   const extraUsageBar = extraUsage?.is_enabled && extraUsage.utilization != null
     ? {
-        label: "Monthly Spend",
-        value: `$${(extraUsage.used_credits ?? 0).toFixed(0)} / $${(extraUsage.monthly_limit ?? 0).toFixed(0)}`,
+        label: "Extra Usage",
+        value: `$${((extraUsage.used_credits ?? 0) / 100).toFixed(2)} / $${((extraUsage.monthly_limit ?? 0) / 100).toFixed(2)}`,
         pct: extraUsage.utilization,
       }
     : null;
@@ -675,7 +530,7 @@ function UsageSection({
   );
 }
 
-function SessionsSection({ count, sessionHealth }: { count: number; sessionHealth?: SessionHealthSummary }) {
+function SessionsSection({ count }: { count: number }) {
   return (
     <View style={styles.section}>
       <Text style={styles.sectionHeader}>SESSIONS</Text>
@@ -685,12 +540,6 @@ function SessionsSection({ count, sessionHealth }: { count: number; sessionHealt
           value={`${count}`}
           route="/dashboard/sessions"
         />
-        {sessionHealth && (sessionHealth.healthy + sessionHealth.degraded + sessionHealth.unhealthy) > 0 && (
-          <>
-            <View style={styles.separator} />
-            <HealthDots sessionHealth={sessionHealth} />
-          </>
-        )}
       </View>
     </View>
   );
@@ -810,7 +659,7 @@ export default function DashboardScreen() {
         {health && <SystemStatusSection health={health} histogram={histogram} />}
         <UsageSection ccu={ccu} loading={ccuLoading} onRefresh={refreshCcu} />
         {health && (
-          <SessionsSection count={health.active_sessions} sessionHealth={health.session_health} />
+          <SessionsSection count={health.active_sessions} />
         )}
         {health && (
           <TasksSection

@@ -276,7 +276,8 @@ class TestExtractAssistantText:
             },
         }]
         result = extract_assistant_text(entries)
-        assert result == ""
+        # Tool use blocks are now included as markers
+        assert "[tool: Bash (ls)]" in result
 
 
 class TestGetTranscriptEntriesSince:

@@ -1546,7 +1546,11 @@ class IPCServer:
             # Update registry with new model
             existing = self.registry.get(chat_id)
             if not existing:
-                return {"ok": False, "error": f"Session not found: {chat_id}"}
+                # Session not started yet — store model preference so it's picked up on first message
+                # Derive session_name from chat_id (e.g. "dispatch-app:uuid" → "dispatch-app/uuid")
+                session_name = chat_id.replace(":", "/", 1)
+                self.registry.register(chat_id=chat_id, session_name=session_name, model=model)
+                return {"ok": True, "message": f"Stored model preference {model} for {chat_id} (session not yet active)"}
             existing["model"] = model
             self.registry.register(**existing)
             # Restart session to pick up new model

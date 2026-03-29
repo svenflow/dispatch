@@ -373,13 +373,13 @@ function HeavyHitters({ sessions }: { sessions: QuotaHeavySession[] }) {
                   hhStyles.windowDelta,
                   w.fhDelta > 10 ? { color: "#ef4444" } : w.fhDelta > 5 ? { color: "#eab308" } : {},
                 ]}>
-                  5h: +{w.fhDelta}%  7d: +{w.sdDelta}%
+                  5h block: +{w.fhDelta}%  rolling 7d: +{w.sdDelta}%
                 </Text>
               )}
             </View>
             {w.sessions.map((s, si) => {
-              const name = s.session_name.replace(/^(imessage|signal|dispatch-app)\//, "");
-              const shortName = name.length > 20 ? name.slice(0, 8) + "…" + name.slice(-8) : name;
+              const rawName = s.display_name || s.session_name.replace(/^(imessage|signal|dispatch-app)\//, "");
+              const shortName = rawName.length > 20 ? rawName.slice(0, 8) + "…" + rawName.slice(-8) : rawName;
               return (
                 <View key={si} style={hhStyles.sessionRow}>
                   <View style={hhStyles.sessionInfo}>
@@ -619,10 +619,10 @@ export default function QuotaDetailScreen() {
               <View style={styles.card}>
                 <Text style={styles.sectionHeader}>EXTRA USAGE</Text>
                 <ExpandedBar
-                  label="Monthly Spend"
+                  label="Extra Usage"
                   utilization={extraUsage.utilization}
                   resetsAt=""
-                  subtitle={`$${(extraUsage.used_credits ?? 0).toFixed(2)} of $${(extraUsage.monthly_limit ?? 0).toFixed(2)} · Resets monthly`}
+                  subtitle={`$${((extraUsage.used_credits ?? 0) / 100).toFixed(2)} of $${((extraUsage.monthly_limit ?? 0) / 100).toFixed(2)} · Resets monthly`}
                 />
               </View>
             )}

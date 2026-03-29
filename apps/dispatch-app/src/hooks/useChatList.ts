@@ -143,7 +143,7 @@ export function useChatList(): UseChatListReturn {
 
     // Build lightweight fingerprint — includes unread-relevant fields
     const fingerprint = chats
-      .map((c) => `${c.id}:${c.last_message_at ?? ""}:${c.is_thinking}:${c.marked_unread}:${c.image_status}:${c.last_opened_at ?? ""}`)
+      .map((c) => `${c.id}:${c.last_message_at ?? ""}:${c.is_thinking}:${c.marked_unread}:${c.image_status}:${c.last_opened_at ?? ""}:${c.status ?? ""}`)
       .join("|");
 
     // Skip state update AND badge notification when nothing changed

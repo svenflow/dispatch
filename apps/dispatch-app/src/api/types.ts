@@ -82,6 +82,7 @@ export interface Conversation {
   image_url?: string | null; // Cover image URL (generated via nano-banana)
   image_status?: string | null; // "generating" | "ready" | "failed" | null
   model?: string | null; // Model used for this session (e.g. "opus", "sonnet")
+  status?: string | null; // Session status: "active" | "idle"
 }
 
 /** Notes for a chat */
@@ -382,6 +383,7 @@ export interface QuotaHeavySession {
   five_hour_delta: number;
   seven_day_delta: number;
   session_name: string;
+  display_name: string;
   event_count: number;
   duration_sec: number;
   tools: string[];

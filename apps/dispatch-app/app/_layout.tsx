@@ -102,6 +102,7 @@ function RootLayoutNav() {
           <Stack.Screen name="dashboard/skill-detail" options={{ headerShown: true, title: "Skill Detail", headerBackTitle: "Skills" }} />
           <Stack.Screen name="dashboard/events" options={{ headerShown: true, title: "Events", headerBackTitle: "Dashboard" }} />
           <Stack.Screen name="dashboard/task-detail" options={{ headerShown: true, title: "Task Detail", headerBackTitle: "Tasks" }} />
+          <Stack.Screen name="soul" options={{ headerShown: true, title: "Soul", headerBackTitle: "Settings" }} />
           <Stack.Screen name="image-viewer" options={{ presentation: "modal" }} />
           <Stack.Screen name="modal" options={{ presentation: "modal" }} />
         </Stack>

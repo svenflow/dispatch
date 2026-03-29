@@ -2251,6 +2251,7 @@ def _fetch_chat_list() -> list[dict]:
         session_key = f"{APP_SESSION_PREFIX}:{chat_id}"
         session_info = sessions.get(session_key) or sessions.get(chat_id) or {}
         model = session_info.get("model", "opus")  # Default to opus
+        status = "active" if session_info.get("was_active") else "idle"
         chats.append({
             "id": chat_id,
             "title": row[1],
@@ -2267,6 +2268,7 @@ def _fetch_chat_list() -> list[dict]:
             "image_url": _build_chat_image_url(chat_id, row[11]),
             "image_status": row[12],
             "model": model,
+            "status": status,
         })
     conn.close()
     return chats
@@ -2280,7 +2282,7 @@ def _chat_list_fingerprint(chats: list[dict]) -> str:
         parts.append(
             f"{c['id']}:{c['last_message_at'] or ''}:{c['is_thinking']}:"
             f"{c['marked_unread']}:{c['image_status']}:{c['last_opened_at'] or ''}:"
-            f"{c['title'] or ''}:{c['last_message'] or ''}"
+            f"{c['title'] or ''}:{c['last_message'] or ''}:{c.get('status', '')}"
         )
     return hashlib.md5("|".join(parts).encode()).hexdigest()
 
@@ -4337,6 +4339,18 @@ async def dashboard_quota_history(hours: int = 24):
             "sd2": rows[i + 1]["seven_day"] or 0,
         })
 
+    # Build session_name → contact_name lookup for display
+    _session_display_names: dict[str, str] = {}
+    try:
+        _reg = _load_sessions()
+        for _chat_id, _sinfo in _reg.items():
+            sn = _sinfo.get("session_name", "")
+            cn = _sinfo.get("contact_name", "")
+            if sn and cn and cn != "?" and not cn.startswith("Unknown"):
+                _session_display_names[sn] = cn
+    except Exception:
+        pass
+
     heavy_sessions = []
     if raw_windows:
         try:
@@ -4364,12 +4378,14 @@ async def dashboard_quota_history(hours: int = 24):
 
                 if session_rows:
                     for sr in session_rows:
+                        sn = sr["session_name"] or ""
                         heavy_sessions.append({
                             "window_start": datetime.fromtimestamp(t1 / 1000, tz=timezone.utc).isoformat(),
                             "window_end": datetime.fromtimestamp(t2 / 1000, tz=timezone.utc).isoformat(),
                             "five_hour_delta": round(fh_delta, 1),
                             "seven_day_delta": round(sd_delta, 1),
-                            "session_name": sr["session_name"],
+                            "session_name": sn,
+                            "display_name": _session_display_names.get(sn, ""),
                             "event_count": sr["event_count"],
                             "duration_sec": round(sr["total_sec"], 1),
                             "tools": [t for t in (sr["tools"] or "").split(",") if t],
@@ -4815,6 +4831,25 @@ async def restart_daemon(token: str = ""):
         return {"ok": True, "output": result.stdout.strip()}
     except Exception as e:
         logger.error(f"restart_daemon error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─────────────────────────────────────────────────────────────
+# Soul API endpoint
+# ─────────────────────────────────────────────────────────────
+
+
+@app.get("/api/app/soul")
+async def get_soul(token: str = ""):
+    """Return the contents of ~/.claude/SOUL.md."""
+    soul_path = Path.home() / ".claude" / "SOUL.md"
+    if not soul_path.exists():
+        raise HTTPException(status_code=404, detail="SOUL.md not found")
+    try:
+        content = soul_path.read_text(encoding="utf-8")
+        return {"ok": True, "content": content}
+    except Exception as e:
+        logger.error(f"get_soul error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

@@ -5,15 +5,34 @@
 # Usage:
 #   deploy-ios              # Full clean build + deploy
 #   deploy-ios --quick      # Skip pod reinstall (faster, use when only JS changed)
+#   deploy-ios --metro      # After deploy, ensure Metro is running for hot reload
+#   deploy-ios --quick --metro  # Quick build + ensure Metro after
+#
+# Metro is daemon-managed and NOT killed during build. The build uses
+# --no-bundler with a pre-exported JS bundle, so Metro can stay running.
+# For faster JS iteration, use Metro hot reload instead of this script.
 
 set -euo pipefail
 
 APP_DIR="$HOME/dispatch/apps/dispatch-app"
+METRO_CMD="$APP_DIR/scripts/metro"
 cd "$APP_DIR"
 
 QUICK=false
-if [[ "${1:-}" == "--quick" ]]; then
-  QUICK=true
+START_METRO=false
+
+for arg in "$@"; do
+  case "$arg" in
+    --quick) QUICK=true ;;
+    --metro) START_METRO=true ;;
+  esac
+done
+
+# Note: Metro is daemon-managed — we do NOT kill it. Build uses --no-bundler
+# with a pre-exported bundle, so Metro can stay running independently.
+if curl -sf http://localhost:8081/status &>/dev/null; then
+  echo "ℹ️  Metro is running (daemon-managed). Build uses pre-exported bundle independently."
+  echo "   Tip: For JS-only changes, just save the file — Metro hot reload is ~2s."
 fi
 
 # 1. Auto-detect connected physical iPhone
@@ -53,3 +72,18 @@ echo "🔨 Building and deploying to $DEVICE_NAME..."
 npx expo run:ios --device "$UDID" --configuration Release --no-bundler 2>&1 | tail -5
 
 echo "✅ Deployed to $DEVICE_NAME"
+
+# 6. Ensure Metro is running (daemon usually handles this, but --metro forces a check)
+if [[ "$START_METRO" == true ]]; then
+  echo ""
+  if curl -sf http://localhost:8081/status &>/dev/null; then
+    echo "✅ Metro already running (daemon-managed)"
+  else
+    echo "🔄 Starting Metro..."
+    "$METRO_CMD" start
+  fi
+fi
+
+echo ""
+echo "💡 For JS changes, just save files — Metro hot reload is instant (~2s)."
+echo "   Only use deploy-ios for native changes (pods, entitlements, plugins)."

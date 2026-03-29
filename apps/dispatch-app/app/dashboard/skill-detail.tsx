@@ -84,69 +84,48 @@ export default function SkillDetailScreen() {
     return () => { mountedRef.current = false; };
   }, [load]);
 
-  if (isLoading) {
-    return (
-      <>
-        <Stack.Screen options={{ title: name || "Skill" }} />
-        <View style={styles.center}>
-          <ActivityIndicator size="large" color="#71717a" />
-        </View>
-      </>
-    );
-  }
-
-  if (error || !detail) {
-    return (
-      <>
-        <Stack.Screen options={{ title: name || "Skill" }} />
-        <View style={styles.center}>
-          <Text style={styles.errorText}>{error || "Not found"}</Text>
-          <Pressable style={styles.retryBtn} onPress={load}>
-            <Text style={styles.retryText}>Retry</Text>
-          </Pressable>
-        </View>
-      </>
-    );
-  }
-
   const errorRate = useMemo(
     () =>
-      detail.total_invocations > 0
+      detail && detail.total_invocations > 0
         ? ((detail.error_count / detail.total_invocations) * 100).toFixed(1)
         : "0",
-    [detail.total_invocations, detail.error_count],
+    [detail],
   );
 
-  const sections = useMemo<SectionItem[]>(() => [
-    { type: "stats", key: "stats" },
-    // SKILL.md toggle (if available)
-    ...(detail.skill_md
-      ? [{ type: "section-header" as const, key: "md-header", title: showMd ? "SKILL.md ▾" : "SKILL.md ▸" }]
-      : []),
-    ...(detail.skill_md && showMd
-      ? [{ type: "skill-md" as const, key: "skill-md", content: detail.skill_md }]
-      : []),
-    // Session breakdown
-    ...(detail.invocations_by_session.length > 0
-      ? [{ type: "section-header" as const, key: "session-header", title: "Usage by Session" }]
-      : []),
-    ...detail.invocations_by_session.map((s) => ({
-      type: "session-row" as const,
-      key: `session-${s.session_name}`,
-      data: s,
-    })),
-    // Recent invocations
-    ...(detail.recent_invocations.length > 0
-      ? [{ type: "section-header" as const, key: "recent-header", title: "Recent Invocations" }]
-      : []),
-    ...detail.recent_invocations.map((inv, i) => ({
-      type: "recent-row" as const,
-      key: `recent-${i}`,
-      data: inv,
-    })),
-  ], [detail, showMd]);
+  const sections = useMemo<SectionItem[]>(() => {
+    if (!detail) return [];
+    return [
+      { type: "stats", key: "stats" },
+      // SKILL.md toggle (if available)
+      ...(detail.skill_md
+        ? [{ type: "section-header" as const, key: "md-header", title: showMd ? "SKILL.md ▾" : "SKILL.md ▸" }]
+        : []),
+      ...(detail.skill_md && showMd
+        ? [{ type: "skill-md" as const, key: "skill-md", content: detail.skill_md }]
+        : []),
+      // Session breakdown
+      ...(detail.invocations_by_session.length > 0
+        ? [{ type: "section-header" as const, key: "session-header", title: "Usage by Session" }]
+        : []),
+      ...detail.invocations_by_session.map((s) => ({
+        type: "session-row" as const,
+        key: `session-${s.session_name}`,
+        data: s,
+      })),
+      // Recent invocations
+      ...(detail.recent_invocations.length > 0
+        ? [{ type: "section-header" as const, key: "recent-header", title: "Recent Invocations" }]
+        : []),
+      ...detail.recent_invocations.map((inv, i) => ({
+        type: "recent-row" as const,
+        key: `recent-${i}`,
+        data: inv,
+      })),
+    ];
+  }, [detail, showMd]);
 
   const renderItem = useCallback(({ item }: { item: SectionItem }) => {
+    if (!detail) return null;
     switch (item.type) {
       case "stats":
         return (
@@ -267,7 +246,32 @@ export default function SkillDetailScreen() {
       default:
         return null;
     }
-  }, [detail, showMd]);
+  }, [detail, showMd, errorRate]);
+
+  if (isLoading) {
+    return (
+      <>
+        <Stack.Screen options={{ title: name || "Skill" }} />
+        <View style={styles.center}>
+          <ActivityIndicator size="large" color="#71717a" />
+        </View>
+      </>
+    );
+  }
+
+  if (error || !detail) {
+    return (
+      <>
+        <Stack.Screen options={{ title: name || "Skill" }} />
+        <View style={styles.center}>
+          <Text style={styles.errorText}>{error || "Not found"}</Text>
+          <Pressable style={styles.retryBtn} onPress={load}>
+            <Text style={styles.retryText}>Retry</Text>
+          </Pressable>
+        </View>
+      </>
+    );
+  }
 
   return (
     <>

@@ -273,4 +273,6 @@ Trigger phrases:
 
 Spawn Task with `subagent_type: "general-purpose"`, include prompt template + content.
 
+**Model:** Use `model="sonnet"` by default for all review subagents (Quick and Deep). Only use opus if the user explicitly requests it (e.g. "deep review with opus", "use opus for this").
+
 Relay response as: condensed table + average score + top 2-3 recommendations.
