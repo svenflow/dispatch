@@ -2237,19 +2237,17 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
     ) -> str:
         """Build the startup prompt for an individual session.
 
-        Auto-injects SOUL.md, contact notes, memory summary, and chat context for faster startup.
+        Auto-injects SOUL.md, memory summary, and chat context for faster startup.
         """
         # Fetch all context in parallel (async, non-blocking)
-        soul_content, contact_notes, memory_summary, chat_context = await asyncio.gather(
+        soul_content, memory_summary, chat_context = await asyncio.gather(
             self._get_soul_content(),
-            self._get_contact_notes(contact_name),
             self._get_memory_summary(contact_name),
             self._get_chat_context(session_name),
         )
 
         # Build sections with clear labels
         soul_section = f"\n## My Identity (from SOUL.md)\n\n{soul_content}\n" if soul_content else ""
-        notes_section = f"\n## About {contact_name} (from Contacts.app)\n\n{contact_notes}\n" if contact_notes else ""
         memory_section = f"\n## About {contact_name} (from memories)\n\n{memory_summary}\n" if memory_summary else ""
         context_section = f"\n## Current Conversation Context\n\n{chat_context}\n" if chat_context else ""
 
@@ -2332,7 +2330,7 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
 
         return f"""SESSION START - INDIVIDUAL {backend.label} CHAT: {contact_name} ({tier} tier)
 Chat ID: {chat_id}
-{soul_section}{notes_section}{memory_section}{context_section}
+{soul_section}{memory_section}{context_section}
 {action_block}
 
 **If you need more context** about what you were doing before restart:
@@ -2359,7 +2357,7 @@ Quick reference:
     ) -> str:
         """Build the startup prompt for a group session.
 
-        Auto-injects SOUL.md, contact notes for all participants, and memory summaries.
+        Auto-injects SOUL.md, memory summaries for all participants, and chat context.
         """
         participants_list = participants or []
 
@@ -2373,34 +2371,28 @@ Quick reference:
                 tier = "unknown"
             participant_lines.append(f"- {participant} ({tier})")
 
-        # Fetch ALL context in parallel: SOUL + chat context + notes for each + memory for each
+        # Fetch ALL context in parallel: SOUL + chat context + memory for each
         async_tasks = [self._get_soul_content(), self._get_chat_context(session_name)]
-        async_tasks.extend(self._get_contact_notes(p) for p in participants_list)
         async_tasks.extend(self._get_memory_summary(p) for p in participants_list)
 
         results = await asyncio.gather(*async_tasks) if async_tasks else []
 
-        # Unpack results: soul, chat_context, then N notes, then N memories
+        # Unpack results: soul, chat_context, then N memories
         soul_content = results[0] if results else ""
         chat_context = results[1] if len(results) > 1 else ""
         n_participants = len(participants_list)
-        notes_results = results[2:2+n_participants] if n_participants else []
-        memory_results = results[2+n_participants:] if n_participants else []
+        memory_results = results[2:2+n_participants] if n_participants else []
 
         # Build sections with clear labels
         soul_section = f"\n## My Identity (from SOUL.md)\n\n{soul_content}\n" if soul_content else ""
 
-        # Combine notes and memories per participant
+        # Combine memories per participant
         participant_context_parts = []
         for i, participant in enumerate(participants_list):
-            notes = notes_results[i] if i < len(notes_results) else ""
             mem = memory_results[i] if i < len(memory_results) else ""
-            if notes or mem:
+            if mem:
                 part = f"## About {participant}\n"
-                if notes:
-                    part += f"\n**From Contacts.app:**\n{notes}\n"
-                if mem:
-                    part += f"\n**From memories:**\n{mem}\n"
+                part += f"\n**From memories:**\n{mem}\n"
                 participant_context_parts.append(part)
 
         participants_section = "\n".join(participant_lines) if participant_lines else "- (unknown participants)"
@@ -2627,26 +2619,6 @@ EOF
                 )
         except Exception as e:
             log.warning(f"Could not load SOUL.md: {e}")
-        return ""
-
-    async def _get_contact_notes(self, contact_name: str) -> str:
-        """Get contact notes from Contacts.app via SQLite (async, non-blocking).
-
-        Returns the notes field for a contact, which contains personal info,
-        preferences, and context stored in macOS Contacts.app.
-        """
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                str(SKILLS_DIR / "contacts/scripts/contacts"), "notes", contact_name,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
-            output = stdout.decode().strip()
-            if output and "No notes" not in output and "not found" not in output.lower():
-                return output
-        except Exception as e:
-            log.warning(f"Could not load contact notes for {contact_name}: {e}")
         return ""
 
     async def _get_chat_context(self, session_name: str) -> str:

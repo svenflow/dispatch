@@ -6,15 +6,14 @@ Replaces: consolidate_3pass.py + consolidate_facts.py
 Model: claude-sonnet-4-5 (not Opus — 10x cheaper, fast enough)
 Message source: bus.db records table (not read-sms subprocess)
 
-Architecture: 3 focused Sonnet calls per contact
-  Pass A-notes : Extract memory bullets for Contacts.app notes
+Architecture: 2 Sonnet calls per contact
   Pass A-facts : Extract structured facts for bus.db
-  Pass B       : Verify grounding (accept/refute both bullets and facts with supporting quotes)
-  Commit       : All-or-nothing write to DB + Contacts.app
+  Pass B       : Verify grounding (accept/refute facts with supporting quotes)
+  Commit       : All-or-nothing write to DB
 
 Key design goals:
   - FACT ACCURACY: layered grounding rejects hallucinations before commit
-  - SONNET: 3 focused prompts instead of 3+ Opus calls
+  - SONNET: 2 focused prompts instead of 3+ Opus calls
   - BUS.DB: no subprocess, direct SQLite read
 
 FIRST DEPLOY:
@@ -70,16 +69,7 @@ MAX_EXISTING_FACTS_CHARS = 5_000
 HIGH_DROP_RATE_THRESHOLD = 0.40  # warn if >40% of proposed items dropped by Pass B
 CONTACT_SLEEP_SECONDS = 5        # stagger between contacts (skip in dry-run)
 VALID_FACT_TYPES = {"travel", "event", "preference", "project", "relationship", "deadline"}
-REQUIRED_DETAIL_KEYS: dict[str, list[str]] = {
-    "travel":       ["destination"],
-    "event":        ["description"],
-    "preference":   ["domain"],
-    "project":      ["description"],
-    "relationship": ["person", "relation"],
-    "deadline":     ["description", "due_date"],
-}
 UPDATABLE_FIELDS = {"summary", "details", "ends_at", "confidence"}
-MANAGED_HEADER = "<!-- CLAUDE-MANAGED:v1 -->"
 
 # ── Sensitive content patterns ─────────────────────────────────
 _SENSITIVE_BASELINE = [
@@ -194,7 +184,6 @@ class AuditRecord:
     contact: str
     timestamp: str
     messages_scanned: int = 0
-    notes: SectionAudit = field(default_factory=SectionAudit)
     facts: SectionAudit = field(default_factory=SectionAudit)
     committed: bool = False
     abort_reason: str = ""
@@ -293,21 +282,7 @@ def truncate_to_budget(text: str, max_chars: int) -> str:
     return "...[oldest messages truncated]...\n" + text[-max_chars:]
 
 
-# ── Existing notes / facts loading ────────────────────────────
-def load_existing_notes(contact_name: str) -> str:
-    """Load current Contacts.app notes for a contact."""
-    try:
-        result = subprocess.run(
-            [str(CONTACTS_CLI), "notes", contact_name],
-            capture_output=True, text=True, timeout=15,
-        )
-        if result.returncode == 0:
-            return result.stdout.strip()
-    except Exception:
-        pass
-    return ""
-
-
+# ── Existing facts loading ─────────────────────────────────────
 def load_existing_facts(
     conn: sqlite3.Connection,
     contact_name: str,
@@ -428,19 +403,16 @@ def verify_supporting_quote(quote: str, messages_text: str, max_chars: int = 200
 
 # ── Circuit breaker ────────────────────────────────────────────
 def circuit_breaker_check(
-    new_bullets: list,
     new_facts: list,
     messages_scanned: int,
     verbose: bool = False,
 ) -> bool:
     """Proportional cap: abort if proposed volume suggests hallucination spike."""
-    max_bullets = max(5, int(messages_scanned * 0.15))
-    max_facts   = max(8, int(messages_scanned * 0.10))
-    triggered = len(new_bullets) > max_bullets or len(new_facts) > max_facts
+    max_facts = max(8, int(messages_scanned * 0.10))
+    triggered = len(new_facts) > max_facts
     if triggered:
         log(
-            f"Circuit breaker: {len(new_bullets)} bullets > {max_bullets} OR "
-            f"{len(new_facts)} facts > {max_facts} (messages_scanned={messages_scanned})",
+            f"Circuit breaker: {len(new_facts)} facts > {max_facts} (messages_scanned={messages_scanned})",
             verbose=verbose, always=True,
         )
     return triggered
@@ -450,17 +422,13 @@ def circuit_breaker_check(
 def validate_new_fact(fact: dict) -> None:
     """Raise ValidationError if new fact is malformed."""
     ft = fact.get("fact_type")
-    if ft not in VALID_FACT_TYPES:
+    if ft and ft not in VALID_FACT_TYPES:
         raise ValidationError(f"Unknown fact_type: {ft!r}")
     if not fact.get("summary", "").strip():
         raise ValidationError("summary is required")
-    details = fact.get("details") or {}
-    if not isinstance(details, dict):
+    details = fact.get("details")
+    if details is not None and not isinstance(details, dict):
         raise ValidationError(f"details must be dict, got {type(details).__name__}")
-    required = REQUIRED_DETAIL_KEYS.get(ft, [])
-    missing = [k for k in required if not details.get(k)]
-    if missing:
-        raise ValidationError(f"{ft} missing required detail keys: {missing}")
 
 
 def validate_updated_fact(upd: dict, existing_by_id: dict) -> None:
@@ -561,81 +529,17 @@ def parse_json_response(text: str) -> dict | list:
     raise RuntimeError(f"Could not parse JSON from LLM response: {text[:300]}")
 
 
-# ── Tier-specific notes emphasis ──────────────────────────────
-_TIER_EMPHASIS = {
-    "wife": "PRIORITY: birthday, anniversary, favorite restaurants/foods, gifts, health/allergies.",
-    "partner": "PRIORITY: birthday, anniversary, favorite restaurants/foods, gifts, health/allergies.",
-    "family": "PRIORITY: birthday, kids names/ages, location, health updates, major life events.",
-    "favorite": "Focus on: shared interests, family situation, major life events.",
-    "admin": "Focus on: personal facts, life events, preferences that persist across sessions.",
-}
-
-
-# ── PASS A-NOTES: Extract memory bullets ──────────────────────
-_PASS_A_NOTES_SYSTEM = """\
-You extract personal facts about a contact from their messages for long-term memory.
-
-Rules:
-- Extract ONLY facts the contact explicitly states about THEMSELVES (not about others)
-- Extract WHO they ARE, not what they asked for or what you did
-- Do NOT extract: transactional requests, technical/coding preferences, system metadata,
-  sensitive engagement/proposal content, facts about OTHER people
-- Do NOT extract instructions or requests directed AT this assistant system (e.g. "use Sonnet",
-  "restart the session", "fix the skill") — those are directives, not personal facts
-- Deduplicate against existing notes
-
-Output JSON:
-{
-  "new_bullets": ["Has a dog named Max", "Lives in Boston", ...],
-  "remove_indices": [0, 3]  // 0-based indices into existing notes to remove (superseded/wrong facts)
-}
-
-If nothing to add or remove, output: {"new_bullets": [], "remove_indices": []}
-Output ONLY valid JSON, no explanation."""
-
-def run_pass_a_notes(
-    contact_name: str,
-    tier: str,
-    messages_text: str,
-    existing_notes: str,
-    verbose: bool = False,
-) -> dict:
-    tier_emphasis = _TIER_EMPHASIS.get(tier, "")
-    tier_line = f"\n{tier_emphasis}\n" if tier_emphasis else ""
-
-    # Parse existing notes into numbered bullets for the model
-    existing_bullets = _parse_notes_bullets(existing_notes)
-    if existing_bullets:
-        numbered = "\n".join(f"{i}. {b}" for i, b in enumerate(existing_bullets))
-        existing_section = f"\nExisting notes (numbered for remove_indices):\n{numbered}\n"
-    else:
-        existing_section = "\nExisting notes: (none)\n"
-
-    user_prompt = f"""Contact: {contact_name} (tier: {tier}){tier_line}
-{existing_section}
-Today's messages:
-{messages_text}
-
-Extract personal facts about {contact_name}. Output JSON only."""
-
-    raw = call_claude(_PASS_A_NOTES_SYSTEM, user_prompt, verbose=verbose)
-    result = parse_json_response(raw)
-    if not isinstance(result, dict):
-        raise RuntimeError(f"Pass A-notes returned {type(result).__name__}, expected dict")
-    return result
-
-
 # ── PASS A-FACTS: Extract structured facts ────────────────────
 _PASS_A_FACTS_SYSTEM = """\
 You extract structured facts from messages for long-term storage.
 
-FACT TYPES and required detail keys:
-- travel:       {"destination": str (required), "depart": "YYYY-MM-DD", "return": "YYYY-MM-DD", "purpose": str}
-- event:        {"description": str (required), "location": str}
-- preference:   {"domain": str (required), "value": str}
-- project:      {"description": str (required), "status": "active|completed"}
-- relationship: {"person": str (required), "relation": str (required)}
-- deadline:     {"description": str (required), "due_date": "YYYY-MM-DD (required)"}
+FACT TYPES and optional detail keys:
+- travel:       {"destination": str, "depart": "YYYY-MM-DD", "return": "YYYY-MM-DD", "purpose": str}
+- event:        {"description": str, "location": str}
+- preference:   {"domain": str, "value": str}
+- project:      {"description": str, "status": "active|completed"}
+- relationship: {"person": str, "relation": str}
+- deadline:     {"description": str, "due_date": "YYYY-MM-DD"}
 
 CONFIDENCE:
 - high: Direct first-person statement with details ("I'm flying to SF March 20-25")
@@ -711,9 +615,9 @@ Extract structured facts. Output JSON only."""
 
 # ── PASS B: Grounding verification ────────────────────────────
 _PASS_B_SYSTEM = """\
-You are a fact-checker verifying proposed memories against source messages.
+You are a fact-checker verifying proposed facts against source messages.
 
-For each item, find a VERBATIM supporting quote in the messages.
+For each fact, find a VERBATIM supporting quote in the messages.
 
 Rules:
 - ACCEPT: Quote found AND fact is correctly derived from it
@@ -726,10 +630,6 @@ Rules:
 
 Output JSON:
 {
-  "notes": {
-    "accepted": [{"item": "Lives in Boston", "supporting_quote": "This Boston winter..."}],
-    "refuted":  [{"item": "Plays tennis", "reason": "No supporting quote found"}]
-  },
   "facts": {
     "accepted": [{"item": "Flying to SF March 20-25", "supporting_quote": "Flying to SF March 20-25..."}],
     "refuted":  [{"item": "...", "reason": "..."}]
@@ -741,11 +641,9 @@ Be strict. When in doubt, REFUTE."""
 def run_pass_b(
     contact_name: str,
     messages_text: str,
-    proposed_bullets: list[str],
     proposed_facts: list[dict],
     verbose: bool = False,
 ) -> dict:
-    bullets_json = json.dumps(proposed_bullets)
     facts_summary = json.dumps([{"fact_type": f.get("fact_type"), "summary": f.get("summary")} for f in proposed_facts])
 
     user_prompt = f"""Contact: {contact_name}
@@ -753,13 +651,10 @@ def run_pass_b(
 Messages:
 {messages_text}
 
-Proposed memory bullets to verify:
-{bullets_json}
-
 Proposed facts to verify:
 {facts_summary}
 
-Verify each item against the messages. Output JSON only."""
+Verify each fact against the messages. Output JSON only."""
 
     raw = call_claude(_PASS_B_SYSTEM, user_prompt, verbose=verbose)
     result = parse_json_response(raw)
@@ -799,64 +694,6 @@ def resolve_pass_b_section(
         and normalize(get_item_str(p)) not in refuted_norm
     ]
     return b_accepted, b_refuted + implicit
-
-
-# ── Notes formatting ───────────────────────────────────────────
-def _parse_notes_bullets(notes: str) -> list[str]:
-    """Extract bullet lines from managed notes section."""
-    bullets = []
-    in_managed = MANAGED_HEADER in notes
-    for line in notes.splitlines():
-        if line.startswith("- ") and in_managed:
-            bullets.append(line[2:].strip())
-    return bullets
-
-
-def _build_new_notes(
-    contact_name: str,
-    existing_notes: str,
-    new_bullets: list[str],
-    remove_indices: list[int],
-) -> str:
-    """Merge new bullets with existing, removing superseded ones."""
-    existing_bullets = _parse_notes_bullets(existing_notes)
-
-    # Remove superseded bullets
-    keep = [b for i, b in enumerate(existing_bullets) if i not in set(remove_indices)]
-
-    # Deduplicate new_bullets against keep (80% token overlap)
-    final = list(keep)
-    for nb in new_bullets:
-        nb_words = set(nb.lower().split())
-        is_dup = any(
-            len(nb_words & set(b.lower().split())) / max(len(nb_words), 1) >= 0.8
-            for b in final
-        )
-        if not is_dup:
-            final.append(nb)
-
-    # Preserve "## User Notes" section if present
-    user_notes_section = ""
-    if "## User Notes" in existing_notes:
-        idx = existing_notes.index("## User Notes")
-        # Find end (next ## or ---)
-        after = existing_notes[idx:]
-        end = len(after)
-        for m in re.finditer(r'\n##|\n---', after):
-            if m.start() > 0:
-                end = m.start()
-                break
-        user_notes_section = "\n\n" + after[:end].strip()
-
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M")
-    bullets_text = "\n".join(f"- {b}" for b in final)
-    return (
-        f"{MANAGED_HEADER}\n"
-        f"## About {contact_name}\n"
-        f"{bullets_text}"
-        f"{user_notes_section}\n\n"
-        f"---\n*Last updated: {ts}*"
-    )
 
 
 # ── DB commit ─────────────────────────────────────────────────
@@ -916,53 +753,18 @@ def commit_facts_to_db(
     return committed
 
 
-# ── Contacts.app notes write ───────────────────────────────────
-def write_notes_to_contacts(contact_name: str, new_notes: str, dry_run: bool = False) -> bool:
-    """Write notes to Contacts.app. Returns True on success."""
-    if dry_run:
-        print(f"\n  [DRY RUN] Would write notes for {contact_name}:")
-        print("  " + new_notes.replace("\n", "\n  "))
-        return True
-
-    # Backup first
-    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-    slug = re.sub(r'[^a-z0-9_]', '_', contact_name.lower())
-    backup_path = BACKUP_DIR / f"{slug}.txt"
-    try:
-        result = subprocess.run(
-            [str(CONTACTS_CLI), "notes", contact_name],
-            capture_output=True, text=True, timeout=15,
-        )
-        if result.returncode == 0:
-            backup_path.write_text(result.stdout)
-    except Exception:
-        pass
-
-    # Write new notes
-    try:
-        result = subprocess.run(
-            [str(CONTACTS_CLI), "notes", contact_name, new_notes],
-            capture_output=True, text=True, timeout=15,
-        )
-        return result.returncode == 0
-    except Exception as e:
-        log(f"[ERROR] Failed to write notes for {contact_name}: {e}")
-        return False
-
-
 # ── Audit health check ────────────────────────────────────────
 def check_audit_health(audit: AuditRecord) -> list[str]:
     warnings = []
-    for sec_name in ("notes", "facts"):
-        sec: SectionAudit = getattr(audit, sec_name)
-        if sec.a_proposed > 0:
-            drop = 1 - (sec.b_accepted / sec.a_proposed)
-            if drop > HIGH_DROP_RATE_THRESHOLD:
-                warnings.append(f"{sec_name}: {drop:.0%} drop rate ({sec.b_refuted + sec.b_implicit_refuted} refuted of {sec.a_proposed})")
-        if sec.schema_dropped_update > 0:
-            warnings.append(f"{sec_name}: {sec.schema_dropped_update} update(s) dropped (bad IDs or schema)")
-        if sec.unexpected_schema_errors > 0:
-            warnings.append(f"[ACTION REQUIRED] {sec_name}: {sec.unexpected_schema_errors} unexpected validator error(s)")
+    sec = audit.facts
+    if sec.a_proposed > 0:
+        drop = 1 - (sec.b_accepted / sec.a_proposed)
+        if drop > HIGH_DROP_RATE_THRESHOLD:
+            warnings.append(f"facts: {drop:.0%} drop rate ({sec.b_refuted + sec.b_implicit_refuted} refuted of {sec.a_proposed})")
+    if sec.schema_dropped_update > 0:
+        warnings.append(f"facts: {sec.schema_dropped_update} update(s) dropped (bad IDs or schema)")
+    if sec.unexpected_schema_errors > 0:
+        warnings.append(f"[ACTION REQUIRED] facts: {sec.unexpected_schema_errors} unexpected validator error(s)")
     return warnings
 
 
@@ -1016,31 +818,23 @@ def consolidate_contact(
         messages_text = truncate_to_budget(format_messages_text(rows), MAX_MESSAGES_CHARS)
         messages_lower = messages_text.lower()
 
-        # ── 2. Load existing notes + facts ────────────────────
-        existing_notes = load_existing_notes(contact_name)
+        # ── 2. Load existing facts ────────────────────────────
         existing_facts = load_existing_facts(conn, contact_name, audit.facts)
         existing_by_id = {f["id"]: f for f in existing_facts}
 
-        # ── 3. Pass A-notes ───────────────────────────────────
-        a_notes = run_pass_a_notes(contact_name, tier, messages_text, existing_notes, verbose=verbose)
-        new_bullets = a_notes.get("new_bullets") or []
-        remove_indices = [int(i) for i in (a_notes.get("remove_indices") or [])]
-        audit.notes.a_proposed = len(new_bullets)
-        log(f"[{contact_name}] Pass A-notes: {len(new_bullets)} bullets proposed", verbose=verbose)
-
-        # ── 4. Pass A-facts ───────────────────────────────────
+        # ── 3. Pass A-facts ───────────────────────────────────
         a_facts = run_pass_a_facts(contact_name, messages_text, existing_facts, verbose=verbose)
-        new_facts_raw   = a_facts.get("new_facts") or []
-        updated_facts   = a_facts.get("updated_facts") or []
+        new_facts_raw    = a_facts.get("new_facts") or []
+        updated_facts    = a_facts.get("updated_facts") or []
         expired_fact_ids = [int(x) for x in (a_facts.get("expired_fact_ids") or [])]
         audit.facts.a_proposed = len(new_facts_raw)
         log(f"[{contact_name}] Pass A-facts: {len(new_facts_raw)} new, {len(updated_facts)} updates, {len(expired_fact_ids)} expired", verbose=verbose)
 
-        # ── 5. Circuit breaker ────────────────────────────────
-        if circuit_breaker_check(new_bullets, new_facts_raw, len(rows), verbose=verbose):
-            raise AbortContactRun("circuit_breaker", f"{len(new_bullets)} bullets, {len(new_facts_raw)} facts")
+        # ── 4. Circuit breaker ────────────────────────────────
+        if circuit_breaker_check(new_facts_raw, len(rows), verbose=verbose):
+            raise AbortContactRun("circuit_breaker", f"{len(new_facts_raw)} facts")
 
-        # ── 6. Schema validation ──────────────────────────────
+        # ── 5. Schema validation ──────────────────────────────
         valid_new_facts = []
         for fact in new_facts_raw:
             try:
@@ -1067,18 +861,7 @@ def consolidate_contact(
                 audit.facts.unexpected_schema_errors += 1
                 log(f"[{contact_name}] Unexpected schema error (update): {type(e).__name__}: {e}")
 
-        # ── 7. Pre-verify grounding (code-level) ──────────────
-        grounded_bullets = []
-        for b in new_bullets:
-            if word_overlap(b, messages_lower) < 0.60:
-                audit.notes.pre_verify_dropped += 1
-                log(f"[{contact_name}] Pre-verify drop (word overlap): {b[:60]}", verbose=verbose)
-            elif not check_entities(b, messages_lower):
-                audit.notes.pre_verify_dropped += 1
-                log(f"[{contact_name}] Pre-verify drop (entity check): {b[:60]}", verbose=verbose)
-            else:
-                grounded_bullets.append(b)
-
+        # ── 6. Pre-verify grounding (facts only) ──────────────
         grounded_facts = []
         for fact in valid_new_facts:
             summary = fact.get("summary", "")
@@ -1091,8 +874,8 @@ def consolidate_contact(
             else:
                 grounded_facts.append(fact)
 
-        # ── 8. Sensitive content check ────────────────────────
-        all_proposed_text = " ".join(grounded_bullets + [f.get("summary", "") for f in grounded_facts])
+        # ── 7. Sensitive content check ────────────────────────
+        all_proposed_text = " ".join(f.get("summary", "") for f in grounded_facts)
         if check_sensitive(all_proposed_text):
             # Advance watermark BEFORE raising so we don't re-trigger next run
             checkpoints[chat_id] = cutoff_ts
@@ -1109,46 +892,27 @@ def consolidate_contact(
             audit.sensitive_content_detected = True
             raise AbortContactRun("sensitive_content", f"contact={contact_name}")
 
-        # ── 9. Pass B: Grounding verification ─────────────────
-        if grounded_bullets or grounded_facts:
-            b_result = run_pass_b(contact_name, messages_text, grounded_bullets, grounded_facts, verbose=verbose)
-            b_notes = b_result.get("notes", {})
+        # ── 8. Pass B: Grounding verification (facts only) ────
+        if grounded_facts:
+            b_result = run_pass_b(contact_name, messages_text, grounded_facts, verbose=verbose)
             b_facts = b_result.get("facts", {})
 
-            b_notes_accepted = b_notes.get("accepted") or []
-            b_notes_refuted  = b_notes.get("refuted") or []
             b_facts_accepted = b_facts.get("accepted") or []
             b_facts_refuted  = b_facts.get("refuted") or []
 
             # Implicit refutation
-            b_notes_accepted, b_notes_refuted = resolve_pass_b_section(
-                grounded_bullets, b_notes_accepted, b_notes_refuted
-            )
             b_facts_accepted, b_facts_refuted = resolve_pass_b_section(
                 grounded_facts, b_facts_accepted, b_facts_refuted, proposed_key="summary"
             )
 
-            # Count
-            audit.notes.b_accepted = len(b_notes_accepted)
-            audit.notes.b_refuted = len(b_notes_refuted)
             audit.facts.b_accepted = len(b_facts_accepted)
             audit.facts.b_refuted = len(b_facts_refuted)
 
             # Quote verification
-            verified_bullets = []
-            for item in b_notes_accepted:
-                quote = item.get("supporting_quote", "")
-                if verify_supporting_quote(quote, messages_text):
-                    verified_bullets.append(item["item"])
-                else:
-                    audit.notes.quote_verify_dropped += 1
-                    log(f"[{contact_name}] Quote verify failed: {item['item'][:60]}", verbose=verbose)
-
             verified_facts = []
             accepted_fact_summaries = {normalize(x["item"]) for x in b_facts_accepted}
             for fact in grounded_facts:
                 if normalize(fact.get("summary", "")) in accepted_fact_summaries:
-                    # Find quote for this fact
                     quote = ""
                     for x in b_facts_accepted:
                         if normalize(x["item"]) == normalize(fact.get("summary", "")):
@@ -1160,24 +924,22 @@ def consolidate_contact(
                         audit.facts.quote_verify_dropped += 1
                         log(f"[{contact_name}] Quote verify failed (fact): {fact.get('summary', '')[:60]}", verbose=verbose)
         else:
-            verified_bullets = []
             verified_facts = []
 
-        # ── 10. Audit health ───────────────────────────────────
+        # ── 9. Audit health ────────────────────────────────────
         warnings = check_audit_health(audit)
         for w in warnings:
-            audit.notes.warnings.append(w) if "notes" in w else audit.facts.warnings.append(w)
+            audit.facts.warnings.append(w)
             log(f"[{contact_name}] WARN: {w}", verbose=verbose)
 
-        # ── 11. Dry-run output ────────────────────────────────
+        # ── 10. Dry-run output ─────────────────────────────────
         if dry_run:
-            _print_dry_run(contact_name, verified_bullets, verified_facts,
-                           valid_updated_facts, expired_fact_ids, remove_indices, existing_notes)
+            _print_dry_run(contact_name, verified_facts, valid_updated_facts, expired_fact_ids)
             # Don't advance watermark or write anything
             return audit
 
-        # ── 12. Commit (all-or-nothing) ───────────────────────
-        if not verified_bullets and not verified_facts and not valid_updated_facts and not expired_fact_ids:
+        # ── 11. Commit facts (all-or-nothing) ─────────────────
+        if not verified_facts and not valid_updated_facts and not expired_fact_ids:
             log(f"[{contact_name}] Nothing to commit after verification")
         else:
             # Validate expired IDs are known
@@ -1185,22 +947,13 @@ def consolidate_contact(
                 if fid not in existing_by_id:
                     raise AbortContactRun("validation_error", f"expired_fact_id {fid} not in existing facts")
 
-            # DB transaction
             facts_committed = commit_facts_to_db(
                 conn, contact_name, verified_facts, valid_updated_facts, expired_fact_ids
             )
             audit.facts.committed = facts_committed
+            log(f"[{contact_name}] Committed: {facts_committed} fact changes")
 
-            # Notes write
-            new_notes = _build_new_notes(contact_name, existing_notes, verified_bullets, remove_indices)
-            if not write_notes_to_contacts(contact_name, new_notes, dry_run=False):
-                log(f"[{contact_name}] WARN: Notes write failed — facts committed but notes stale", always=True)
-            else:
-                audit.notes.committed = len(verified_bullets)
-
-            log(f"[{contact_name}] Committed: {len(verified_bullets)} bullets, {facts_committed} fact changes")
-
-        # ── 13. Advance watermark ──────────────────────────────
+        # ── 12. Advance watermark ──────────────────────────────
         advance_watermark(chat_id, rows, cutoff_ts, checkpoints)
         save_checkpoints(checkpoints)
         audit.committed = True
@@ -1219,37 +972,24 @@ def consolidate_contact(
 
 def _print_dry_run(
     contact_name: str,
-    bullets: list[str],
     facts: list[dict],
     updated_facts: list[dict],
     expired_ids: list[int],
-    remove_indices: list[int],
-    existing_notes: str,
 ) -> None:
     print(f"\n{'='*60}")
     print(f"DRY RUN: {contact_name}")
     print(f"{'='*60}")
-    if bullets:
-        print(f"\nNew memory bullets ({len(bullets)}):")
-        for b in bullets:
-            print(f"  + {b}")
-    if remove_indices:
-        existing = _parse_notes_bullets(existing_notes)
-        print(f"\nBullets to remove ({len(remove_indices)}):")
-        for i in remove_indices:
-            if i < len(existing):
-                print(f"  - [{i}] {existing[i]}")
     if facts:
         print(f"\nNew facts ({len(facts)}):")
         for f in facts:
-            print(f"  + [{f['fact_type']}] {f['summary']}")
+            print(f"  + [{f.get('fact_type', '?')}] {f['summary']}")
     if updated_facts:
         print(f"\nFact updates ({len(updated_facts)}):")
         for u in updated_facts:
             print(f"  ~ #{u['existing_fact_id']}: {u}")
     if expired_ids:
         print(f"\nFacts to expire: {expired_ids}")
-    if not any([bullets, facts, updated_facts, expired_ids, remove_indices]):
+    if not any([facts, updated_facts, expired_ids]):
         print("  (nothing to commit)")
 
 
@@ -1358,13 +1098,11 @@ def print_summary(results: list[AuditRecord]) -> None:
     committed = sum(1 for r in results if r.committed)
     aborted = sum(1 for r in results if r.abort_reason)
     errored = sum(1 for r in results if r.errors)
-    total_bullets = sum(r.notes.committed for r in results)
     total_facts = sum(r.facts.committed for r in results)
 
     print(f"\n{'='*50}")
     print(f"Memory consolidation complete")
     print(f"  Contacts: {total} total, {committed} committed, {aborted} aborted, {errored} errors")
-    print(f"  Bullets: {total_bullets} committed")
     print(f"  Facts: {total_facts} committed")
 
     if aborted:
@@ -1381,7 +1119,7 @@ def print_summary(results: list[AuditRecord]) -> None:
 
     warnings = []
     for r in results:
-        for w in r.notes.warnings + r.facts.warnings:
+        for w in r.facts.warnings:
             warnings.append(f"  {r.contact}: {w}")
     if warnings:
         print(f"\nWarnings:")

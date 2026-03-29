@@ -151,38 +151,11 @@ def get_conn(readonly: bool = False) -> sqlite3.Connection:
 
 
 def validate_details(fact_type: str, details: dict | None) -> tuple[bool, str]:
-    """Validate details JSON against the schema for this fact_type.
-
-    Returns (ok, error_message). Unknown keys are allowed (logged but not rejected).
-    Type mismatches on known keys are coerced where possible.
-    """
+    """Validate details JSON. Returns (ok, error_message)."""
     if details is None:
-        details = {}
-
-    type_schema = FACT_TYPES.get(fact_type)
-    if not type_schema:
-        # Unknown type — no validation, accept as-is
         return True, ""
-
-    required = type_schema["required"]
-    missing = required - set(details.keys())
-    if missing:
-        return False, f"Missing required keys for {fact_type}: {missing}"
-
-    # Type coercion for known keys
-    all_known = type_schema["required"] | type_schema["optional"]
-    for key in all_known & set(details.keys()):
-        val = details[key]
-        # Coerce list fields
-        if key in ("attendees", "tech_stack") and not isinstance(val, list):
-            if isinstance(val, str):
-                details[key] = [val]
-            else:
-                return False, f"Key '{key}' should be a list, got {type(val).__name__}"
-        # Coerce string fields
-        if key in ("destination", "domain", "relation", "name", "context", "location", "description") and not isinstance(val, str):
-            details[key] = str(val)
-
+    if not isinstance(details, dict):
+        return False, "details must be a dict"
     return True, ""
 
 
