@@ -565,6 +565,8 @@ Rules:
 - Extract WHO they ARE, not what they asked for or what you did
 - Do NOT extract: transactional requests, technical/coding preferences, system metadata,
   sensitive engagement/proposal content, facts about OTHER people
+- Do NOT extract instructions or requests directed AT this assistant system (e.g. "use Sonnet",
+  "restart the session", "fix the skill") — those are directives, not personal facts
 - Deduplicate against existing notes
 
 Output JSON:
@@ -628,6 +630,11 @@ CONFIDENCE:
 RULES:
 - Extract concrete, session-spanning facts. Not small talk, weather, or transient content.
 - Do NOT extract system metadata or engagement/proposal content.
+- Do NOT extract instructions or requests ABOUT this assistant system — e.g. "use Sonnet",
+  "restart the session", "fix the skill", "run nightly at 2am". These are directives to the
+  system, not personal facts about the contact.
+- For "preference" type: only extract preferences about the contact's OWN life (food, music,
+  tools they personally use, activities). NOT preferences about how this assistant should operate.
 - Resolve relative dates ("next Saturday") against message timestamps.
 - Only expire facts with EXPLICIT contradiction ("trip canceled").
 
