@@ -45,6 +45,19 @@ What are you building?
     └── Required for serve-ipa distribution and TestFlight uploads
 ```
 
+### Tailscale HTTPS Certs (for serve-ipa)
+
+serve-ipa needs HTTPS to serve IPA manifests. Certs live at `~/.dispatch/certs/` (NOT in the repo).
+
+```bash
+# Generate Tailscale certs (requires Tailscale running + HTTPS enabled on tailnet)
+HOSTNAME=$(tailscale status --json | jq -r '.Self.DNSName' | sed 's/\.$//')
+mkdir -p ~/.dispatch/certs
+tailscale cert --cert-file ~/.dispatch/certs/${HOSTNAME}.crt --key-file ~/.dispatch/certs/${HOSTNAME}.key ${HOSTNAME}
+```
+
+serve-ipa reads the hostname from `config.local.yaml` (`tailscale.hostname`) or `DISPATCH_HOSTNAME` env var, then looks for matching `.crt`/`.key` files in `~/.dispatch/certs/`.
+
 ```bash
 # Debug — connects to Metro for hot reload
 xcodebuild archive \
