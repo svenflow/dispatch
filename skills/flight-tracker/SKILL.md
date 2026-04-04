@@ -53,3 +53,4 @@ No Chrome or API key required.
 - When someone says "my flight," find ALL segments and report on each
 - **NEVER truncate URLs when sharing over SMS.** Always send the full FlightAware URL so it's clickable.
 - The `--json` flag outputs structured data for programmatic use
+- **Times are DST-aware using `zoneinfo` (e.g., `America/Los_Angeles`, `America/New_York`).** Never use hardcoded UTC offset arithmetic — use proper timezone objects so times automatically shift during DST transitions.

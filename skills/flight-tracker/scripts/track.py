@@ -18,8 +18,12 @@ import json
 import re
 import sys
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import requests
+
+TZ_PACIFIC = ZoneInfo("America/Los_Angeles")
+TZ_EASTERN = ZoneInfo("America/New_York")
 
 IATA_TO_ICAO = {
     "UA": "UAL", "AA": "AAL", "DL": "DAL", "WN": "SWA",
@@ -98,9 +102,8 @@ def filter_segments_by_date(segments: list[dict], target_date: str | None = None
     if target_date:
         d = datetime.strptime(target_date, "%Y-%m-%d").date()
     else:
-        # Use Pacific time as reference for "today"
-        now_utc = datetime.now(timezone.utc)
-        d = (now_utc - timedelta(hours=8)).date()
+        # Use Pacific time as reference for "today" (DST-aware)
+        d = datetime.now(TZ_PACIFIC).date()
 
     today = d
     tomorrow = d + timedelta(days=1)
@@ -110,12 +113,9 @@ def filter_segments_by_date(segments: list[dict], target_date: str | None = None
         ts = seg["scheduled_depart"]
         if ts is None:
             continue
-        # Check if the local departure date matches
-        # Extract date from permalink which uses UTC date
-        # Instead, check if scheduled departure is within a ~36hr window
-        dt = datetime.fromtimestamp(ts, tz=timezone.utc)
-        seg_local = dt - timedelta(hours=8)  # rough Pacific time
-        seg_date = seg_local.date()
+        # Convert to DST-aware Pacific time for date comparison
+        dt = datetime.fromtimestamp(ts, tz=TZ_PACIFIC)
+        seg_date = dt.date()
         if seg_date == today or seg_date == tomorrow:
             result.append(seg)
 
@@ -124,10 +124,11 @@ def filter_segments_by_date(segments: list[dict], target_date: str | None = None
     return result
 
 
-def format_time(ts: int | None, tz_offset_hours: int = 0) -> str:
+def format_time(ts: int | None, tz: ZoneInfo) -> str:
+    """Format a unix timestamp in the given timezone (DST-aware)."""
     if ts is None:
         return "--"
-    dt = datetime.fromtimestamp(ts, tz=timezone.utc) + timedelta(hours=tz_offset_hours)
+    dt = datetime.fromtimestamp(ts, tz=tz)
     return dt.strftime("%I:%M %p").lstrip("0")
 
 
@@ -171,9 +172,9 @@ def main():
             dep = seg["actual_depart"] or seg["estimated_depart"] or seg["scheduled_depart"]
             arr = seg["actual_arrive"] or seg["estimated_arrive"] or seg["scheduled_arrive"]
             if dep:
-                print(f"     Departs: {format_time(dep, -8)} PT / {format_time(dep, -5)} ET")
+                print(f"     Departs: {format_time(dep, TZ_PACIFIC)} PT / {format_time(dep, TZ_EASTERN)} ET")
             if arr:
-                print(f"     Arrives: {format_time(arr, -8)} PT / {format_time(arr, -5)} ET")
+                print(f"     Arrives: {format_time(arr, TZ_PACIFIC)} PT / {format_time(arr, TZ_EASTERN)} ET")
             print(f"     {seg['link']}")
         print()
 

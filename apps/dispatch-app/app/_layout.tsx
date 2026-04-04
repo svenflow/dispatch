@@ -1,3 +1,4 @@
+// Hot reload test - Apr 3 2026 8:35am
 import { DarkTheme, ThemeProvider } from "@react-navigation/native";
 import { useFonts } from "expo-font";
 import { Stack } from "expo-router";
@@ -102,7 +103,10 @@ function RootLayoutNav() {
           <Stack.Screen name="dashboard/skill-detail" options={{ headerShown: true, title: "Skill Detail", headerBackTitle: "Skills" }} />
           <Stack.Screen name="dashboard/events" options={{ headerShown: true, title: "Events", headerBackTitle: "Dashboard" }} />
           <Stack.Screen name="dashboard/task-detail" options={{ headerShown: true, title: "Task Detail", headerBackTitle: "Tasks" }} />
+          <Stack.Screen name="dashboard/facts" options={{ headerShown: true, title: "Knowledge Base", headerBackTitle: "Dashboard" }} />
+          <Stack.Screen name="dashboard/costs" options={{ headerShown: true, title: "Cost Analytics", headerBackTitle: "Dashboard" }} />
           <Stack.Screen name="soul" options={{ headerShown: true, title: "Soul", headerBackTitle: "Settings" }} />
+          <Stack.Screen name="soul-history" options={{ headerShown: true, title: "Soul History", headerBackTitle: "Soul" }} />
           <Stack.Screen name="image-viewer" options={{ presentation: "modal" }} />
           <Stack.Screen name="modal" options={{ presentation: "modal" }} />
         </Stack>

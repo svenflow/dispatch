@@ -34,7 +34,9 @@ Topic/type taxonomy (v6):
                 master.triggered,
                 signal.connection_state,
                 sdk.turn_complete, session.heartbeat (keyed by component/session_name),
-                quota.fetched, quota.fetch_failed (source=daemon)
+                quota.fetched, quota.fetch_failed (source=daemon),
+                health.haiku_verdict, health.circuit_breaker,
+                health.quota_alert, health.bus_check (source=health)
     reminders — reminder.due (keyed by chat_id)
     tasks     — task.requested, task.started, task.completed, task.failed,
                 task.timeout, task.skipped (keyed by requested_by chat_id)
@@ -54,6 +56,9 @@ Source column semantics per topic:
 import json
 import logging
 import re
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from uuid import uuid4
 
 log = logging.getLogger(__name__)
 
@@ -291,6 +296,112 @@ def service_spawned_payload(service: str, pid: int, **extra) -> dict:
     }
     payload.update(extra)
     return payload
+
+
+# ─── Diagnostic event schemas & builders ─────────────────────────────
+#
+# Schema evolution: add new optional fields freely, no version bump.
+# For breaking changes, bump schema_v and note in commit.
+# Consumers use .get() for optional fields. On unexpected schema_v,
+# log-warn and process best-effort — don't raise.
+#
+# Event schemas (plain dicts, no TypedDicts — no mypy in CI):
+#
+# health.haiku_verdict:
+#   schema_v:1, check_run_id, check_type(deep|stuck), session_name,
+#   chat_id, verdict(FATAL|HEALTHY|STUCK|WORKING),
+#   action_taken(restart|none — always string, never null), timestamp
+#
+# health.circuit_breaker:
+#   schema_v:1, check_run_id?(present within check cycle, absent otherwise),
+#   session_name, chat_id, transition(opened|closed), restart_count, timestamp
+#
+# health.quota_alert:
+#   schema_v:1, quota_type(5-hour|7-day all|7-day sonnet|7-day opus|extra usage),
+#   utilization, threshold, resets_at, timestamp
+#
+# health.bus_check:
+#   status:"ok" — startup canary only
+
+
+@dataclass
+class CheckContext:
+    """Threaded through health check cycles for cross-event correlation.
+
+    Created once per check cycle entry. Passed explicitly through call stack.
+    Closures capture by reference — safe because ctx is assigned once and never
+    reassigned (NOT the same as capturing a loop variable).
+    """
+    check_run_id: str = field(default_factory=lambda: str(uuid4()))
+
+
+def haiku_verdict_payload(ctx: CheckContext, check_type: str,
+                          session_name: str, chat_id: str,
+                          verdict: str, action_taken: str,
+                          reasoning: str | None = None) -> dict:
+    """Build a health.haiku_verdict payload.
+
+    Pure function — no side effects. Caller handles logging for unknown patterns.
+    check_type: "deep" or "stuck"
+    verdict: "FATAL", "HEALTHY", "STUCK", or "WORKING"
+    action_taken: "restart" or "none" (always a string, never null)
+    reasoning: optional Haiku reasoning text explaining the verdict
+    """
+    payload = {
+        "schema_v": 1,
+        "check_run_id": ctx.check_run_id,
+        "check_type": check_type,
+        "session_name": session_name,
+        "chat_id": chat_id,
+        "verdict": verdict,
+        "action_taken": action_taken,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    if reasoning:
+        payload["reasoning"] = reasoning
+    return payload
+
+
+def circuit_breaker_payload(session_name: str, chat_id: str,
+                            transition: str, restart_count: int,
+                            ctx: CheckContext | None = None) -> dict:
+    """Build a health.circuit_breaker payload.
+
+    transition: "opened" or "closed"
+    ctx: present when transition occurs within a health check cycle
+         (deep_health_check or _investigate_and_maybe_restart).
+         Absent check_run_id means transition outside a check cycle
+         (not a bug — e.g. is_open() auto-transitions open→half_open on timeout).
+    """
+    d = {
+        "schema_v": 1,
+        "session_name": session_name,
+        "chat_id": chat_id,
+        "transition": transition,
+        "restart_count": restart_count,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    if ctx:
+        d["check_run_id"] = ctx.check_run_id
+    return d
+
+
+def quota_alert_payload(alert_dict: dict) -> dict:
+    """Build a health.quota_alert payload.
+
+    Takes raw alert dict from check_quota_thresholds() — fields:
+    quota_type, utilization, threshold, resets_at.
+    No check_run_id: quota polling runs on independent timer.
+    No chat_id: global resource, not per-session.
+    """
+    return {
+        "schema_v": 1,
+        "quota_type": alert_dict["quota_type"],
+        "utilization": alert_dict["utilization"],
+        "threshold": alert_dict["threshold"],
+        "resets_at": alert_dict["resets_at"],
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 def sanitize_reaction_for_bus(reaction: dict) -> dict:

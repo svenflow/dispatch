@@ -110,10 +110,21 @@ fi
 crash_count=$((crash_count + 1))
 echo "$crash_count $now" > "$CRASH_STATE"
 
-log "Spawning healer (attempt #$crash_count)"
+log "Crash detected (attempt #$crash_count). Trying bare launchctl restart first..."
+pkill -f "dispatch.*manager" 2>/dev/null || true
+rm -f ~/dispatch/state/daemon.pid
+launchctl kickstart -k gui/$(id -u)/com.dispatch.claude-assistant
+sleep 10
 
-# Always notify admin of crash
-send_sms "[WATCHDOG] Daemon crashed (attempt #$crash_count). Starting auto-recovery..."
+# Check if daemon recovered without Claude healer
+if pgrep -f "dispatch.*manager" > /dev/null 2>&1 || [ -f ~/dispatch/state/daemon.pid ]; then
+  log "Bare launchctl restart succeeded — skipping Claude healer"
+  send_sms "[WATCHDOG] Daemon crashed (attempt #$crash_count). Auto-recovered via launchctl restart."
+  exit 0
+fi
+
+log "Bare restart failed. Spawning Claude healer (attempt #$crash_count)"
+send_sms "[WATCHDOG] Daemon crashed (attempt #$crash_count). Bare restart failed, starting Claude healer..."
 
 # Build healing prompt
 cat > "$PROMPT_FILE" << 'PROMPT_END'

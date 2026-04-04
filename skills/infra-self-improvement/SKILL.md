@@ -193,6 +193,17 @@ Drop JSON files in `~/.claude/test-messages/`:
 ```
 The daemon picks these up within 100ms and processes them through the full routing pipeline.
 
+### 8. Session Lifecycle: Compaction and Resume
+- **What**: When a session's context window fills, Claude Code fires a compaction hook. The session context is summarized and the session continues — BUT the SDK session goes idle waiting for input.
+- **Danger**: After compaction, sessions silently stop responding. Without an explicit `inject-prompt` after compaction, the session hangs indefinitely. This is implemented in `~/dispatch/bin/post-compact-hook` but easy to forget.
+- **Fix**: The post-compact-hook automatically calls `inject-prompt` with "Continue from where you left off" after compaction. This is wired via `.claude/settings.json` `hooks.PostCompact` in each session's transcript directory.
+- **If sessions stop responding after long tasks**: Check if compaction occurred (`claude-assistant logs | grep compact`), then manually run:
+  ```bash
+  claude-assistant inject-prompt <session> "Continue from where you left off"
+  ```
+- **Evidence**: Session a93e7c3d — "so after compaction i think we should inject-prompt after compaction hook to say continue"
+
+
 ## Common Pitfalls
 
 1. **Editing sdk_backend.py without running tests** → Most dangerous file, touches everything

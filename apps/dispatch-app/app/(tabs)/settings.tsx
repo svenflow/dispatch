@@ -14,6 +14,7 @@ import {
   View,
 } from "react-native";
 import { Swipeable } from "react-native-gesture-handler";
+import { SafeAreaView } from "react-native-safe-area-context";
 // expo-notifications is iOS/Android only — conditionally import for web compat
 let Notifications: typeof import("expo-notifications") | null = null;
 if (Platform.OS !== "web") {
@@ -489,9 +490,9 @@ export default function SettingsScreen() {
   const displayUrl = currentUrl || "(same-origin)";
 
   return (
-    <>
+    <SafeAreaView style={styles.container} edges={["top"]}>
     <ScrollView
-      style={styles.container}
+      style={styles.scrollView}
       contentContainerStyle={styles.contentContainer}
     >
       {/* Model Config Section */}
@@ -664,6 +665,20 @@ export default function SettingsScreen() {
           Restart the daemon or clear all notifications.
         </Text>
       </View>
+
+      {/* App Info Section */}
+      <View style={styles.section}>
+        <Text style={styles.sectionHeader}>APP INFO</Text>
+        <View style={styles.sectionCard}>
+          <View style={styles.row}>
+            <Text style={styles.rowLabel}>OTA Build</Text>
+            <Text style={styles.rowValue}>2026-04-03-test</Text>
+          </View>
+        </View>
+        <Text style={styles.sectionFooter}>
+          Last OTA update identifier.
+        </Text>
+      </View>
     </ScrollView>
 
     {/* Server URL Modal */}
@@ -754,7 +769,7 @@ export default function SettingsScreen() {
         </View>
       </KeyboardAvoidingView>
     </Modal>
-    </>
+    </SafeAreaView>
   );
 }
 
@@ -762,6 +777,9 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#09090b",
+  },
+  scrollView: {
+    flex: 1,
   },
   contentContainer: {
     paddingBottom: 48,

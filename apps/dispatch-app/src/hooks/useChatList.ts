@@ -209,8 +209,20 @@ export function useChatList(): UseChatListReturn {
     }
   }, []);
 
+  /** Count of consecutive short-lived SSE connections (stream closes in < 1s).
+   *  After MAX_SHORT_LIVED hits, SSE is disabled and we fall back to polling. */
+  const sseShortLivedCountRef = useRef(0);
+  const SSE_MAX_SHORT_LIVED = 3;
+  const SSE_MIN_STREAM_DURATION_MS = 1000;
+  /** Once true, SSE is permanently disabled for this mount (polling only). */
+  const sseDisabledRef = useRef(false);
+
   const connectSSE = useCallback(() => {
     if (!mountedRef.current) return;
+
+    // If SSE has been disabled due to repeated short-lived connections
+    // (React Native doesn't support persistent HTTP streaming), use polling
+    if (sseDisabledRef.current) return false;
 
     const token = getDeviceToken();
     if (!token) {
@@ -225,6 +237,7 @@ export function useChatList(): UseChatListReturn {
     const url = `${getApiBaseUrl()}/chats/stream?token=${encodeURIComponent(token)}`;
 
     (async () => {
+      const streamStartTime = Date.now();
       try {
         const response = await fetch(url, {
           signal: abortController.signal,
@@ -263,8 +276,34 @@ export function useChatList(): UseChatListReturn {
           }
         }
 
-        // Stream ended cleanly — reconnect
+        // Stream ended — check if it was short-lived (React Native streaming bug)
+        const streamDuration = Date.now() - streamStartTime;
+        if (streamDuration < SSE_MIN_STREAM_DURATION_MS) {
+          sseShortLivedCountRef.current += 1;
+          console.warn(
+            `[useChatList] SSE stream closed after ${streamDuration}ms ` +
+            `(${sseShortLivedCountRef.current}/${SSE_MAX_SHORT_LIVED} short-lived)`
+          );
+
+          if (sseShortLivedCountRef.current >= SSE_MAX_SHORT_LIVED) {
+            // React Native can't maintain persistent SSE streams — disable and use polling
+            console.warn("[useChatList] SSE disabled — falling back to polling");
+            sseDisabledRef.current = true;
+            sseActiveRef.current = false;
+            if (mountedRef.current) {
+              // Schedule polling via ref to avoid stale closure
+              schedulePollRef.current?.();
+            }
+            return;
+          }
+        } else {
+          // Stream lived long enough — reset short-lived counter
+          sseShortLivedCountRef.current = 0;
+        }
+
+        // Stream ended — reconnect with backoff based on short-lived count
         if (mountedRef.current && sseActiveRef.current) {
+          sseFailCountRef.current += sseShortLivedCountRef.current;
           scheduleSSEReconnect();
         }
       } catch (err: unknown) {
@@ -327,6 +366,10 @@ export function useChatList(): UseChatListReturn {
       if (mountedRef.current && !sseActiveRef.current) schedulePoll();
     }, delay);
   }, [loadConversations]);
+
+  /** Stable ref for schedulePoll — used by connectSSE's async closure to avoid stale captures */
+  const schedulePollRef = useRef(schedulePoll);
+  schedulePollRef.current = schedulePoll;
 
   // ---------------------------------------------------------------------------
   // Lifecycle: try SSE first, fall back to polling

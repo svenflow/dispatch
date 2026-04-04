@@ -83,8 +83,8 @@ BACKENDS: dict[str, BackendConfig] = {
         registry_prefix="dispatch-app:",
         send_cmd='~/.claude/skills/dispatch-app/scripts/reply-app "{chat_id}"',
         send_group_cmd='~/.claude/skills/dispatch-app/scripts/reply-app "{chat_id}"',
-        reply_hint='~/.claude/skills/dispatch-app/scripts/reply-app "{chat_id}" "message"\n  Widget: cat <<\'EOF\' | ~/.claude/skills/dispatch-app/scripts/reply-widget "{chat_id}" ask_question\n  {{"questions":[{{"question":"...","options":[{{"label":"A"}},{{"label":"B"}}]}}]}}\n  EOF\n  (1-4 questions, 2-4 options each. multi_select:true for checkboxes. include_other:false to hide Other. All questions shown at once with Save button. Response: [Widget Response <id>] with per-question answers.)',
-        history_cmd="",
+        reply_hint='~/.claude/skills/dispatch-app/scripts/reply-app "{chat_id}" "message"\n  Widget: cat <<\'EOF\' | ~/.claude/skills/dispatch-app/scripts/reply-widget "{chat_id}" ask_question\n  {{"questions":[{{"question":"...","options":[{{"label":"A"}},{{"label":"B"}}]}}]}}\n  EOF\n  (1-4 questions, 2-4 options each. multi_select:true for checkboxes. include_other:false to hide Other. All questions shown at once with Save button. Response: [Widget Response <id>] with per-question answers.)\n  Progress: cat <<\'EOF\' | reply-widget "{chat_id}" progress_tracker\n  {{"steps":[{{"label":"...","status":"complete"}},{{"label":"...","status":"in_progress"}},{{"label":"..."}}]}}\n  EOF\n  Map: cat <<\'EOF\' | reply-widget "{chat_id}" map_pin\n  {{"pins":[{{"latitude":42.36,"longitude":-71.06,"label":"..."}}]}}\n  EOF',
+        history_cmd='~/.claude/skills/dispatch-app/scripts/read-dispatch-app --chat "{chat_id}" --limit {limit}',
         supports_image_context=True,
         supports_markdown=True,
     ),
@@ -96,7 +96,7 @@ BACKENDS: dict[str, BackendConfig] = {
         send_cmd='~/.claude/skills/dispatch-app/scripts/reply-dispatch-api "{chat_id}"',
         send_group_cmd='~/.claude/skills/dispatch-app/scripts/reply-dispatch-api "{chat_id}"',
         reply_hint='~/.claude/skills/dispatch-app/scripts/reply-dispatch-api "{chat_id}" "message"',
-        history_cmd="",
+        history_cmd='~/.claude/skills/dispatch-app/scripts/read-dispatch-app --chat "{chat_id}" --limit {limit}',
         supports_image_context=True,
     ),
 }
@@ -117,6 +117,20 @@ BACKENDS["sven-app"] = BackendConfig(
     reply_hint='~/.claude/skills/dispatch-app/scripts/reply-app "{chat_id}" "message"',
     history_cmd="",
     supports_image_context=True,
+)
+
+
+BACKENDS["pocket-sven"] = BackendConfig(
+    name="pocket-sven",
+    label="POCKET_SVEN",
+    session_suffix="-pocketsven",
+    registry_prefix="pocket-sven:",
+    send_cmd='~/.claude/skills/pocket-sven/scripts/reply-voice "{chat_id}"',
+    send_group_cmd='~/.claude/skills/pocket-sven/scripts/reply-voice "{chat_id}"',
+    reply_hint='~/.claude/skills/pocket-sven/scripts/reply-voice "{chat_id}" "message"',
+    history_cmd="",
+    supports_image_context=False,
+    supports_markdown=False,
 )
 
 

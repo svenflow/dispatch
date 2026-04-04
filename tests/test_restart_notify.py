@@ -88,7 +88,7 @@ class TestRestartRole:
     def test_passive_when_different_chat_id(self):
         """When restart_initiator != chat_id, role should be 'passive'."""
         restart_initiator = "+15555550100"
-        chat_id = "+15555550100"
+        chat_id = "+15555550200"
         if restart_initiator is not None and chat_id == restart_initiator:
             role = "initiator"
         else:

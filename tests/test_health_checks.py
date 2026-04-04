@@ -415,7 +415,7 @@ class TestCheckDeepHaiku:
         assert result is None
 
     async def test_api_failure_returns_none(self):
-        from assistant.health import check_deep_haiku
+        from assistant.health import check_deep_haiku, HaikuCallFailed
 
         entries = [_make_assistant_entry("Some error message that is long enough")]
 
@@ -424,9 +424,8 @@ class TestCheckDeepHaiku:
             yield  # noqa: unreachable — makes this an async generator
 
         with patch("claude_agent_sdk.query", _failing_query):
-            result = await check_deep_haiku(entries, "test-session")
-
-        assert result is None  # Graceful fallback, don't crash
+            with pytest.raises(HaikuCallFailed):
+                await check_deep_haiku(entries, "test-session")
 
 
 # ──────────────────────────────────────────────────────────────

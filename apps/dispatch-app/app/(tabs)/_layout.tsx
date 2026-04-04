@@ -140,6 +140,7 @@ export default function TabLayout() {
       <Tabs.Screen
         name="dashboard"
         options={{
+          headerShown: false,
           title: "Dashboard",
           tabBarIcon: ({ color }) => (
             <SymbolView
@@ -157,6 +158,7 @@ export default function TabLayout() {
       <Tabs.Screen
         name="settings"
         options={{
+          headerShown: false,
           title: "Settings",
           tabBarIcon: ({ color }) => (
             <SymbolView

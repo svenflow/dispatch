@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppState, type AppStateStatus } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
-import { getDashboardHealth, getDashboardCcu, getDashboardHistogram } from "../api/dashboard";
-import type { DashboardHealth, DashboardCcuResponse } from "../api/types";
+import { getDashboardHealth, getDashboardCcu, getDashboardHistogram, getDashboardQuotaHistory } from "../api/dashboard";
+import type { DashboardHealth, DashboardCcuResponse, QuotaHistoryResponse } from "../api/types";
 
 export interface HistogramBucket {
   hour: string;
@@ -17,6 +17,9 @@ interface UseDashboardReturn {
   health: DashboardHealth | null;
   ccu: DashboardCcuResponse | null;
   histogram: HistogramBucket[];
+  quotaHistory: QuotaHistoryResponse | null;
+  quotaHistoryLoading: boolean;
+  fetchQuotaHistory: () => Promise<void>;
   isLoading: boolean;
   ccuLoading: boolean;
   error: string | null;
@@ -43,6 +46,9 @@ export function useDashboard(): UseDashboardReturn {
   const [ccuLoading, setCcuLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [quotaHistory, setQuotaHistory] = useState<QuotaHistoryResponse | null>(null);
+  const [quotaHistoryLoading, setQuotaHistoryLoading] = useState(false);
+  const quotaHistoryFetchedAtRef = useRef<number | null>(null);
 
   const mountedRef = useRef(true);
   const healthPollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -104,14 +110,37 @@ export function useDashboard(): UseDashboardReturn {
   }, []);
 
   // -----------------------------------------------------------------------
+  // Quota history fetch (loaded with initial data for inline sparklines)
+  // -----------------------------------------------------------------------
+
+  const fetchQuotaHistoryFn = useCallback(async () => {
+    const now = Date.now();
+    // Skip if already fetched within 60s
+    if (quotaHistoryFetchedAtRef.current !== null && now - quotaHistoryFetchedAtRef.current < 60_000) {
+      return;
+    }
+    try {
+      setQuotaHistoryLoading(true);
+      const data = await getDashboardQuotaHistory(24);
+      if (!mountedRef.current) return;
+      setQuotaHistory(data);
+      quotaHistoryFetchedAtRef.current = Date.now();
+    } catch {
+      // Non-critical — don't set main error
+    } finally {
+      if (mountedRef.current) setQuotaHistoryLoading(false);
+    }
+  }, []);
+
+  // -----------------------------------------------------------------------
   // Combined initial fetch
   // -----------------------------------------------------------------------
 
   const fetchAll = useCallback(
     async (force = false) => {
-      await Promise.all([fetchHealth(force), fetchCcu(force)]);
+      await Promise.all([fetchHealth(force), fetchCcu(force), fetchQuotaHistoryFn()]);
     },
-    [fetchHealth, fetchCcu],
+    [fetchHealth, fetchCcu, fetchQuotaHistoryFn],
   );
 
   // -----------------------------------------------------------------------
@@ -182,6 +211,7 @@ export function useDashboard(): UseDashboardReturn {
 
   const refresh = useCallback(async () => {
     setIsLoading(true);
+    quotaHistoryFetchedAtRef.current = null; // force refetch on next expand
     await fetchAll(true);
   }, [fetchAll]);
 
@@ -203,5 +233,5 @@ export function useDashboard(): UseDashboardReturn {
     };
   }, []);
 
-  return { health, ccu, histogram, isLoading, ccuLoading, error, lastUpdated, refresh, refreshCcu };
+  return { health, ccu, histogram, quotaHistory, quotaHistoryLoading, fetchQuotaHistory: fetchQuotaHistoryFn, isLoading, ccuLoading, error, lastUpdated, refresh, refreshCcu };
 }

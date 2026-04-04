@@ -286,6 +286,103 @@ class TestConsolidateChat:
             assert result.exists()
 
 
+class TestFetchMessagesFromBus:
+    """Tests for fetch_messages_from_bus in consolidate_chat.py."""
+
+    def _make_mock_conn(self, rows):
+        """Helper: create a mock sqlite3 connection returning given rows."""
+        from unittest.mock import MagicMock
+        mock_conn = MagicMock()
+        mock_conn.execute.return_value.fetchall.return_value = rows
+        return mock_conn
+
+    def test_null_text_field_does_not_crash(self):
+        """Should handle messages where 'text' key exists but value is None (null JSON).
+        This was the bug that caused the nightly consolidation to fail on 2026-03-30.
+        """
+        import json
+        from unittest.mock import patch
+        from pathlib import Path
+        import sys
+        sys.path.insert(0, str(Path.home() / "dispatch/prototypes/memory-consolidation"))
+        from consolidate_chat import fetch_messages_from_bus
+
+        rows = [
+            (1700000000000, "message.received", json.dumps({"text": None, "sender": "+15555550001", "chat_id": "test"})),
+            (1700000001000, "message.received", json.dumps({"text": "hello world", "sender": "+15555550001", "chat_id": "test"})),
+            (1700000002000, "message.queued",   json.dumps({"text": "hi there", "sender": "me", "chat_id": "test"})),
+        ]
+
+        mock_conn = self._make_mock_conn(rows)
+        with patch("sqlite3.connect", return_value=mock_conn):
+            with patch("consolidate_chat.DISPATCH_DIR") as mock_dir:
+                mock_dir.__truediv__ = lambda self, other: Path("/fake/bus.db") if "bus.db" in str(other) else Path(f"/fake/{other}")
+                mock_bus = MagicMock()
+                mock_bus.exists.return_value = True
+                mock_dir.__truediv__ = MagicMock(return_value=mock_bus)
+                mock_bus.__truediv__ = MagicMock(return_value=mock_bus)
+                mock_bus.exists.return_value = True
+                mock_bus.__str__ = MagicMock(return_value="/fake/bus.db")
+
+                result = fetch_messages_from_bus("test-chat-id", limit=10)
+
+        # null text row skipped, real messages included — should not crash
+        assert "hello world" in result
+        assert "hi there" in result
+
+    def test_missing_text_field_skipped(self):
+        """Should skip messages with no 'text' key at all."""
+        import json
+        from unittest.mock import patch, MagicMock
+        from pathlib import Path
+        import sys
+        sys.path.insert(0, str(Path.home() / "dispatch/prototypes/memory-consolidation"))
+        from consolidate_chat import fetch_messages_from_bus
+
+        rows = [
+            (1700000000000, "message.received", json.dumps({"sender": "+15555550001", "chat_id": "test"})),
+            (1700000001000, "message.received", json.dumps({"text": "real message", "sender": "+15555550001", "chat_id": "test"})),
+        ]
+
+        mock_conn = self._make_mock_conn(rows)
+        mock_bus = MagicMock()
+        mock_bus.exists.return_value = True
+        mock_bus.__str__ = MagicMock(return_value="/fake/bus.db")
+        mock_bus.__truediv__ = MagicMock(return_value=mock_bus)
+
+        with patch("sqlite3.connect", return_value=mock_conn):
+            with patch("consolidate_chat.DISPATCH_DIR", mock_bus):
+                result = fetch_messages_from_bus("test-chat-id", limit=10)
+
+        assert "real message" in result
+
+    def test_empty_text_field_skipped(self):
+        """Should skip messages with empty string text."""
+        import json
+        from unittest.mock import patch, MagicMock
+        from pathlib import Path
+        import sys
+        sys.path.insert(0, str(Path.home() / "dispatch/prototypes/memory-consolidation"))
+        from consolidate_chat import fetch_messages_from_bus
+
+        rows = [
+            (1700000000000, "message.received", json.dumps({"text": "", "sender": "+15555550001", "chat_id": "test"})),
+            (1700000001000, "message.received", json.dumps({"text": "valid", "sender": "+15555550001", "chat_id": "test"})),
+        ]
+
+        mock_conn = self._make_mock_conn(rows)
+        mock_bus = MagicMock()
+        mock_bus.exists.return_value = True
+        mock_bus.__str__ = MagicMock(return_value="/fake/bus.db")
+        mock_bus.__truediv__ = MagicMock(return_value=mock_bus)
+
+        with patch("sqlite3.connect", return_value=mock_conn):
+            with patch("consolidate_chat.DISPATCH_DIR", mock_bus):
+                result = fetch_messages_from_bus("test-chat-id", limit=10)
+
+        assert "valid" in result
+
+
 class TestSDKBackendIntegration:
     """Tests for sdk_backend.py CONTEXT.md injection."""
 

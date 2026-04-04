@@ -1,0 +1,438 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+"""
+Email Producer Daemon — polls Gmail History API and produces email.received events to the bus.
+
+Uses the `gws` CLI for Gmail API calls (reuses existing OAuth auth).
+Stores last historyId in ~/dispatch/state/email-producer.json for resumable polling.
+Deduplicates via bus.db query before producing.
+
+Usage:
+    email-producer           # Run continuously (default)
+    email-producer --once    # Poll once and exit (for testing)
+    email-producer --dry-run # Poll once, print events, don't produce
+"""
+import json
+import logging
+import os
+import re
+import signal
+import sqlite3
+import subprocess
+import sys
+import time
+
+# Add dispatch to path for bus imports
+sys.path.insert(0, os.path.expanduser("~/dispatch"))
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+log = logging.getLogger("email-producer")
+
+# --- Config ---
+GWS_BIN = os.path.expanduser("~/.local/bin/gws")
+STATE_FILE = os.path.expanduser("~/dispatch/state/email-producer.json")
+BUS_DB = os.path.expanduser("~/dispatch/state/bus.db")
+POLL_INTERVAL = 30  # seconds
+COLD_START_WINDOW = "5m"  # newer_than query on first run
+MAX_BACKOFF = 300  # 5 minutes
+
+# --- Globals ---
+shutdown = False
+backoff_seconds = 0
+
+
+def handle_signal(signum, frame):
+    global shutdown
+    log.info("Received signal %s, shutting down gracefully...", signum)
+    shutdown = True
+
+
+signal.signal(signal.SIGTERM, handle_signal)
+signal.signal(signal.SIGINT, handle_signal)
+
+
+# --- State management ---
+def load_state() -> dict:
+    """Load persisted state (historyId, last_successful_poll)."""
+    try:
+        with open(STATE_FILE) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def save_state(state: dict):
+    """Persist state to disk."""
+    os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
+    with open(STATE_FILE, "w") as f:
+        json.dump(state, f, indent=2)
+
+
+# --- Gmail API via gws CLI ---
+def run_gws(*args: str, params: dict | None = None) -> dict | None:
+    """Run a gws command and return parsed JSON output."""
+    cmd = [GWS_BIN, "gmail"] + list(args)
+    if params:
+        cmd.extend(["--params", json.dumps(params)])
+
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=30
+        )
+        if result.returncode != 0:
+            stderr = result.stderr.strip()
+            log.warning("gws command failed: %s\n%s", " ".join(args), stderr)
+            return None
+        if not result.stdout.strip():
+            return {}
+        return json.loads(result.stdout)
+    except subprocess.TimeoutExpired:
+        log.warning("gws command timed out: %s", " ".join(args))
+        return None
+    except json.JSONDecodeError as e:
+        log.warning("gws returned invalid JSON: %s", e)
+        return None
+
+
+def get_initial_history_id() -> str | None:
+    """Get a starting historyId by listing recent messages."""
+    log.info("Cold start: fetching recent messages to establish historyId")
+    result = run_gws(
+        "users", "messages", "list",
+        params={"userId": "me", "q": f"newer_than:{COLD_START_WINDOW}", "maxResults": 1},
+    )
+    if not result or "messages" not in result:
+        log.warning("No recent messages found for cold start")
+        return None
+
+    msg_id = result["messages"][0]["id"]
+    msg = run_gws(
+        "users", "messages", "get",
+        params={"userId": "me", "id": msg_id, "format": "minimal"},
+    )
+    if not msg or "historyId" not in msg:
+        log.warning("Could not get historyId from message %s", msg_id)
+        return None
+
+    history_id = msg["historyId"]
+    log.info("Established starting historyId: %s (from message %s)", history_id, msg_id)
+    return history_id
+
+
+def poll_history(history_id: str) -> tuple[list[str], str | None]:
+    """Poll Gmail History API for new inbox messages since historyId.
+
+    Returns (list of new message IDs, new historyId or None on error).
+    """
+    result = run_gws(
+        "users", "history", "list",
+        params={"userId": "me", "startHistoryId": history_id, "labelId": "INBOX"},
+    )
+    if result is None:
+        return [], None
+
+    new_history_id = result.get("historyId")
+    new_msg_ids = []
+
+    for entry in result.get("history", []):
+        for added in entry.get("messagesAdded", []):
+            msg = added.get("message", {})
+            msg_id = msg.get("id")
+            if msg_id:
+                # Only include messages that are in INBOX
+                labels = msg.get("labelIds", [])
+                if "INBOX" in labels:
+                    new_msg_ids.append(msg_id)
+
+    return new_msg_ids, new_history_id
+
+
+def fetch_message_metadata(msg_id: str) -> dict | None:
+    """Fetch message metadata and extract relevant fields."""
+    result = run_gws(
+        "users", "messages", "get",
+        params={"userId": "me", "id": msg_id, "format": "metadata"},
+    )
+    if not result:
+        return None
+
+    # Extract headers
+    headers = {}
+    for h in result.get("payload", {}).get("headers", []):
+        name = h.get("name", "").lower()
+        if name in ("from", "to", "subject", "date", "reply-to"):
+            headers[name] = h.get("value", "")
+
+    # Extract email address from From header
+    from_header = headers.get("from", "")
+    from_email = extract_email(from_header)
+
+    return {
+        "message_id": result.get("id"),
+        "thread_id": result.get("threadId"),
+        "from": from_header,
+        "from_email": from_email,
+        "to": headers.get("to", ""),
+        "subject": headers.get("subject", ""),
+        "snippet": result.get("snippet", ""),
+        "label_ids": result.get("labelIds", []),
+        "timestamp_ms": int(result.get("internalDate", 0)),
+        "size_estimate": result.get("sizeEstimate", 0),
+        "history_id": result.get("historyId", ""),
+    }
+
+
+def extract_email(header_value: str) -> str:
+    """Extract email address from a From header like 'Name <email@example.com>'."""
+    match = re.search(r"<([^>]+)>", header_value)
+    if match:
+        return match.group(1).lower()
+    # Might just be a bare email
+    if "@" in header_value:
+        return header_value.strip().lower()
+    return header_value.strip().lower()
+
+
+# --- Bus integration ---
+def get_bus_producer():
+    """Initialize bus and return a producer."""
+    from bus.bus import Bus
+    bus = Bus(db_path=BUS_DB)
+    bus.create_topic("email", retention_ms=168 * 3600 * 1000)  # 7 days
+    return bus, bus.producer()
+
+
+def already_in_bus(msg_id: str) -> bool:
+    """Check if a message ID is already in the bus (dedup).
+
+    Uses a separate read-only SQLite connection to avoid coupling to Bus internals.
+    """
+    try:
+        conn = sqlite3.connect(f"file:{BUS_DB}?mode=ro", uri=True)
+        try:
+            row = conn.execute(
+                "SELECT 1 FROM records WHERE topic='email' AND json_extract(payload, '$.message_id')=? LIMIT 1",
+                (msg_id,),
+            ).fetchone()
+            return row is not None
+        finally:
+            conn.close()
+    except Exception as e:
+        log.warning("Dedup check failed (proceeding with produce): %s", e)
+        return False
+
+
+def produce_email_event(producer, payload: dict):
+    """Produce an email.received event to the bus."""
+    from assistant.bus_helpers import produce_event
+    produce_event(
+        producer,
+        "email",
+        "email.received",
+        payload,
+        key=f"email/{payload.get('from_email', 'unknown')}",
+        source="gmail",
+    )
+
+
+def produce_health_event(producer, event_type: str, payload: dict):
+    """Produce a system health event."""
+    from assistant.bus_helpers import produce_event
+    produce_event(producer, "system", event_type, payload, source="email-producer")
+
+
+# --- Alert ---
+def send_admin_alert(message: str):
+    """Send SMS alert to admin about email producer issues."""
+    try:
+        sms_script = os.path.expanduser("~/.claude/skills/sms-assistant/scripts/send-sms")
+        # Get admin phone from identity
+        identity_bin = os.path.expanduser("~/dispatch/bin/identity")
+        result = subprocess.run(
+            [identity_bin, "owner.phone"], capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0:
+            phone = result.stdout.strip()
+            subprocess.run(
+                [sms_script, phone, f"[email-producer] {message}"],
+                capture_output=True, timeout=15,
+            )
+    except Exception as e:
+        log.warning("Failed to send admin alert: %s", e)
+
+
+# --- Main loop ---
+def main():
+    global backoff_seconds, shutdown
+
+    once = "--once" in sys.argv
+    dry_run = "--dry-run" in sys.argv
+
+    log.info("Email producer starting (once=%s, dry_run=%s)", once, dry_run)
+
+    # Load state
+    state = load_state()
+    history_id = state.get("history_id")
+    last_successful_poll = state.get("last_successful_poll", 0)
+
+    # Initialize bus (unless dry run)
+    bus = None
+    producer = None
+    if not dry_run:
+        try:
+            bus, producer = get_bus_producer()
+            log.info("Bus producer initialized")
+        except Exception as e:
+            log.error("Failed to initialize bus: %s", e)
+            sys.exit(1)
+
+    # Cold start: establish historyId if needed
+    if not history_id:
+        history_id = get_initial_history_id()
+        if not history_id:
+            log.error("Could not establish initial historyId, exiting")
+            sys.exit(1)
+        state["history_id"] = history_id
+        state["last_successful_poll"] = time.time()
+        save_state(state)
+
+    if history_id:
+        log.info("Resuming from historyId: %s", history_id)
+
+    total_produced = 0
+    total_deduped = 0
+    retry_msg_ids: list[str] = []  # Failed metadata fetches to retry next cycle
+    last_health_event_time = 0.0  # Throttle health events to once per hour
+    last_sms_alert_time = 0.0  # Throttle SMS alerts to once per 24h
+
+    while not shutdown:
+        try:
+            # Poll for new messages
+            new_msg_ids, new_history_id = poll_history(history_id)
+
+            if new_history_id is None:
+                # API error — check if historyId expired (will show as 404)
+                log.warning("History poll failed, attempting re-establishment...")
+                new_history_id_attempt = get_initial_history_id()
+                if new_history_id_attempt:
+                    history_id = new_history_id_attempt
+                    last_successful_poll = time.time()
+                    state["history_id"] = history_id
+                    state["last_successful_poll"] = last_successful_poll
+                    save_state(state)
+                    log.info("Re-established historyId: %s", history_id)
+                else:
+                    # Backoff on persistent errors
+                    backoff_seconds = min(backoff_seconds * 2 or POLL_INTERVAL, MAX_BACKOFF)
+                    log.warning("Backing off %ds", backoff_seconds)
+                    _sleep(backoff_seconds)
+                    continue
+
+            else:
+                # Success — reset backoff
+                backoff_seconds = 0
+                last_successful_poll = time.time()
+                state["last_successful_poll"] = last_successful_poll
+
+                # Merge retry queue with new messages (retries first)
+                all_msg_ids = list(dict.fromkeys(retry_msg_ids + new_msg_ids))  # dedupe, preserve order
+                retry_msg_ids = []  # Clear retry queue
+
+                if all_msg_ids:
+                    log.info("Processing %d message(s) (%d new, %d retried)",
+                             len(all_msg_ids), len(new_msg_ids),
+                             len(all_msg_ids) - len(new_msg_ids))
+
+                # Process each message
+                failed_this_cycle: list[str] = []
+                for msg_id in all_msg_ids:
+                    if shutdown:
+                        break
+
+                    # Dedup check
+                    if not dry_run and already_in_bus(msg_id):
+                        log.debug("Skipping duplicate: %s", msg_id)
+                        total_deduped += 1
+                        continue
+
+                    # Fetch metadata
+                    payload = fetch_message_metadata(msg_id)
+                    if not payload:
+                        log.warning("Failed to fetch metadata for %s, queuing for retry", msg_id)
+                        failed_this_cycle.append(msg_id)
+                        continue
+
+                    if dry_run:
+                        print(json.dumps(payload, indent=2))
+                    else:
+                        produce_email_event(producer, payload)
+                        total_produced += 1
+                        log.info(
+                            "Produced email.received: %s from=%s subj=%s",
+                            msg_id,
+                            payload.get("from_email", "?"),
+                            (payload.get("subject", "")[:60] or "(no subject)"),
+                        )
+
+                # Queue failures for one retry next cycle, then drop
+                for fid in failed_this_cycle:
+                    if fid in new_msg_ids:  # First failure — retry
+                        retry_msg_ids.append(fid)
+                    else:  # Was already a retry — give up
+                        log.warning("Dropping message %s after retry failure", fid)
+
+                # Update historyId
+                history_id = new_history_id
+                state["history_id"] = history_id
+                save_state(state)
+
+            # Health monitoring (throttled)
+            now = time.time()
+            time_since_success = now - last_successful_poll
+            if time_since_success > 3600 and producer:  # 1 hour
+                if now - last_health_event_time > 3600:  # At most once per hour
+                    produce_health_event(producer, "email.producer_unhealthy", {
+                        "seconds_since_success": int(time_since_success),
+                        "last_history_id": history_id,
+                    })
+                    last_health_event_time = now
+            if time_since_success > 86400:  # 24 hours
+                if now - last_sms_alert_time > 86400:  # At most once per 24h
+                    send_admin_alert(f"No successful poll in {int(time_since_success/3600)}h")
+                    last_sms_alert_time = now
+
+        except Exception as e:
+            log.exception("Unexpected error in poll loop: %s", e)
+            backoff_seconds = min(backoff_seconds * 2 or POLL_INTERVAL, MAX_BACKOFF)
+
+        if once:
+            break
+
+        _sleep(POLL_INTERVAL)
+
+    log.info("Email producer shutting down (produced=%d, deduped=%d)", total_produced, total_deduped)
+
+    # Flush producer
+    if producer:
+        try:
+            producer.flush(timeout=5.0)
+        except Exception:
+            pass
+
+
+def _sleep(seconds: float):
+    """Sleep in small increments to allow SIGTERM to interrupt."""
+    end = time.time() + seconds
+    while time.time() < end and not shutdown:
+        time.sleep(min(1, end - time.time()))
+
+
+if __name__ == "__main__":
+    main()

@@ -75,8 +75,18 @@ export default function AgentConversationScreen() {
     isComplete: sdkComplete,
   } = useSdkEvents(id ?? "", sdkMode || isThinking);
 
-  // Hide thinking immediately when SDK events report turn complete
-  const showThinking = isThinking && !sdkComplete;
+  // Let server-driven isThinking control visibility — sdkComplete races ahead
+  // of message poll and caused flicker. See app/chat/[id].tsx for full invariant.
+  const showThinking = isThinking;
+
+  // Dev warning: detect stuck thinking indicator (isThinking true for >60s)
+  useEffect(() => {
+    if (!isThinking || !__DEV__) return;
+    const timer = setTimeout(() => {
+      console.warn("[thinking] indicator visible for 60s — possible stuck state");
+    }, 60_000);
+    return () => clearTimeout(timer);
+  }, [isThinking]);
 
   // Inverted FlatList: reverse data so newest at bottom
   const invertedMessages = useMemo(

@@ -96,6 +96,9 @@ export function useSdkEvents(
       return;
     }
 
+    // Reset completion state — prevents stale sdkComplete from prior turn
+    setIsComplete(false);
+
     mountedRef.current = true;
     setIsLoading(true);
     fetchEvents().then(() => {

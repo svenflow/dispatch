@@ -39,9 +39,9 @@ import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Generator, Optional
 
-from fastapi import FastAPI, HTTPException, Query, Request, File, UploadFile, Form
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, File, UploadFile, Form
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -564,7 +564,7 @@ def _rebuild_fts(conn):
 def get_db():
     """Get a WAL-mode database connection."""
     init_db()
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=10000")  # 10s to handle concurrent access from app + sessions
     return conn
@@ -1017,6 +1017,7 @@ async def _auto_title_with_haiku(chat_id: str, transcript: str):
         prompt_text = (
             "What is the user trying to do? Generate a short title (1-2 words, max 3 words) that describes their goal. "
             "Focus on intent, not topic. Respond with ONLY the title — no quotes, no punctuation, no explanation. "
+            "Do NOT use any tools. Just read the text below and return a title.\n"
             "Use title case. Examples: 'Debug Auth', 'Plan Trip', 'Fix Build', 'Rename Chats'.\n\n"
             f"USER MESSAGE:\n{transcript[:500]}"
         )
@@ -1028,6 +1029,7 @@ async def _auto_title_with_haiku(chat_id: str, transcript: str):
                 "claude", "-p",
                 "--model", "haiku",
                 "--no-session-persistence",
+                "--tools", "",
             ],
             input=prompt_text,
             timeout=30,
@@ -2244,25 +2246,40 @@ def _fetch_chat_list() -> list[dict]:
     # Load session registry to get model per chat
     sessions = _load_sessions()
 
-    chats = []
+    # First pass: collect rows and session names for batch is_thinking lookup
+    rows_data = []
+    session_names_for_thinking = []
     for row in cursor.fetchall():
         chat_id = row[0]
-        # Look up model from sessions.json — try both prefixed and unprefixed keys
         session_key = f"{APP_SESSION_PREFIX}:{chat_id}"
         session_info = sessions.get(session_key) or sessions.get(chat_id) or {}
-        model = session_info.get("model", "opus")  # Default to opus
+        model = session_info.get("model", "opus")
         status = "active" if session_info.get("was_active") else "idle"
+        session_name = f"{APP_SESSION_PREFIX}/{chat_id}"
+        session_names_for_thinking.append(session_name)
+        rows_data.append((row, chat_id, model, status, session_name))
+    conn.close()
+
+    # Batch is_thinking check — single DB connection for all chats
+    thinking_map = _batch_check_is_thinking(session_names_for_thinking)
+
+    chats = []
+    for row, chat_id, model, status, session_name in rows_data:
+        last_message = row[4]
+        # Truncate last_message for chat list (full content available via /messages)
+        if last_message and len(last_message) > 200:
+            last_message = last_message[:200] + "…"
         chats.append({
             "id": chat_id,
             "title": row[1],
             "created_at": _sqlite_to_iso(row[2]),
             "updated_at": _sqlite_to_iso(row[3]),
-            "last_message": row[4],
+            "last_message": last_message,
             "last_message_at": _sqlite_to_iso(row[5]),
             "last_message_role": row[6],
             "last_opened_at": _sqlite_to_iso(row[7]),
             "has_notes": bool(row[8]),
-            "is_thinking": _check_is_thinking(f"{APP_SESSION_PREFIX}/{chat_id}"),
+            "is_thinking": thinking_map.get(session_name, False),
             "forked_from": row[9],
             "marked_unread": bool(row[10]),
             "image_url": _build_chat_image_url(chat_id, row[11]),
@@ -2270,7 +2287,6 @@ def _fetch_chat_list() -> list[dict]:
             "model": model,
             "status": status,
         })
-    conn.close()
     return chats
 
 
@@ -2466,6 +2482,7 @@ async def suggest_chat_title(chat_id: str, token: str = None):
         "generate exactly 3 short titles (1-2 words each, max 3 words) that describe what they're doing. "
         "Focus on the user's intent, not the assistant's responses. "
         "Each title should be a different way to describe their goal. "
+        "Do NOT use any tools. Just read the conversation below and return titles.\n"
         "Respond with ONLY the 3 titles, one per line — no quotes, no numbering, no punctuation, no explanation. "
         "Use title case. Example output:\nDebug Auth\nFix Login\nSSO Issue\n\n"
         f"CONVERSATION:\n{conversation}"
@@ -2479,6 +2496,7 @@ async def suggest_chat_title(chat_id: str, token: str = None):
                 "claude", "-p",
                 "--model", "haiku",
                 "--no-session-persistence",
+                "--tools", "",
             ],
             input=prompt_text,
             timeout=60,
@@ -2773,10 +2791,27 @@ CLIENT_LOG_PATH = DISPATCH_LOGS_DIR / "client.log"
 
 def get_bus_db():
     """Get a read-only connection to bus.db with WAL mode."""
-    conn = sqlite3.connect(f"file:{BUS_DB_PATH}?mode=ro", uri=True)
+    conn = sqlite3.connect(f"file:{BUS_DB_PATH}?mode=ro", uri=True, check_same_thread=False)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def get_bus_db_rw():
+    """Get a read-write connection to bus.db for facts CRUD."""
+    conn = sqlite3.connect(str(BUS_DB_PATH), check_same_thread=False)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def get_db_conn() -> Generator:
+    """FastAPI dependency that yields a bus DB connection and always closes it."""
+    conn = get_bus_db()
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
@@ -3004,29 +3039,52 @@ async def dashboard_health():
     # Bus events
     try:
         conn = get_bus_db()
-        now_ms = int(time.time() * 1000)
-        hour_ago_ms = now_ms - 3600_000
+        try:
+            now_ms = int(time.time() * 1000)
+            hour_ago_ms = now_ms - 3600_000
 
-        row = conn.execute("SELECT COUNT(*) FROM records").fetchone()
-        result["total_bus_events"] = row[0]
+            row = conn.execute("SELECT COUNT(*) FROM records").fetchone()
+            result["total_bus_events"] = row[0]
 
-        row = conn.execute("SELECT COUNT(*) FROM records WHERE timestamp > ?", (hour_ago_ms,)).fetchone()
-        result["events_last_hour"] = row[0]
+            row = conn.execute("SELECT COUNT(*) FROM records WHERE timestamp > ?", (hour_ago_ms,)).fetchone()
+            result["events_last_hour"] = row[0]
 
-        row = conn.execute("SELECT MAX(timestamp) FROM records").fetchone()
-        if row[0]:
-            result["last_event_age_seconds"] = round((now_ms - row[0]) / 1000, 1)
+            row = conn.execute("SELECT MAX(timestamp) FROM records").fetchone()
+            if row[0]:
+                result["last_event_age_seconds"] = round((now_ms - row[0]) / 1000, 1)
 
-        row = conn.execute("SELECT COUNT(*) FROM sdk_events").fetchone()
-        result["total_sdk_events"] = row[0]
+            row = conn.execute("SELECT COUNT(*) FROM sdk_events").fetchone()
+            result["total_sdk_events"] = row[0]
 
-        row = conn.execute("SELECT COUNT(*) FROM sdk_events WHERE timestamp > ?", (hour_ago_ms,)).fetchone()
-        result["sdk_events_last_hour"] = row[0]
+            row = conn.execute("SELECT COUNT(*) FROM sdk_events WHERE timestamp > ?", (hour_ago_ms,)).fetchone()
+            result["sdk_events_last_hour"] = row[0]
 
-        row = conn.execute("SELECT COUNT(*) FROM facts WHERE active = 1").fetchone()
-        result["facts_count"] = row[0]
+            row = conn.execute("SELECT COUNT(*) FROM facts WHERE active = 1").fetchone()
+            result["facts_count"] = row[0]
 
-        conn.close()
+            # Quota velocity — delta of 5h utilization over the last ~1 hour
+            # timestamp is epoch_ms (bus.db convention)
+            try:
+                vel_rows = conn.execute(
+                    "SELECT payload, timestamp FROM records "
+                    "WHERE topic='system' AND type='quota.fetched' "
+                    "ORDER BY timestamp DESC LIMIT 13"
+                ).fetchall()
+                if len(vel_rows) >= 2:
+                    newest_payload = json.loads(vel_rows[0][0])
+                    oldest_payload = json.loads(vel_rows[-1][0])
+                    period_minutes = (vel_rows[0][1] - vel_rows[-1][1]) / 60_000
+                    newest_5h = (newest_payload.get("five_hour") or {}).get("utilization")
+                    oldest_5h = (oldest_payload.get("five_hour") or {}).get("utilization")
+                    if newest_5h is not None and oldest_5h is not None and period_minutes > 0:
+                        result["velocity"] = {
+                            "delta": round(newest_5h - oldest_5h, 2),
+                            "period_minutes": round(period_minutes),
+                        }
+            except Exception:
+                pass
+        finally:
+            conn.close()
     except Exception:
         pass
 
@@ -3080,7 +3138,7 @@ async def dashboard_health():
 
 
 @app.get("/api/dashboard/events-histogram")
-async def dashboard_events_histogram(hours: int = 24):
+async def dashboard_events_histogram(hours: int = 24, conn: sqlite3.Connection = Depends(get_db_conn)):
     """Hourly event counts for the last N hours (default 24).
 
     Returns an array of {hour: ISO8601, count: int} buckets, oldest first.
@@ -3088,7 +3146,6 @@ async def dashboard_events_histogram(hours: int = 24):
     """
     hours = min(hours, 168)  # cap at 7 days
     try:
-        conn = get_bus_db()
         now_ms = int(time.time() * 1000)
         start_ms = now_ms - (hours * 3600_000)
 
@@ -3103,7 +3160,6 @@ async def dashboard_events_histogram(hours: int = 24):
             """,
             (start_ms,),
         ).fetchall()
-        conn.close()
 
         # Build a dict of hour_bucket → count
         counts = {r[0]: r[1] for r in rows}
@@ -3134,11 +3190,11 @@ async def dashboard_events(
     source: Optional[str] = None,
     topic: Optional[str] = None,
     search: Optional[str] = None,
+    conn: sqlite3.Connection = Depends(get_db_conn),
 ):
     """Bus events with filtering."""
     limit = min(limit, 500)
     try:
-        conn = get_bus_db()
         now_ms = int(time.time() * 1000)
 
         conditions = []
@@ -3186,12 +3242,60 @@ async def dashboard_events(
         total_row = conn.execute("SELECT COUNT(*) FROM records").fetchone()
         max_offset_row = conn.execute("SELECT MAX(offset) FROM records").fetchone()
 
-        conn.close()
-
         return {
             "events": events,
             "total_count": total_row[0],
             "max_offset": max_offset_row[0] or 0,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/dashboard/health-events")
+async def dashboard_health_events(limit: int = 100, hours: int = 48, conn: sqlite3.Connection = Depends(get_db_conn)):
+    """Recent health diagnostic events (haiku_verdict, circuit_breaker, quota_alert, bus_check)."""
+    limit = min(limit, 500)
+    try:
+        now_ms = int(time.time() * 1000)
+        since_ms = now_ms - (hours * 3600_000)
+
+        rows = conn.execute(
+            "SELECT topic, partition, offset, timestamp, type, source, key, payload "
+            "FROM records "
+            "WHERE topic = 'system' AND type LIKE 'health.%' AND timestamp > ? "
+            "ORDER BY timestamp DESC LIMIT ?",
+            (since_ms, limit),
+        ).fetchall()
+
+        events = []
+        for r in rows:
+            payload = {}
+            try:
+                payload = json.loads(r["payload"]) if r["payload"] else {}
+            except Exception:
+                pass
+            events.append({
+                "type": r["type"],
+                "timestamp": r["timestamp"],
+                "payload": payload,
+                "age_seconds": round((now_ms - r["timestamp"]) / 1000, 1),
+            })
+
+        # Summary counts for the header
+        verdicts = [e for e in events if e["type"] == "health.haiku_verdict"]
+        cb_events = [e for e in events if e["type"] == "health.circuit_breaker"]
+        alerts = [e for e in events if e["type"] == "health.quota_alert"]
+
+        return {
+            "events": events,
+            "summary": {
+                "total": len(events),
+                "verdicts": len(verdicts),
+                "fatal_count": sum(1 for v in verdicts if v["payload"].get("verdict") == "FATAL"),
+                "stuck_count": sum(1 for v in verdicts if v["payload"].get("verdict") == "STUCK"),
+                "circuit_breaker_events": len(cb_events),
+                "quota_alerts": len(alerts),
+            },
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -3206,6 +3310,7 @@ async def search_bus(
     topic: Optional[str] = None,
     since_hours: Optional[float] = None,
     limit: int = 20,
+    conn: sqlite3.Connection = Depends(get_db_conn),
 ):
     """Full-text search across bus records using FTS5 with BM25 ranking."""
     import sys
@@ -3218,13 +3323,11 @@ async def search_bus(
         since_ms = int((time.time() - since_hours * 3600) * 1000)
 
     try:
-        conn = get_bus_db()
         results = search_records(
             conn, q,
             topic=topic, type=type, key=key, source=source,
             since_ms=since_ms, limit=limit,
         )
-        conn.close()
 
         now_ms = int(time.time() * 1000)
         return {
@@ -3249,11 +3352,9 @@ async def search_bus(
 
 
 @app.get("/api/dashboard/events/stats")
-async def dashboard_events_stats():
+async def dashboard_events_stats(conn: sqlite3.Connection = Depends(get_db_conn)):
     """Event type distribution."""
     try:
-        conn = get_bus_db()
-
         by_type = [
             {"type": r["type"], "count": r["cnt"]}
             for r in conn.execute("SELECT type, COUNT(*) as cnt FROM records GROUP BY type ORDER BY cnt DESC").fetchall()
@@ -3382,8 +3483,6 @@ async def dashboard_events_stats():
         by_person = list(person_map.values())
         all_persons_list = sorted(all_persons)
 
-        conn.close()
-
         return {
             "by_type": by_type,
             "by_source": by_source,
@@ -3461,12 +3560,11 @@ async def dashboard_sdk(
     session_name: Optional[str] = None,
     is_error: Optional[int] = None,
     search: Optional[str] = None,
+    conn: sqlite3.Connection = Depends(get_db_conn),
 ):
     """SDK tool call events with filtering."""
     limit = min(limit, 500)
     try:
-        conn = get_bus_db()
-
         conditions = []
         params = []
 
@@ -3510,7 +3608,6 @@ async def dashboard_sdk(
             })
 
         max_id_row = conn.execute("SELECT MAX(id) FROM sdk_events").fetchone()
-        conn.close()
 
         return {
             "events": events,
@@ -3521,11 +3618,9 @@ async def dashboard_sdk(
 
 
 @app.get("/api/dashboard/sdk/stats")
-async def dashboard_sdk_stats():
+async def dashboard_sdk_stats(conn: sqlite3.Connection = Depends(get_db_conn)):
     """Tool usage analytics."""
     try:
-        conn = get_bus_db()
-
         by_tool = []
         rows = conn.execute(
             "SELECT tool_name, COUNT(*) as cnt, AVG(duration_ms) as avg_ms, "
@@ -3576,8 +3671,6 @@ async def dashboard_sdk_stats():
 
         total_row = conn.execute("SELECT COUNT(*) FROM sdk_events").fetchone()
         error_row = conn.execute("SELECT COUNT(*) FROM sdk_events WHERE is_error = 1").fetchone()
-
-        conn.close()
 
         return {
             "by_tool": by_tool,
@@ -3741,28 +3834,30 @@ async def dashboard_skills():
     # ── Enrich with usage metrics from sdk_events ──
     try:
         conn = get_bus_db()
-        # UNION ALL for hot + archive in single query
         try:
-            rows = conn.execute(
-                """
-                SELECT payload, MAX(last_ts) as last_ts, SUM(cnt) as cnt FROM (
-                    SELECT payload, MAX(timestamp) as last_ts, COUNT(*) as cnt
-                    FROM sdk_events WHERE tool_name = 'Skill' AND event_type = 'tool_use'
-                    GROUP BY payload
-                    UNION ALL
-                    SELECT payload, MAX(timestamp) as last_ts, COUNT(*) as cnt
-                    FROM sdk_events_archive WHERE tool_name = 'Skill' AND event_type = 'tool_use'
-                    GROUP BY payload
-                ) GROUP BY payload
-                """
-            ).fetchall()
-        except Exception:
-            rows = conn.execute(
-                "SELECT payload, MAX(timestamp) as last_ts, COUNT(*) as cnt "
-                "FROM sdk_events WHERE tool_name = 'Skill' AND event_type = 'tool_use' "
-                "GROUP BY payload"
-            ).fetchall()
-        conn.close()
+            # UNION ALL for hot + archive in single query
+            try:
+                rows = conn.execute(
+                    """
+                    SELECT payload, MAX(last_ts) as last_ts, SUM(cnt) as cnt FROM (
+                        SELECT payload, MAX(timestamp) as last_ts, COUNT(*) as cnt
+                        FROM sdk_events WHERE tool_name = 'Skill' AND event_type = 'tool_use'
+                        GROUP BY payload
+                        UNION ALL
+                        SELECT payload, MAX(timestamp) as last_ts, COUNT(*) as cnt
+                        FROM sdk_events_archive WHERE tool_name = 'Skill' AND event_type = 'tool_use'
+                        GROUP BY payload
+                    ) GROUP BY payload
+                    """
+                ).fetchall()
+            except Exception:
+                rows = conn.execute(
+                    "SELECT payload, MAX(timestamp) as last_ts, COUNT(*) as cnt "
+                    "FROM sdk_events WHERE tool_name = 'Skill' AND event_type = 'tool_use' "
+                    "GROUP BY payload"
+                ).fetchall()
+        finally:
+            conn.close()
 
         usage_map: dict[str, dict] = {}
         for row in rows:
@@ -3810,7 +3905,7 @@ def _extract_skill_name(payload: str | None) -> str | None:
 
 
 @app.get("/api/dashboard/skills/{skill_name}")
-async def dashboard_skill_detail(skill_name: str, days: int = 30):
+async def dashboard_skill_detail(skill_name: str, days: int = 30, conn: sqlite3.Connection = Depends(get_db_conn)):
     """Detailed usage metrics for a specific skill."""
     now_ms = int(time.time() * 1000)
     since_ms = now_ms - (days * 86400 * 1000)
@@ -3837,8 +3932,6 @@ async def dashboard_skill_detail(skill_name: str, days: int = 30):
     }
 
     try:
-        conn = get_bus_db()
-
         # UNION ALL for tool_use events (hot + archive)
         try:
             tool_use_rows = conn.execute(
@@ -3879,8 +3972,6 @@ async def dashboard_skill_detail(skill_name: str, days: int = 30):
                 "WHERE tool_name = 'Skill' AND event_type = 'tool_result' AND timestamp >= ?",
                 (since_ms,),
             ).fetchall()
-
-        conn.close()
 
         # Build result lookup keyed by tool_use_id (shared between tool_use/tool_result)
         result_lookup: dict[str, dict] = {}
@@ -3976,24 +4067,26 @@ async def dashboard_tasks():
     recent_task_events = []
     try:
         conn = get_bus_db()
-        rows = conn.execute(
-            "SELECT type, timestamp, key, substr(payload, 1, 500) as payload "
-            "FROM records WHERE type LIKE 'task.%' ORDER BY timestamp DESC LIMIT 50"
-        ).fetchall()
-        for r in rows:
-            payload = {}
-            try:
-                payload = json.loads(r["payload"]) if r["payload"] else {}
-            except Exception:
-                pass
-            recent_task_events.append({
-                "type": r["type"],
-                "timestamp": r["timestamp"],
-                "key": r["key"],
-                "task_id": payload.get("task_id"),
-                "title": payload.get("title"),
-            })
-        conn.close()
+        try:
+            rows = conn.execute(
+                "SELECT type, timestamp, key, substr(payload, 1, 500) as payload "
+                "FROM records WHERE type LIKE 'task.%' ORDER BY timestamp DESC LIMIT 50"
+            ).fetchall()
+            for r in rows:
+                payload = {}
+                try:
+                    payload = json.loads(r["payload"]) if r["payload"] else {}
+                except Exception:
+                    pass
+                recent_task_events.append({
+                    "type": r["type"],
+                    "timestamp": r["timestamp"],
+                    "key": r["key"],
+                    "task_id": payload.get("task_id"),
+                    "title": payload.get("title"),
+                })
+        finally:
+            conn.close()
     except Exception:
         pass
 
@@ -4261,18 +4354,20 @@ async def dashboard_quota_history(hours: int = 24):
 
     try:
         conn = get_bus_db()
-        rows = conn.execute(
-            "SELECT timestamp,"
-            " json_extract(payload, '$.five_hour.utilization') AS five_hour,"
-            " json_extract(payload, '$.seven_day.utilization') AS seven_day"
-            " FROM records"
-            " WHERE topic = 'system' AND type = 'quota.fetched'"
-            "   AND timestamp >= ?"
-            " ORDER BY timestamp ASC"
-            " LIMIT 2000",
-            (since_ms,),
-        ).fetchall()
-        conn.close()
+        try:
+            rows = conn.execute(
+                "SELECT timestamp,"
+                " json_extract(payload, '$.five_hour.utilization') AS five_hour,"
+                " json_extract(payload, '$.seven_day.utilization') AS seven_day"
+                " FROM records"
+                " WHERE topic = 'system' AND type = 'quota.fetched'"
+                "   AND timestamp >= ?"
+                " ORDER BY timestamp ASC"
+                " LIMIT 2000",
+                (since_ms,),
+            ).fetchall()
+        finally:
+            conn.close()
     except Exception as e:
         logger.error(f"GET /api/dashboard/quota-history error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -4312,14 +4407,16 @@ async def dashboard_quota_history(hours: int = 24):
     consecutive_failures = 0
     try:
         conn2 = get_bus_db()
-        latest = conn2.execute(
-            "SELECT json_extract(payload, '$.backoff_seconds') AS bs,"
-            " json_extract(payload, '$.consecutive_failures') AS cf"
-            " FROM records"
-            " WHERE topic = 'system' AND type = 'quota.fetched'"
-            " ORDER BY timestamp DESC LIMIT 1"
-        ).fetchone()
-        conn2.close()
+        try:
+            latest = conn2.execute(
+                "SELECT json_extract(payload, '$.backoff_seconds') AS bs,"
+                " json_extract(payload, '$.consecutive_failures') AS cf"
+                " FROM records"
+                " WHERE topic = 'system' AND type = 'quota.fetched'"
+                " ORDER BY timestamp DESC LIMIT 1"
+            ).fetchone()
+        finally:
+            conn2.close()
         if latest:
             backoff_seconds = latest["bs"] or 900
             consecutive_failures = latest["cf"] or 0
@@ -4355,42 +4452,44 @@ async def dashboard_quota_history(hours: int = 24):
     if raw_windows:
         try:
             conn3 = get_bus_db()
-            # Limit to last 10 windows to keep response fast
-            for w in raw_windows[-10:]:
-                t1 = w["t1"]
-                t2 = w["t2"]
-                fh_delta = w["fh2"] - w["fh1"]
-                sd_delta = w["sd2"] - w["sd1"]
+            try:
+                # Limit to last 10 windows to keep response fast
+                for w in raw_windows[-10:]:
+                    t1 = w["t1"]
+                    t2 = w["t2"]
+                    fh_delta = w["fh2"] - w["fh1"]
+                    sd_delta = w["sd2"] - w["sd1"]
 
-                session_rows = conn3.execute(
-                    "SELECT session_name,"
-                    " COUNT(*) AS event_count,"
-                    " SUM(CASE WHEN duration_ms IS NOT NULL THEN duration_ms ELSE 0 END) / 1000.0 AS total_sec,"
-                    " GROUP_CONCAT(DISTINCT tool_name) AS tools"
-                    " FROM sdk_events"
-                    " WHERE timestamp BETWEEN ? AND ?"
-                    "   AND event_type = 'tool_result'"
-                    " GROUP BY session_name"
-                    " ORDER BY total_sec DESC"
-                    " LIMIT 5",
-                    (t1, t2),
-                ).fetchall()
+                    session_rows = conn3.execute(
+                        "SELECT session_name,"
+                        " COUNT(*) AS event_count,"
+                        " SUM(CASE WHEN duration_ms IS NOT NULL THEN duration_ms ELSE 0 END) / 1000.0 AS total_sec,"
+                        " GROUP_CONCAT(DISTINCT tool_name) AS tools"
+                        " FROM sdk_events"
+                        " WHERE timestamp BETWEEN ? AND ?"
+                        "   AND event_type = 'tool_result'"
+                        " GROUP BY session_name"
+                        " ORDER BY total_sec DESC"
+                        " LIMIT 5",
+                        (t1, t2),
+                    ).fetchall()
 
-                if session_rows:
-                    for sr in session_rows:
-                        sn = sr["session_name"] or ""
-                        heavy_sessions.append({
-                            "window_start": datetime.fromtimestamp(t1 / 1000, tz=timezone.utc).isoformat(),
-                            "window_end": datetime.fromtimestamp(t2 / 1000, tz=timezone.utc).isoformat(),
-                            "five_hour_delta": round(fh_delta, 1),
-                            "seven_day_delta": round(sd_delta, 1),
-                            "session_name": sn,
-                            "display_name": _session_display_names.get(sn, ""),
-                            "event_count": sr["event_count"],
-                            "duration_sec": round(sr["total_sec"], 1),
-                            "tools": [t for t in (sr["tools"] or "").split(",") if t],
-                        })
-            conn3.close()
+                    if session_rows:
+                        for sr in session_rows:
+                            sn = sr["session_name"] or ""
+                            heavy_sessions.append({
+                                "window_start": datetime.fromtimestamp(t1 / 1000, tz=timezone.utc).isoformat(),
+                                "window_end": datetime.fromtimestamp(t2 / 1000, tz=timezone.utc).isoformat(),
+                                "five_hour_delta": round(fh_delta, 1),
+                                "seven_day_delta": round(sd_delta, 1),
+                                "session_name": sn,
+                                "display_name": _session_display_names.get(sn, ""),
+                                "event_count": sr["event_count"],
+                                "duration_sec": round(sr["total_sec"], 1),
+                                "tools": [t for t in (sr["tools"] or "").split(",") if t],
+                            })
+            finally:
+                conn3.close()
         except Exception as e:
             logger.warning(f"quota-history heavy_sessions query failed: {e}")
 
@@ -4649,9 +4748,52 @@ async def dashboard_usage(since: str | None = None):
     return {**data, "_loading": loading, "_updated_at": updated, "_error": error}
 
 
+def _fact_row_to_dict(r, contact_map: dict | None = None) -> dict:
+    """Convert a facts row to a response dict.
+
+    contact_map: optional phone→name lookup to resolve phone contacts.
+    """
+    contact = r["contact"]
+    if contact_map and contact.startswith("+"):
+        contact = contact_map.get(contact, contact)
+    return {
+        "id": r["id"],
+        "contact": contact,
+        "fact_type": r["fact_type"],
+        "summary": r["summary"],
+        "details": r["details"],
+        "confidence": r["confidence"],
+        "starts_at": r["starts_at"],
+        "ends_at": r["ends_at"],
+        "active": bool(r["active"]),
+        "created_at": r["created_at"],
+        "updated_at": r["updated_at"] or r["created_at"],
+        "source": r["source"],
+    }
+
+
+def _build_contact_map() -> dict:
+    """Build phone→name map from sessions.json for resolving facts contacts."""
+    registry = _load_sessions()
+    phone_map = {}
+    for chat_id, session in registry.items():
+        name = session.get("contact_name") or session.get("display_name")
+        if name and (chat_id.startswith("+") or "+" in chat_id):
+            # Strip backend prefix if present
+            phone = chat_id
+            for prefix in ("imessage:", "signal:", "discord:"):
+                if phone.startswith(prefix):
+                    phone = phone[len(prefix):]
+                    break
+            if phone.startswith("+"):
+                phone_map[phone] = name
+    return phone_map
+
+
 @app.get("/api/dashboard/facts")
 async def dashboard_facts():
     """Structured contact facts."""
+    conn = None
     try:
         conn = get_bus_db()
         rows = conn.execute(
@@ -4659,25 +4801,111 @@ async def dashboard_facts():
             "starts_at, ends_at, active, created_at, updated_at, source "
             "FROM facts ORDER BY created_at DESC"
         ).fetchall()
-
-        facts = []
-        for r in rows:
-            facts.append({
-                "id": r["id"],
-                "contact": r["contact"],
-                "fact_type": r["fact_type"],
-                "summary": r["summary"],
-                "details": r["details"],
-                "confidence": r["confidence"],
-                "starts_at": r["starts_at"],
-                "ends_at": r["ends_at"],
-                "active": bool(r["active"]),
-                "created_at": r["created_at"],
-                "source": r["source"],
-            })
-
         conn.close()
+        conn = None
+
+        contact_map = _build_contact_map()
+        facts = [_fact_row_to_dict(r, contact_map) for r in rows]
         return {"facts": facts, "total": len(facts)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if conn:
+            conn.close()
+
+
+@app.post("/api/dashboard/facts")
+async def create_fact(request: Request):
+    """Create a new manual fact."""
+    try:
+        body = await request.json()
+        contact = body.get("contact", "").strip()
+        fact_type = body.get("fact_type", "general").strip()
+        summary = body.get("summary", "").strip()
+        details = body.get("details", "").strip() or None
+        confidence = float(body.get("confidence", 1.0))
+
+        if not contact or not summary:
+            raise HTTPException(status_code=400, detail="contact and summary are required")
+
+        now = datetime.now(timezone.utc).isoformat()
+        conn = get_bus_db_rw()
+        try:
+            cur = conn.execute(
+                "INSERT INTO facts (contact, fact_type, summary, details, confidence, "
+                "active, created_at, updated_at, source) "
+                "VALUES (?, ?, ?, ?, ?, 1, ?, ?, 'manual')",
+                (contact, fact_type, summary, details, confidence, now, now),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT id, contact, fact_type, summary, details, confidence, "
+                "starts_at, ends_at, active, created_at, updated_at, source "
+                "FROM facts WHERE id = ?",
+                (cur.lastrowid,),
+            ).fetchone()
+            return _fact_row_to_dict(row)
+        finally:
+            conn.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/dashboard/facts/{fact_id}")
+async def update_fact(fact_id: int, request: Request):
+    """Update an existing fact. Sets source to 'manual' on edit."""
+    try:
+        body = await request.json()
+        allowed = {"summary", "details", "fact_type", "active", "confidence"}
+        updates = {k: v for k, v in body.items() if k in allowed}
+        if not updates:
+            raise HTTPException(status_code=400, detail="No valid fields to update")
+
+        now = datetime.now(timezone.utc).isoformat()
+        updates["updated_at"] = now
+        updates["source"] = "manual"
+
+        set_clause = ", ".join(f"{k} = ?" for k in updates)
+        values = list(updates.values()) + [fact_id]
+
+        conn = get_bus_db_rw()
+        try:
+            conn.execute(f"UPDATE facts SET {set_clause} WHERE id = ?", values)
+            conn.commit()
+            row = conn.execute(
+                "SELECT id, contact, fact_type, summary, details, confidence, "
+                "starts_at, ends_at, active, created_at, updated_at, source "
+                "FROM facts WHERE id = ?",
+                (fact_id,),
+            ).fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Fact not found")
+            return _fact_row_to_dict(row)
+        finally:
+            conn.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/dashboard/facts/{fact_id}")
+async def delete_fact(fact_id: int):
+    """Delete a fact by ID."""
+    try:
+        conn = get_bus_db_rw()
+        try:
+            cur = conn.execute("DELETE FROM facts WHERE id = ?", (fact_id,))
+            conn.commit()
+            if cur.rowcount == 0:
+                raise HTTPException(status_code=404, detail="Fact not found")
+            return {"status": "deleted", "id": fact_id}
+        finally:
+            conn.close()
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -4835,22 +5063,158 @@ async def restart_daemon(token: str = ""):
 
 
 # ─────────────────────────────────────────────────────────────
-# Soul API endpoint
+# Soul API endpoints (view, edit via AI, version history)
 # ─────────────────────────────────────────────────────────────
+
+_SOUL_PATH = Path.home() / ".claude" / "SOUL.md"
+_SOUL_HISTORY_DIR = Path.home() / ".claude" / "soul_history"
+
+
+def _snapshot_soul() -> Optional[str]:
+    """Save current SOUL.md to history. Returns timestamp or None."""
+    if not _SOUL_PATH.exists():
+        return None
+    _SOUL_HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
+    dest = _SOUL_HISTORY_DIR / f"{ts}.md"
+    # Avoid duplicate snapshots within the same second
+    if dest.exists():
+        return ts
+    import shutil
+    shutil.copy2(_SOUL_PATH, dest)
+    return ts
 
 
 @app.get("/api/app/soul")
 async def get_soul(token: str = ""):
     """Return the contents of ~/.claude/SOUL.md."""
-    soul_path = Path.home() / ".claude" / "SOUL.md"
-    if not soul_path.exists():
+    validate_token(token)
+    if not _SOUL_PATH.exists():
         raise HTTPException(status_code=404, detail="SOUL.md not found")
     try:
-        content = soul_path.read_text(encoding="utf-8")
+        content = _SOUL_PATH.read_text(encoding="utf-8")
         return {"ok": True, "content": content}
     except Exception as e:
         logger.error(f"get_soul error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+class SoulEditRequest(BaseModel):
+    instruction: str
+
+
+@app.post("/api/app/soul/edit")
+async def edit_soul(req: SoulEditRequest, token: str = ""):
+    """Use Claude to edit SOUL.md based on a natural-language instruction."""
+    validate_token(token)
+    if not _SOUL_PATH.exists():
+        raise HTTPException(status_code=404, detail="SOUL.md not found")
+
+    current_content = _SOUL_PATH.read_text(encoding="utf-8")
+    instruction = req.instruction.strip()
+    if not instruction:
+        raise HTTPException(status_code=400, detail="instruction is required")
+
+    # Snapshot before editing
+    _snapshot_soul()
+
+    # Build the prompt for Claude
+    prompt = f"""You are editing a personal identity document (SOUL.md) for an AI assistant named Sven.
+
+Here is the current SOUL.md:
+
+<current_soul>
+{current_content}
+</current_soul>
+
+The user wants this change: {instruction}
+
+Rewrite the FULL SOUL.md incorporating the requested change. Maintain the existing tone, style (lowercase, casual), and structure. Only modify what's needed for the requested change — don't rewrite sections that aren't affected.
+
+Return ONLY the new SOUL.md content — no explanation, no code fences, no preamble."""
+
+    try:
+        # Use claude CLI which handles its own OAuth auth (no API key needed)
+        proc = await asyncio.create_subprocess_exec(
+            "claude", "--print", "--model", "claude-sonnet-4-20250514",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(
+            proc.communicate(input=prompt.encode()),
+            timeout=90,
+        )
+
+        if proc.returncode != 0:
+            logger.error(f"soul edit Claude call failed: {stderr.decode()}")
+            raise HTTPException(status_code=500, detail="AI edit failed")
+
+        new_content = stdout.decode().strip()
+        if not new_content or len(new_content) < 50:
+            raise HTTPException(status_code=500, detail="AI returned empty/invalid content")
+
+        # Write the new soul
+        _SOUL_PATH.write_text(new_content, encoding="utf-8")
+        return {"ok": True, "content": new_content}
+
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="AI edit timed out")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"edit_soul error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/app/soul/history")
+async def get_soul_history(token: str = ""):
+    """List all soul versions, newest first."""
+    validate_token(token)
+    if not _SOUL_HISTORY_DIR.exists():
+        return {"ok": True, "versions": []}
+    versions = []
+    for f in sorted(_SOUL_HISTORY_DIR.glob("*.md"), reverse=True):
+        ts_str = f.stem  # e.g. "2026-03-29T10-43-00"
+        try:
+            ts = datetime.strptime(ts_str, "%Y-%m-%dT%H-%M-%S").replace(tzinfo=timezone.utc)
+            versions.append({
+                "timestamp": ts_str,
+                "iso": ts.isoformat(),
+                "size": f.stat().st_size,
+            })
+        except ValueError:
+            continue
+    return {"ok": True, "versions": versions}
+
+
+@app.get("/api/app/soul/history/{timestamp}")
+async def get_soul_version(timestamp: str, token: str = ""):
+    """Return a specific historical version of SOUL.md."""
+    validate_token(token)
+    path = _SOUL_HISTORY_DIR / f"{timestamp}.md"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Version not found")
+    content = path.read_text(encoding="utf-8")
+    return {"ok": True, "content": content, "timestamp": timestamp}
+
+
+class SoulRestoreRequest(BaseModel):
+    timestamp: str
+
+
+@app.post("/api/app/soul/restore")
+async def restore_soul(req: SoulRestoreRequest, token: str = ""):
+    """Restore SOUL.md from a historical version (snapshots current first)."""
+    validate_token(token)
+    path = _SOUL_HISTORY_DIR / f"{req.timestamp}.md"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Version not found")
+    # Snapshot current before restoring
+    _snapshot_soul()
+    old_content = path.read_text(encoding="utf-8")
+    _SOUL_PATH.write_text(old_content, encoding="utf-8")
+    return {"ok": True, "content": old_content}
 
 
 # ─────────────────────────────────────────────────────────────
@@ -4870,7 +5234,7 @@ def _load_sessions() -> dict:
 def _get_messages_db():
     """Get a connection to dispatch-messages.db (read-write) with WAL mode."""
     init_db()
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
     return conn
@@ -4916,43 +5280,64 @@ def _check_is_thinking(session_name: str) -> bool:
     """
     if not session_name:
         return False
+    result = _batch_check_is_thinking([session_name])
+    return result.get(session_name, False)
+
+
+def _batch_check_is_thinking(session_names: list[str]) -> dict[str, bool]:
+    """Batch check if multiple sessions are thinking — single DB connection + query.
+
+    Returns a dict mapping the original session_name -> bool.
+    """
+    if not session_names:
+        return {}
+
+    # Build all plausible name variants for each session, tracking which original they map to
+    all_names: list[str] = []
+    name_to_original: dict[str, str] = {}  # variant -> original session_name
+
+    for session_name in session_names:
+        variants = [session_name]
+        if session_name.startswith(f"{APP_SESSION_PREFIX}/"):
+            chat_id_part = session_name[len(f"{APP_SESSION_PREFIX}/"):]
+            if ":" in chat_id_part:
+                bare_uuid = chat_id_part.split(":", 1)[1]
+                variants.append(f"{APP_SESSION_PREFIX}/{bare_uuid}")
+            else:
+                variants.append(f"{APP_SESSION_PREFIX}/{APP_SESSION_PREFIX}:{chat_id_part}")
+            variants.append(f"sven-app/sven-app:{chat_id_part}")
+
+        for v in variants:
+            name_to_original[v] = session_name
+        all_names.extend(variants)
+
     conn = None
     try:
         conn = get_bus_db()
-        # Try multiple session_name formats — the daemon writes with
-        # {source}/{chat_id} but chat_id may or may not include the registry prefix.
-        # Generate all plausible variants for the lookup.
-        names_to_try = [session_name]
-        if session_name.startswith(f"{APP_SESSION_PREFIX}/"):
-            chat_id_part = session_name[len(f"{APP_SESSION_PREFIX}/"):]
-            # If chat_id_part has prefix like "dispatch-app:UUID", also try bare "UUID"
-            if ":" in chat_id_part:
-                bare_uuid = chat_id_part.split(":", 1)[1]
-                names_to_try.append(f"{APP_SESSION_PREFIX}/{bare_uuid}")
-            else:
-                # If bare UUID, also try with prefix
-                names_to_try.append(f"{APP_SESSION_PREFIX}/{APP_SESSION_PREFIX}:{chat_id_part}")
-            # Legacy sven-app format
-            names_to_try.append(f"sven-app/sven-app:{chat_id_part}")
-        placeholders = ",".join("?" * len(names_to_try))
-        row = conn.execute(
-            f"SELECT is_busy, updated_at FROM session_states WHERE session_name IN ({placeholders}) ORDER BY updated_at DESC LIMIT 1",
-            names_to_try,
-        ).fetchone()
-        if row is None:
-            return False
-        is_busy, updated_at = row["is_busy"], row["updated_at"]
-        # Staleness guard: if the daemon hasn't updated in 3 minutes,
-        # assume it crashed or the session ended without clearing the flag.
-        # The daemon refreshes updated_at periodically during long operations
-        # (receive_loop re-sends set_session_busy(True) on each message),
-        # so 3 minutes is safe — a truly busy session will have recent updates.
+        placeholders = ",".join("?" * len(all_names))
+        rows = conn.execute(
+            f"SELECT session_name, is_busy, updated_at FROM session_states "
+            f"WHERE session_name IN ({placeholders})",
+            all_names,
+        ).fetchall()
+
         now_ms = int(time.time() * 1000)
-        if now_ms - updated_at > 180_000:
-            return False
-        return bool(is_busy)
+        result: dict[str, bool] = {name: False for name in session_names}
+
+        for row in rows:
+            sn, is_busy, updated_at = row["session_name"], row["is_busy"], row["updated_at"]
+            original = name_to_original.get(sn)
+            if original is None:
+                continue
+            # Staleness guard: 3 minutes
+            if now_ms - updated_at > 180_000:
+                continue
+            if is_busy:
+                result[original] = True
+
+        return result
     except Exception:
-        return False
+        return {name: False for name in session_names}
     finally:
         if conn:
             conn.close()
@@ -5069,23 +5454,25 @@ async def agents_sessions():
         last_messages = {}
         try:
             conn = get_bus_db()
-            cursor = conn.execute("""
-                SELECT chat_id, payload, timestamp, type, source FROM (
-                    SELECT json_extract(payload, '$.chat_id') as chat_id,
-                           payload, timestamp, type, source,
-                           ROW_NUMBER() OVER (
-                               PARTITION BY json_extract(payload, '$.chat_id')
-                               ORDER BY timestamp DESC
-                           ) as rn
-                    FROM records
-                    WHERE topic = 'messages'
-                      AND type IN ('message.received', 'message.sent', 'message.admin_inject')
-                      AND source NOT IN ('consumer-retry', 'sdk_backend.replay')
-                ) sub WHERE rn = 1
-            """)
-            for row in cursor.fetchall():
-                last_messages[row[0]] = row
-            conn.close()
+            try:
+                cursor = conn.execute("""
+                    SELECT chat_id, payload, timestamp, type, source FROM (
+                        SELECT json_extract(payload, '$.chat_id') as chat_id,
+                               payload, timestamp, type, source,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY json_extract(payload, '$.chat_id')
+                                   ORDER BY timestamp DESC
+                               ) as rn
+                        FROM records
+                        WHERE topic = 'messages'
+                          AND type IN ('message.received', 'message.sent', 'message.admin_inject')
+                          AND source NOT IN ('consumer-retry', 'sdk_backend.replay')
+                    ) sub WHERE rn = 1
+                """)
+                for row in cursor.fetchall():
+                    last_messages[row[0]] = row
+            finally:
+                conn.close()
         except Exception as e:
             logger.warning(f"agents_sessions: failed to query bus.db: {e}")
 
@@ -5095,7 +5482,7 @@ async def agents_sessions():
             chat_db_path = Path.home() / "Library" / "Messages" / "chat.db"
             if chat_db_path.exists():
                 import sqlite3 as _sqlite3
-                chat_conn = _sqlite3.connect(f"file:{chat_db_path}?mode=ro", uri=True)
+                chat_conn = _sqlite3.connect(f"file:{chat_db_path}?mode=ro", uri=True, check_same_thread=False)
                 for row in chat_conn.execute(
                     "SELECT guid, display_name FROM chat WHERE display_name IS NOT NULL AND display_name != ''"
                 ).fetchall():
@@ -5293,27 +5680,28 @@ async def agents_sdk_events(
                 session_name = session_id
 
         conn = get_bus_db()
+        try:
+            # Query with the session_name, but also try legacy double-nested format
+            # (old bug stored "sven-app/sven-app:chat_id" instead of "sven-app/chat_id")
+            conditions = ["(session_name = ? OR session_name = ?)"]
+            legacy_session_name = session_name.replace(f"{APP_SESSION_PREFIX}/", "sven-app/sven-app:") if session_name.startswith(f"{APP_SESSION_PREFIX}/") else f"sven-app/{session_id}"
+            params = [session_name, legacy_session_name]
 
-        # Query with the session_name, but also try legacy double-nested format
-        # (old bug stored "sven-app/sven-app:chat_id" instead of "sven-app/chat_id")
-        conditions = ["(session_name = ? OR session_name = ?)"]
-        legacy_session_name = session_name.replace(f"{APP_SESSION_PREFIX}/", "sven-app/sven-app:") if session_name.startswith(f"{APP_SESSION_PREFIX}/") else f"sven-app/{session_id}"
-        params = [session_name, legacy_session_name]
+            if since_id is not None:
+                conditions.append("id > ?")
+                params.append(since_id)
 
-        if since_id is not None:
-            conditions.append("id > ?")
-            params.append(since_id)
+            if since_ts is not None:
+                conditions.append("timestamp > ?")
+                params.append(since_ts)
 
-        if since_ts is not None:
-            conditions.append("timestamp > ?")
-            params.append(since_ts)
+            where = "WHERE " + " AND ".join(conditions)
+            query = f"SELECT id, timestamp, session_name, chat_id, event_type, tool_name, tool_use_id, duration_ms, is_error, payload, num_turns FROM sdk_events {where} ORDER BY id DESC LIMIT ?"
+            params.append(limit)
 
-        where = "WHERE " + " AND ".join(conditions)
-        query = f"SELECT id, timestamp, session_name, chat_id, event_type, tool_name, tool_use_id, duration_ms, is_error, payload, num_turns FROM sdk_events {where} ORDER BY id DESC LIMIT ?"
-        params.append(limit)
-
-        rows = conn.execute(query, params).fetchall()
-        conn.close()
+            rows = conn.execute(query, params).fetchall()
+        finally:
+            conn.close()
 
         events = []
         for r in rows:
@@ -5779,17 +6167,19 @@ async def fork_agent_to_chat(session_id: str, request: ForkAgentToChatRequest):
         registry = _load_sessions()
         sender_map = _build_sender_map(registry)
         conn = get_bus_db()
-        rows = conn.execute(
-            'SELECT "offset", type, source, payload, timestamp '
-            "FROM records "
-            "WHERE topic = 'messages' "
-            "  AND json_extract(payload, '$.chat_id') = ? "
-            "  AND type IN ('message.received', 'message.sent') "
-            "  AND source NOT IN ('consumer-retry', 'sdk_backend.replay') "
-            "ORDER BY timestamp ASC LIMIT 5000",
-            (session_id,),
-        ).fetchall()
-        conn.close()
+        try:
+            rows = conn.execute(
+                'SELECT "offset", type, source, payload, timestamp '
+                "FROM records "
+                "WHERE topic = 'messages' "
+                "  AND json_extract(payload, '$.chat_id') = ? "
+                "  AND type IN ('message.received', 'message.sent') "
+                "  AND source NOT IN ('consumer-retry', 'sdk_backend.replay') "
+                "ORDER BY timestamp ASC LIMIT 5000",
+                (session_id,),
+            ).fetchall()
+        finally:
+            conn.close()
 
         for row in rows:
             offset, type_, source, payload_str, timestamp = row
@@ -5922,6 +6312,181 @@ async def agents_compat_redirect(request: Request, path: str):
         return _RedirectResponse(url=new_url, status_code=301)
     return _RedirectResponse(url=new_url, status_code=307)
 
+
+# ---------------------------------------------------------------------------
+# OTA Updates — self-hosted Expo Updates Protocol v1
+# NOTE: Must be registered BEFORE the SPA catch-all below.
+# ---------------------------------------------------------------------------
+
+UPDATES_DIR = Path(__file__).parent.parent.parent / "apps" / "dispatch-app" / "updates"
+
+def _get_latest_update(runtime_version: str, platform: str) -> Optional[Path]:
+    """Find the most recent update directory for a runtime version."""
+    rv_dir = UPDATES_DIR / runtime_version
+    if not rv_dir.is_dir():
+        return None
+    # Each update is a timestamped directory
+    updates = sorted(rv_dir.iterdir(), reverse=True)
+    for u in updates:
+        if u.is_dir() and (u / "metadata.json").exists():
+            return u
+    return None
+
+def _compute_hash(file_path: Path) -> tuple[str, str]:
+    """Compute SHA-256 (base64url) and MD5 (hex) hashes for a file."""
+    import hashlib, base64
+    sha = hashlib.sha256()
+    md5 = hashlib.md5()
+    with open(file_path, "rb") as f:
+        while chunk := f.read(8192):
+            sha.update(chunk)
+            md5.update(chunk)
+    sha_b64 = base64.urlsafe_b64encode(sha.digest()).rstrip(b"=").decode()
+    return sha_b64, md5.hexdigest()
+
+@app.get("/api/updates/manifest")
+async def updates_manifest(request: Request):
+    """Expo Updates Protocol v1 — manifest endpoint."""
+    from fastapi.responses import Response
+
+    platform = request.headers.get("expo-platform", "ios")
+    runtime_version = request.headers.get("expo-runtime-version", "")
+
+    if not runtime_version:
+        raise HTTPException(400, "Missing expo-runtime-version header")
+
+    update_dir = _get_latest_update(runtime_version, platform)
+
+    if not update_dir:
+        # No update available — return directive
+        boundary = "dispatch-update-boundary"
+        body = (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="directive"\r\n'
+            f"Content-Type: application/json\r\n\r\n"
+            f'{{"type":"noUpdateAvailable"}}\r\n'
+            f"--{boundary}--\r\n"
+        )
+        return Response(
+            content=body,
+            media_type=f"multipart/mixed; boundary={boundary}",
+            headers={
+                "expo-protocol-version": "1",
+                "expo-sfv-version": "0",
+                "cache-control": "private, max-age=0",
+            },
+        )
+
+    # Load metadata
+    metadata = json.loads((update_dir / "metadata.json").read_text())
+    file_meta = metadata.get("fileMetadata", {}).get(platform, {})
+
+    if not file_meta:
+        raise HTTPException(404, f"No {platform} metadata in update")
+
+    # Build asset manifest
+    bundle_path = update_dir / file_meta["bundle"]
+    bundle_sha, bundle_md5 = _compute_hash(bundle_path)
+
+    # Determine base URL for assets
+    api_host = request.headers.get("host", "localhost:9091")
+    scheme = "https" if request.headers.get("x-forwarded-proto") == "https" else "http"
+    base_url = f"{scheme}://{api_host}/api/updates/assets"
+
+    rel_update = update_dir.relative_to(UPDATES_DIR)
+
+    launch_asset = {
+        "hash": bundle_sha,
+        "key": bundle_md5,
+        "contentType": "application/javascript",
+        "url": f"{base_url}?asset={rel_update}/{file_meta['bundle']}&runtimeVersion={runtime_version}&platform={platform}",
+    }
+
+    assets = []
+    for asset_info in file_meta.get("assets", []):
+        asset_path = update_dir / asset_info["path"]
+        if asset_path.exists():
+            a_sha, a_md5 = _compute_hash(asset_path)
+            assets.append({
+                "hash": a_sha,
+                "key": a_md5,
+                "contentType": mimetypes.guess_type(f"file.{asset_info['ext']}")[0] or "application/octet-stream",
+                "fileExtension": f".{asset_info['ext']}",
+                "url": f"{base_url}?asset={rel_update}/{asset_info['path']}&runtimeVersion={runtime_version}&platform={platform}",
+            })
+
+    # Generate update ID from metadata content hash
+    import hashlib
+    meta_hash = hashlib.sha256((update_dir / "metadata.json").read_bytes()).hexdigest()
+    update_id = f"{meta_hash[:8]}-{meta_hash[8:12]}-{meta_hash[12:16]}-{meta_hash[16:20]}-{meta_hash[20:32]}"
+
+    # Created timestamp from directory
+    created_at = datetime.fromtimestamp(
+        (update_dir / "metadata.json").stat().st_mtime, tz=timezone.utc
+    ).isoformat()
+
+    manifest = {
+        "id": update_id,
+        "createdAt": created_at,
+        "runtimeVersion": runtime_version,
+        "launchAsset": launch_asset,
+        "assets": assets,
+        "metadata": {},
+        "extra": {},
+    }
+
+    # Load expoConfig if available
+    expo_config_path = update_dir / "expoConfig.json"
+    if expo_config_path.exists():
+        manifest["extra"]["expoClient"] = json.loads(expo_config_path.read_text())
+
+    boundary = "dispatch-update-boundary"
+    manifest_json = json.dumps(manifest)
+    body = (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="manifest"\r\n'
+        f"Content-Type: application/json; charset=utf-8\r\n\r\n"
+        f"{manifest_json}\r\n"
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="extensions"\r\n'
+        f"Content-Type: application/json\r\n\r\n"
+        f'{{"assetRequestHeaders":{{}}}}\r\n'
+        f"--{boundary}--\r\n"
+    )
+
+    return Response(
+        content=body,
+        media_type=f"multipart/mixed; boundary={boundary}",
+        headers={
+            "expo-protocol-version": "1",
+            "expo-sfv-version": "0",
+            "cache-control": "private, max-age=0",
+        },
+    )
+
+@app.get("/api/updates/assets")
+async def updates_assets(asset: str, runtimeVersion: str = "", platform: str = "ios"):
+    """Serve OTA update asset files (JS bundles, images, fonts)."""
+    # Sanitize path to prevent directory traversal
+    asset_path = UPDATES_DIR / asset
+    if not asset_path.resolve().is_relative_to(UPDATES_DIR.resolve()):
+        raise HTTPException(403, "Invalid asset path")
+    if not asset_path.exists():
+        raise HTTPException(404, "Asset not found")
+
+    content_type = mimetypes.guess_type(str(asset_path))[0]
+    if asset_path.suffix == ".js":
+        content_type = "application/javascript"
+    elif asset_path.suffix == ".hbc":
+        content_type = "application/javascript"
+    elif not content_type:
+        content_type = "application/octet-stream"
+
+    return FileResponse(
+        asset_path,
+        media_type=content_type,
+        headers={"cache-control": "public, max-age=31536000, immutable"},
+    )
 
 # ---------------------------------------------------------------------------
 # Serve dispatch-app web build at / (static files)

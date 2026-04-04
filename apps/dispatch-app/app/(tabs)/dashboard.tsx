@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Animated,
@@ -10,10 +10,21 @@ import {
   Text,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+
+/** Force a re-render every `ms` so time-relative text stays fresh */
+function useTick(ms = 30_000) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick((t) => t + 1), ms);
+    return () => clearInterval(id);
+  }, [ms]);
+}
 import { router } from "expo-router";
 import { useDashboard } from "@/src/hooks/useDashboard";
 import type { HistogramBucket } from "@/src/hooks/useDashboard";
 import type { DashboardHealth, DashboardCcuResponse } from "@/src/api/types";
+import { quotaBarColor, formatResetTime, computeQuotaPrediction, predictionIcon, predictionColor } from "@/src/utils/quotaHelpers";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -27,16 +38,6 @@ function formatUptime(seconds: number): string {
   if (d > 0) return `${d}d ${h}h`;
   if (h > 0) return `${h}h ${m}m`;
   return `${m}m`;
-}
-
-function formatResetTime(resetsAt: string): string {
-  const diffMs = new Date(resetsAt).getTime() - Date.now();
-  if (diffMs <= 0) return "now";
-  const hours = Math.floor(diffMs / 3_600_000);
-  const mins = Math.floor((diffMs % 3_600_000) / 60_000);
-  if (hours > 24) return `${Math.floor(hours / 24)}d ${hours % 24}h`;
-  if (hours > 0) return `${hours}h ${mins}m`;
-  return `${mins}m`;
 }
 
 function healthColor(status: string): string {
@@ -65,14 +66,6 @@ function healthLabel(status: string): string {
   }
 }
 
-function quotaBarColor(util: number): string {
-  if (util >= 80) return "#ef4444";
-  if (util >= 50) return "#eab308";
-  return "#22c55e";
-}
-
-
-
 
 // ---------------------------------------------------------------------------
 // Sub-components
@@ -88,10 +81,19 @@ function UsageBar({
   utilization: number;
   resetsAt: string;
 }) {
+  const prediction = computeQuotaPrediction(label, utilization, resetsAt);
+  const showAlert = prediction.status === "tight" || prediction.status === "danger";
   return (
     <View style={usageStyles.barRow}>
       <View style={usageStyles.labelRow}>
-        <Text style={usageStyles.label}>{label}</Text>
+        <View style={usageStyles.labelWithAlert}>
+          <Text style={usageStyles.label}>{label}</Text>
+          {showAlert && (
+            <Text style={[usageStyles.alertText, { color: predictionColor(prediction.status) }]}>
+              {predictionIcon(prediction.status)} {prediction.message}
+            </Text>
+          )}
+        </View>
         <Text style={usageStyles.percentage}>
           {Math.round(utilization)}%
         </Text>
@@ -391,6 +393,7 @@ function UsageSection({
   loading: boolean;
   onRefresh: () => void;
 }) {
+  useTick(30_000); // keep reset countdowns live
   const quota = ccu?.quota;
   // Build an ordered list of quota bars to display
   const bars: Array<{ label: string; utilization: number; resetsAt: string }> = [];
@@ -408,12 +411,7 @@ function UsageSection({
   }
 
   // Extra usage (monthly spend) bar
-  const extraUsage = (quota as Record<string, unknown> | null)?.extra_usage as {
-    is_enabled: boolean;
-    monthly_limit: number | null;
-    used_credits: number | null;
-    utilization: number | null;
-  } | undefined;
+  const extraUsage = quota?.extra_usage;
   const extraUsageBar = extraUsage?.is_enabled && extraUsage.utilization != null
     ? {
         label: "Extra Usage",
@@ -427,8 +425,6 @@ function UsageSection({
   const blockTokens = (activeBlock?.totalTokens as number) ?? 0;
   const maxTokens = (ccu as Record<string, unknown> | null)?.max_tokens_observed as number ?? 0;
   const blockCost = activeBlock?.costUSD as number | undefined;
-  const burnRate = activeBlock?.burnRate as { costPerHour?: number } | null;
-  const projection = activeBlock?.projection as { totalCost?: number; remainingMinutes?: number } | null;
   const dailyTotals = ccu?.daily_totals as { totalCost?: number } | undefined;
 
   const hasBlockData = blockCost != null;
@@ -443,15 +439,6 @@ function UsageSection({
       value: formatCost(blockCost!),
       pct: blockPct,
     });
-    // Burn rate bar: cost/hr scaled ($200/hr = 100%)
-    if (burnRate?.costPerHour != null) {
-      const burnPct = Math.min(100, (burnRate.costPerHour / 200) * 100);
-      estimatedBars.push({
-        label: "Burn Rate",
-        value: `${formatCost(burnRate.costPerHour)}/hr`,
-        pct: burnPct,
-      });
-    }
     // 7-day total: scaled ($10,000 = 100%)
     if (dailyTotals?.totalCost != null) {
       const weekPct = Math.min(100, (dailyTotals.totalCost / 10000) * 100);
@@ -463,15 +450,23 @@ function UsageSection({
     }
   }
 
+  // Credits bar from extra_usage
+  const creditsEnabled = extraUsage?.is_enabled && extraUsage.utilization != null;
+  const creditsUsed = (extraUsage?.used_credits ?? 0) / 100;
+  const creditsLimit = (extraUsage?.monthly_limit ?? 0) / 100;
+  const creditsValue = creditsLimit > 0
+    ? `$${Math.round(creditsUsed)} / $${Math.round(creditsLimit)}`
+    : `$${Math.round(creditsUsed)} used`;
+
   return (
-    <Pressable style={styles.section} onPress={() => router.push("/dashboard/quota" as never)}>
+    <View style={styles.section}>
       <View style={styles.sectionHeaderRow}>
         <Text style={styles.sectionHeader}>USAGE & QUOTA</Text>
         {loading && (
           <ActivityIndicator size="small" color="#71717a" style={styles.headerSpinner} />
         )}
       </View>
-      <View style={styles.sectionCard}>
+      <Pressable style={styles.sectionCard} onPress={() => router.push("/dashboard/quota" as never)}>
         {bars.length > 0 ? (
           <View style={styles.quotaContainer}>
             {bars.map((bar, i) => (
@@ -518,15 +513,39 @@ function UsageSection({
             </Text>
           </View>
         )}
-      </View>
-      {(ccu?._quota_updated_at || ccu?._updated_at) && (
-        <Text style={styles.sectionFooterMono}>
-          Tap for details · Quota fetched {ccu._quota_updated_at
-            ? new Date(ccu._quota_updated_at).toLocaleTimeString()
-            : new Date(ccu._updated_at!).toLocaleTimeString()}
-        </Text>
+      </Pressable>
+
+      {/* Credits — always visible */}
+      {creditsEnabled && (
+        <View style={widgetStyles.alwaysVisible}>
+          <View style={widgetStyles.creditsRow}>
+            <Text style={widgetStyles.creditsLabel}>Extra Usage</Text>
+            <View style={widgetStyles.creditsBarTrack}>
+              <View
+                style={[
+                  widgetStyles.creditsBarFill,
+                  {
+                    width: `${Math.min(100, extraUsage!.utilization!)}%`,
+                    backgroundColor: quotaBarColor(extraUsage!.utilization!),
+                  },
+                ]}
+              />
+            </View>
+            <Text style={widgetStyles.creditsValue}>{creditsValue}</Text>
+          </View>
+        </View>
       )}
-    </Pressable>
+
+      {(ccu?._quota_updated_at || ccu?._updated_at) && (
+        <Pressable onPress={() => router.push("/dashboard/quota" as never)}>
+          <Text style={styles.sectionFooterMono}>
+            Tap for details · Quota fetched {ccu._quota_updated_at
+              ? new Date(ccu._quota_updated_at).toLocaleTimeString()
+              : new Date(ccu._updated_at!).toLocaleTimeString()}
+          </Text>
+        </Pressable>
+      )}
+    </View>
   );
 }
 
@@ -540,6 +559,11 @@ function SessionsSection({ count }: { count: number }) {
           value={`${count}`}
           route="/dashboard/sessions"
         />
+        <View style={styles.separator} />
+        <NavRow
+          label="Cost Analytics"
+          route="/dashboard/costs"
+        />
       </View>
     </View>
   );
@@ -548,9 +572,11 @@ function SessionsSection({ count }: { count: number }) {
 function TasksSection({
   reminders,
   skills,
+  facts,
 }: {
   reminders: number;
   skills: number;
+  facts: number;
 }) {
   return (
     <View style={styles.section}>
@@ -560,6 +586,12 @@ function TasksSection({
           label="Active Reminders"
           value={`${reminders}`}
           route="/dashboard/tasks"
+        />
+        <View style={styles.separator} />
+        <NavRow
+          label="Knowledge Base"
+          value={`${facts}`}
+          route="/dashboard/facts"
         />
         <View style={styles.separator} />
         <NavRow
@@ -577,6 +609,8 @@ function SystemSection() {
     <View style={styles.section}>
       <Text style={styles.sectionHeader}>SYSTEM</Text>
       <View style={styles.sectionCard}>
+        <NavRow label="Health Checks" route="/dashboard/health" />
+        <View style={styles.separator} />
         <NavRow label="Logs" route="/logs" />
         <View style={styles.separator} />
         <NavRow label="Events" route="/dashboard/events" />
@@ -596,7 +630,7 @@ export default function DashboardScreen() {
   // First load — no cached data yet
   if (isLoading && !health) {
     return (
-      <View style={styles.container}>
+      <SafeAreaView style={styles.container} edges={["top"]}>
         <ScrollView contentContainerStyle={styles.contentContainer}>
           <View style={styles.section}>
             <Text style={styles.sectionHeader}>SYSTEM STATUS</Text>
@@ -611,14 +645,14 @@ export default function DashboardScreen() {
             <SkeletonCard rows={1} />
           </View>
         </ScrollView>
-      </View>
+      </SafeAreaView>
     );
   }
 
   // Error with no cached data
   if (error && !health) {
     return (
-      <View style={styles.container}>
+      <SafeAreaView style={styles.container} edges={["top"]}>
         <View style={styles.errorContainer}>
           <Text style={styles.errorEmoji}>⚠️</Text>
           <Text style={styles.errorTitle}>Unable to load dashboard</Text>
@@ -627,12 +661,12 @@ export default function DashboardScreen() {
             <Text style={styles.retryText}>Retry</Text>
           </Pressable>
         </View>
-      </View>
+      </SafeAreaView>
     );
   }
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container} edges={["top"]}>
       <ScrollView
         contentContainerStyle={styles.contentContainer}
         refreshControl={
@@ -657,7 +691,11 @@ export default function DashboardScreen() {
 
         {/* Main sections */}
         {health && <SystemStatusSection health={health} histogram={histogram} />}
-        <UsageSection ccu={ccu} loading={ccuLoading} onRefresh={refreshCcu} />
+        <UsageSection
+          ccu={ccu}
+          loading={ccuLoading}
+          onRefresh={refreshCcu}
+        />
         {health && (
           <SessionsSection count={health.active_sessions} />
         )}
@@ -665,6 +703,7 @@ export default function DashboardScreen() {
           <TasksSection
             reminders={health.active_reminders}
             skills={health.skills_count}
+            facts={health.facts_count}
           />
         )}
         <SystemSection />
@@ -676,7 +715,7 @@ export default function DashboardScreen() {
           </Text>
         )}
       </ScrollView>
-    </View>
+    </SafeAreaView>
   );
 }
 
@@ -695,10 +734,19 @@ const usageStyles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 4,
   },
+  labelWithAlert: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    flex: 1,
+  },
   label: {
     color: "#fafafa",
     fontSize: 14,
     fontWeight: "500",
+  },
+  alertText: {
+    fontSize: 11,
   },
   percentage: {
     color: "#a1a1aa",
@@ -715,10 +763,88 @@ const usageStyles = StyleSheet.create({
     height: "100%",
     borderRadius: 3,
   },
+  barPct: {
+    color: "#a1a1aa",
+    fontSize: 12,
+    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+    width: 32,
+    textAlign: "right",
+  },
   resetText: {
     color: "#52525b",
     fontSize: 11,
     marginTop: 3,
+  },
+  predictionText: {
+    fontSize: 11,
+  },
+});
+
+const widgetStyles = StyleSheet.create({
+  alwaysVisible: {
+    paddingHorizontal: 4,
+    paddingTop: 8,
+  },
+  creditsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  creditsLabel: {
+    color: "#a1a1aa",
+    fontSize: 12,
+    fontWeight: "500",
+    width: 75,
+  },
+  creditsBarTrack: {
+    flex: 1,
+    height: 4,
+    backgroundColor: "#27272a",
+    borderRadius: 2,
+    overflow: "hidden",
+  },
+  creditsBarFill: {
+    height: "100%",
+    borderRadius: 2,
+  },
+  creditsValue: {
+    color: "#a1a1aa",
+    fontSize: 11,
+    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+    width: 90,
+    textAlign: "right",
+  },
+  toggleRow: {
+    paddingVertical: 6,
+    paddingHorizontal: 4,
+  },
+  toggleText: {
+    color: "#60a5fa",
+    fontSize: 12,
+    fontWeight: "500",
+  },
+  expandedSection: {
+    paddingHorizontal: 4,
+    paddingBottom: 4,
+  },
+  placeholder: {
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  placeholderText: {
+    color: "#52525b",
+    fontSize: 12,
+  },
+  emptyText: {
+    color: "#52525b",
+    fontSize: 12,
+    marginTop: 4,
+  },
+  errorText: {
+    color: "#ef4444",
+    fontSize: 12,
+    marginTop: 4,
+    opacity: 0.7,
   },
 });
 

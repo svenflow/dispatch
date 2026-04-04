@@ -95,8 +95,24 @@ export default function ChatDetailScreen() {
 
   const { events: sdkEvents, isComplete: sdkComplete } = useSdkEvents(sdkSessionId, isThinking);
 
-  // Hide thinking immediately when SDK events report turn complete
-  const showThinking = isThinking && !sdkComplete;
+  // Let server-driven isThinking control visibility — don't use sdkComplete.
+  // sdkComplete was added speculatively (83d9a55) to hide the indicator faster,
+  // but it races: SDK events poll (1000ms) detects turn completion before message
+  // poll (1500ms) delivers the reply, causing ~500ms flicker.
+  // INVARIANT: reply-app stores message (synchronous SQLite commit) before
+  // ResultMessage triggers set_session_busy(False). Any poll reading
+  // is_thinking=false will also see the reply. See sdk_session.py _receive_loop()
+  // ResultMessage handler.
+  const showThinking = isThinking;
+
+  // Dev warning: detect stuck thinking indicator (isThinking true for >60s)
+  useEffect(() => {
+    if (!isThinking || !__DEV__) return;
+    const timer = setTimeout(() => {
+      console.warn("[thinking] indicator visible for 60s — possible stuck state");
+    }, 60_000);
+    return () => clearTimeout(timer);
+  }, [isThinking]);
 
 
   // Inverted FlatList: data is reversed so newest messages appear at the bottom.

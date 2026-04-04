@@ -66,3 +66,6 @@ export const REQUEST_TIMEOUT = 15000;
 
 /** Storage key for persisted API URL */
 export const API_URL_STORAGE_KEY = "dispatch_api_url";
+
+/** Google Maps Embed API key (public, restricted to embed usage) */
+export const GOOGLE_MAPS_EMBED_KEY = "AIzaSyAAZfRH6ubjcaDh6mcj9yaRI2NpqdSbQ3c";

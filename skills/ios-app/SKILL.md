@@ -31,6 +31,55 @@ Build, test, and deploy iOS apps from the command line.
 4. **Send screenshots to user** - get explicit approval before proceeding
 5. **Deploy to device** - prefer direct deploy (see below), fall back to TestFlight
 
+### Build Configuration: Debug vs Release
+
+**Choose the right configuration based on the deployment goal:**
+
+```
+What are you building?
+├── Metro hot reload via Tailscale (active dev) → -configuration Debug
+│   └── Sets SKIP_BUNDLING=1, connects to Metro at metroHost from app.yaml
+│   └── Device must be on Tailscale + Metro must be running
+└── Self-contained IPA (serve-ipa or TestFlight/App Store) → -configuration Release
+    └── Bundles JS statically, no Metro dependency
+    └── Required for serve-ipa distribution and TestFlight uploads
+```
+
+```bash
+# Debug — connects to Metro for hot reload
+xcodebuild archive \
+  -workspace ios/Sven.xcworkspace \
+  -scheme Sven \
+  -configuration Debug \
+  -archivePath /tmp/SvenDebug/Sven.xcarchive \
+  -destination "generic/platform=iOS" \
+  CODE_SIGN_IDENTITY="Apple Development"
+
+# Release — self-contained bundle (for serve-ipa or TestFlight)
+xcodebuild archive \
+  -workspace ios/Sven.xcworkspace \
+  -scheme Sven \
+  -configuration Release \
+  -archivePath /tmp/SvenRelease/Sven.xcarchive \
+  -destination "generic/platform=iOS" \
+  CODE_SIGN_IDENTITY="Apple Development"
+```
+
+### How Metro Over Tailscale Works (MUST UNDERSTAND)
+
+The Debug build connects to Metro over Tailscale thanks to two patches:
+
+1. **`app.config.ts`** bakes `metroHost` from `app.yaml` into the binary's `Info.plist` as `RCTMetroHost`
+2. **`AppDelegate.swift`** reads `RCTMetroHost` in the `#if DEBUG` block and sets `jsLocation` before requesting the JS bundle URL
+
+**Why both are needed:** `metroHost` in `app.yaml` only sets `REACT_NATIVE_PACKAGER_HOSTNAME` at Metro server startup — telling the *server* which IP to advertise. But the *binary* uses a separate mechanism (`ip.txt` with LAN IPs from `ipconfig getifaddr`) to find Metro at runtime. Without the AppDelegate patch, the debug build tries to connect to a local LAN IP, not the Tailscale IP.
+
+**After building a Debug IPA and installing on device:**
+- Metro must be running (`npm start` in dispatch-app)
+- Device must be on Tailscale
+- The binary auto-connects to Metro at the `metroHost` IP from `app.yaml` (currently `100.70.178.37`)
+- Hot reload works — JS changes appear on the device immediately
+
 ### Deployment Priority: Direct Device Deploy > TestFlight
 
 **When deploying to the owner's device:**

@@ -1,6 +1,10 @@
 # config.example.yaml — Copy to config.local.yaml and fill in your values.
 # config.local.yaml is gitignored. This file is checked in as a template.
 
+# Emergency kill switches (hot-reloaded, no restart needed)
+# reminders_enabled: false  # Stop all cron/scheduled reminders from firing
+# tasks_enabled: false       # Stop ALL task.requested events from being processed
+
 owner:
   name: "Your Name"
   phone: "+1XXXXXXXXXX"

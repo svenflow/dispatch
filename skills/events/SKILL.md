@@ -88,6 +88,17 @@ The events skill can run as a nightly task to:
 3. Fire alerts for events crossing score thresholds
 4. Remove past events from tracking
 
+## User Preferences
+
+Before presenting event results, check the user's structured facts for saved preferences:
+
+```bash
+# Check for saved artist/genre preferences
+cat ~/dispatch/state/facts.db  # or use the facts CLI if available
+```
+
+Look for facts with type `preference` related to music/events. If the user has saved favorite artists or genres, prioritize those in results and proactively flag when those artists announce shows. Don't surface irrelevant events when the user has clear stated preferences.
+
 ## Architecture
 
 - CLI: `~/.claude/skills/events/scripts/events` (Python, uv shebang)

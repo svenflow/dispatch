@@ -23,7 +23,14 @@ def payload_text_sql(payload_ref: str = "NEW.payload", type_ref: str = "NEW.type
             COALESCE(json_extract({payload_ref}, '$.session_name'), '')
         WHEN {type_ref} LIKE 'health.%' THEN
             COALESCE(json_extract({payload_ref}, '$.status'), '') || ' ' ||
-            COALESCE(json_extract({payload_ref}, '$.message'), '')
+            COALESCE(json_extract({payload_ref}, '$.message'), '') || ' ' ||
+            COALESCE(json_extract({payload_ref}, '$.check_run_id'), '') || ' ' ||
+            COALESCE(json_extract({payload_ref}, '$.verdict'), '') || ' ' ||
+            COALESCE(json_extract({payload_ref}, '$.check_type'), '') || ' ' ||
+            COALESCE(json_extract({payload_ref}, '$.session_name'), '') || ' ' ||
+            COALESCE(json_extract({payload_ref}, '$.action_taken'), '') || ' ' ||
+            COALESCE(json_extract({payload_ref}, '$.transition'), '') || ' ' ||
+            COALESCE(json_extract({payload_ref}, '$.quota_type'), '')
         ELSE substr({payload_ref}, 1, 4000)
     END"""
 

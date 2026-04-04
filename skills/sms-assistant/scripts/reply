@@ -30,6 +30,7 @@ SEND_SIGNAL_GROUP = Path.home() / ".claude/skills/signal/scripts/send-signal-gro
 SEND_DISCORD = Path.home() / ".claude/skills/discord/scripts/send-discord"
 REPLY_APP = Path.home() / ".claude/skills/dispatch-app/scripts/reply-app"
 REPLY_DISPATCH_API = Path.home() / ".claude/skills/dispatch-app/scripts/reply-dispatch-api"
+REPLY_VOICE = Path.home() / ".claude/skills/pocket-sven/scripts/reply-voice"
 
 GUID_PATTERN = re.compile(r'^(p:\d+/|s:\d+/|iMessage;)')
 # iMessage backends that support tapback reactions
@@ -37,14 +38,14 @@ TAPBACK_BACKENDS = {"imessage", "test"}
 
 def is_group_chat_id(chat_id: str) -> bool:
     bare = chat_id
-    for prefix in ["signal:", "test:", "discord:", "dispatch-api:", "dispatch-app:", "sven-app:"]:
+    for prefix in ["signal:", "test:", "discord:", "dispatch-api:", "dispatch-app:", "sven-app:", "pocket-sven:"]:
         if chat_id.startswith(prefix):
             bare = chat_id[len(prefix):]
             break
     return not bare.startswith("+")
 
 def strip_registry_prefix(chat_id: str) -> str:
-    for prefix in ["signal:", "test:", "discord:", "dispatch-api:", "dispatch-app:", "sven-app:"]:
+    for prefix in ["signal:", "test:", "discord:", "dispatch-api:", "dispatch-app:", "sven-app:", "pocket-sven:"]:
         if chat_id.startswith(prefix):
             return chat_id[len(prefix):]
     return chat_id
@@ -164,7 +165,7 @@ def main():
     if args.react:
         # For default iMessage backend, folder path doesn't have "imessage" prefix
         # Default backend (not signal/discord/dispatch-app) = iMessage
-        effective_backend = backend if backend in ("signal", "discord", "dispatch-app", "sven-app", "dispatch-api") else "imessage"
+        effective_backend = backend if backend in ("signal", "discord", "dispatch-app", "sven-app", "dispatch-api", "pocket-sven") else "imessage"
         produce_tapback(bare_chat_id, args.guid, args.react, effective_backend)
         sys.exit(0)
 
@@ -195,6 +196,10 @@ def main():
             cmd.append(args.message)
     elif backend == "dispatch-api":
         cmd = [str(REPLY_DISPATCH_API), bare_chat_id]
+        if args.message:
+            cmd.append(args.message)
+    elif backend == "pocket-sven":
+        cmd = [str(REPLY_VOICE), bare_chat_id]
         if args.message:
             cmd.append(args.message)
     else:

@@ -1181,6 +1181,20 @@ class ReminderPoller:
         """Check for due reminders and fire them. Called every poll cycle."""
         from datetime import timezone
 
+        # Global kill switch — check config.local.yaml reminders_enabled flag.
+        # When false, all recurring reminders are skipped (one-shot preserved).
+        # Uses reload() so changes take effect without daemon restart.
+        from . import config as _cfg
+        _cfg.reload()
+        if not _cfg.get("reminders_enabled", True):
+            if not getattr(self, '_reminders_disabled_logged', False):
+                log.info("REMINDERS_DISABLED | reminders_enabled=false in config — skipping all reminders")
+                self._reminders_disabled_logged = True
+            return
+        if getattr(self, '_reminders_disabled_logged', False):
+            log.info("REMINDERS_ENABLED | reminders_enabled=true in config — reminders re-enabled")
+            self._reminders_disabled_logged = False
+
         # Skip reminders when quota is degraded (>=90%) to conserve tokens.
         # Cron reminders will catch up on next fire; one-shot reminders are preserved.
         qm = getattr(self.backend, 'quota_manager', None)
@@ -1956,6 +1970,7 @@ class Manager:
         self._bus.create_topic("messages.dlq", retention_ms=30 * 24 * 3600 * 1000)  # 30 days
         self._bus.create_topic("facts", retention_ms=30 * 24 * 3600 * 1000)  # 30 days
         self._bus.create_topic("imessage.ui", retention_ms=24 * 3600 * 1000)  # 1 day — tapback reactions, typing indicators
+        self._bus.create_topic("email", retention_ms=168 * 3600 * 1000)  # 7 days — gmail email events
         self._producer = self._bus.producer()
         self._dlq_retry_counts: dict[str, int] = {}  # offset_key -> retry_count
 
@@ -2949,6 +2964,14 @@ class Manager:
 
         if not instructions:
             log.error(f"task.requested {task_id} missing instructions, skipping")
+            return
+
+        # Global kill switch — check tasks_enabled in config.local.yaml.
+        # Hot-reloaded on every task so changes take effect without a restart.
+        from . import config as _cfg
+        _cfg.reload()
+        if not _cfg.get("tasks_enabled", True):
+            log.info(f"TASKS_DISABLED | tasks_enabled=false in config — skipping task {task_id}")
             return
 
         # Dedup: skip if already running (covers both agent and script tasks)

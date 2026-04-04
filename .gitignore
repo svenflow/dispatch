@@ -56,3 +56,5 @@ skills/chrome-control/closed_tabs.log
 
 # ── PII-heavy skills ─────────────────────────────────────────
 skills/vacation-house/
+# Sensitive financial data
+skills/personal-finances/

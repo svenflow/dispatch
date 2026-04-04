@@ -1744,7 +1744,7 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
                     # safe because ctx is assigned once and never reassigned
                     try:
                         from assistant.health import check_stuck_haiku
-                        is_stuck = await check_stuck_haiku(
+                        is_stuck, reasoning = await check_stuck_haiku(
                             session.cwd, session.session_id,
                             session_name, stuck_minutes,
                         )
@@ -1768,7 +1768,8 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
                                 "haiku_verdict": "stuck",
                             }, source="daemon")
                             produce_event(self._producer, "system", "health.haiku_verdict",
-                                haiku_verdict_payload(ctx, "stuck", session_name, cid, "STUCK", "restart"),
+                                haiku_verdict_payload(ctx, "stuck", session_name, cid, "STUCK", "restart",
+                                                     reasoning=reasoning),
                                 source="health")
                             await self.restart_session(cid)
                         else:
@@ -1782,7 +1783,8 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
                                 "haiku_verdict": "working",
                             }, source="daemon")
                             produce_event(self._producer, "system", "health.haiku_verdict",
-                                haiku_verdict_payload(ctx, "stuck", session_name, cid, "WORKING", "none"),
+                                haiku_verdict_payload(ctx, "stuck", session_name, cid, "WORKING", "none",
+                                                     reasoning=reasoning),
                                 source="health")
                             # Clear recently_healed so future health checks can re-examine
                             self._recently_healed.pop(cid, None)
@@ -2072,7 +2074,7 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
 
             session_name = get_session_name(session.chat_id, session.source)
             try:
-                diagnosis = await check_deep_haiku(entries, session_name)
+                diagnosis, reasoning = await check_deep_haiku(entries, session_name)
                 # Haiku call succeeded — record success for circuit breaker
                 cb_state_before = self.haiku_circuit_breaker.state
                 self.haiku_circuit_breaker.record_success()
@@ -2099,7 +2101,8 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
                     f"DEEP_HEAL | {session_name} | {diagnosis} | Restarting"
                 )
                 produce_event(self._producer, "system", "health.haiku_verdict",
-                    haiku_verdict_payload(ctx, "deep", session_name, chat_id, "FATAL", "restart"),
+                    haiku_verdict_payload(ctx, "deep", session_name, chat_id, "FATAL", "restart",
+                                         reasoning=reasoning),
                     source="health")
 
                 self._recently_healed[chat_id] = now
@@ -2118,7 +2121,8 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
             else:
                 # Haiku says healthy — emit verdict for tracking
                 produce_event(self._producer, "system", "health.haiku_verdict",
-                    haiku_verdict_payload(ctx, "deep", session_name, chat_id, "HEALTHY", "none"),
+                    haiku_verdict_payload(ctx, "deep", session_name, chat_id, "HEALTHY", "none",
+                                         reasoning=reasoning),
                     source="health")
 
         lifecycle_log.info(

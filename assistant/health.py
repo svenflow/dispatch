@@ -230,15 +230,17 @@ FATAL: <one-line reason>
 HEALTHY"""
 
 
-async def check_deep_haiku(entries: list[dict[str, Any]], session_name: str) -> Optional[str]:
+async def check_deep_haiku(entries: list[dict[str, Any]], session_name: str) -> tuple[Optional[str], str]:
     """Send recent assistant messages to Haiku for fatal error classification.
 
     Uses claude_agent_sdk.query() with model=haiku for a one-shot classification.
-    Returns the diagnosis string if fatal, None if healthy.
+    Returns (diagnosis, reasoning) tuple:
+      - diagnosis: the diagnosis string if fatal, None if healthy
+      - reasoning: the raw Haiku response text (always returned for logging/display)
     """
     text = extract_assistant_text(entries)
     if not text or len(text.strip()) < 20:
-        return None
+        return None, ""
 
     try:
         from claude_agent_sdk import (
@@ -268,8 +270,8 @@ async def check_deep_haiku(entries: list[dict[str, Any]], session_name: str) -> 
         log.info(f"DEEP_HEAL | {session_name} | Haiku response: {result}")
 
         if result.startswith("FATAL:"):
-            return result[6:].strip()
-        return None
+            return result[6:].strip(), result
+        return None, result
 
     except Exception as e:
         log.warning(f"DEEP_HEAL | {session_name} | Haiku call failed: {e}")
@@ -308,19 +310,21 @@ WORKING: <what it appears to be doing>"""
 
 
 async def check_stuck_haiku(session_cwd: str, session_id: str | None,
-                            session_name: str, stuck_minutes: float) -> bool:
+                            session_name: str, stuck_minutes: float) -> tuple[bool, str]:
     """Investigate if a session is genuinely stuck using Haiku.
 
     Reads recent transcript JSONL entries and asks Haiku to classify
     whether the session is stuck or just working on something long.
 
-    Returns True if stuck (should restart), False if working (leave alone).
+    Returns (is_stuck, reasoning) tuple:
+      - is_stuck: True if stuck (should restart), False if working (leave alone)
+      - reasoning: the raw Haiku response text
     """
     try:
         transcript_path = _find_transcript(session_cwd, session_id)
         if not transcript_path or not transcript_path.exists():
             log.warning(f"STUCK_CHECK | {session_name} | No transcript found, assuming stuck")
-            return True
+            return True, "No transcript found, assuming stuck"
 
         # Read last 64KB of transcript for recent activity
         entries_text = ""
@@ -337,7 +341,7 @@ async def check_stuck_haiku(session_cwd: str, session_id: str | None,
 
         if not entries_text or len(entries_text.strip()) < 20:
             log.warning(f"STUCK_CHECK | {session_name} | Empty transcript, assuming stuck")
-            return True
+            return True, "Empty transcript, assuming stuck"
 
         from claude_agent_sdk import (
             query as sdk_query,
@@ -368,8 +372,8 @@ async def check_stuck_haiku(session_cwd: str, session_id: str | None,
         log.info(f"STUCK_CHECK | {session_name} | Haiku verdict: {result}")
 
         if result.startswith("STUCK:"):
-            return True
-        return False
+            return True, result
+        return False, result
 
     except Exception as e:
         log.warning(f"STUCK_CHECK | {session_name} | Haiku investigation failed: {e}")

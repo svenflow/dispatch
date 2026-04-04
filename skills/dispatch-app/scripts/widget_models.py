@@ -137,11 +137,96 @@ class AskQuestionDescriptor(WidgetDescriptor):
 
 
 # ---------------------------------------------------------------------------
+# progress_tracker widget type
+# ---------------------------------------------------------------------------
+
+
+class ProgressStep(BaseModel):
+    label: str
+    status: Literal["pending", "in_progress", "complete", "error"] = "pending"
+    detail: str | None = None
+
+
+class ProgressTrackerWidget(BaseModel):
+    v: Literal[1] = 1
+    type: Literal["progress_tracker"] = "progress_tracker"
+    title: str | None = None
+    steps: list[ProgressStep] = Field(min_length=1, max_length=10)
+
+
+class ProgressTrackerDescriptor(WidgetDescriptor):
+    widget_model = ProgressTrackerWidget
+    response_model = BaseModel  # No response — display-only widget
+
+    def cross_validate(self, widget: BaseModel, response: BaseModel) -> str | None:
+        return None  # Display-only, no response validation
+
+    def format_content(self, widget_data: dict) -> str:
+        parts = []
+        if widget_data.get("title"):
+            parts.append(widget_data["title"])
+        status_icons = {"pending": "⬜", "in_progress": "⏳", "complete": "✅", "error": "❌"}
+        for step in widget_data["steps"]:
+            icon = status_icons.get(step.get("status", "pending"), "⬜")
+            line = f"{icon} {step['label']}"
+            if step.get("detail"):
+                line += f" — {step['detail']}"
+            parts.append(line)
+        return "\n".join(parts)
+
+    def format_response(self, widget_data: dict, response: dict, message_id: str) -> str:
+        # Display-only — should never be called, but handle gracefully
+        return f"[Widget {message_id}] Progress tracker (display-only)"
+
+
+# ---------------------------------------------------------------------------
+# map_pin widget type
+# ---------------------------------------------------------------------------
+
+
+class MapPin(BaseModel):
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+    label: str | None = None
+
+
+class MapPinWidget(BaseModel):
+    v: Literal[1] = 1
+    type: Literal["map_pin"] = "map_pin"
+    pins: list[MapPin] = Field(min_length=1, max_length=10)
+    zoom: float = Field(default=14, ge=1, le=20)
+    title: str | None = None
+
+
+class MapPinDescriptor(WidgetDescriptor):
+    widget_model = MapPinWidget
+    response_model = BaseModel  # No response — display-only widget
+
+    def cross_validate(self, widget: BaseModel, response: BaseModel) -> str | None:
+        return None  # Display-only, no response validation
+
+    def format_content(self, widget_data: dict) -> str:
+        parts = []
+        if widget_data.get("title"):
+            parts.append(widget_data["title"])
+        for pin in widget_data["pins"]:
+            line = f"📍 {pin.get('label', 'Location')}: {pin['latitude']}, {pin['longitude']}"
+            parts.append(line)
+        return "\n".join(parts)
+
+    def format_response(self, widget_data: dict, response: dict, message_id: str) -> str:
+        # Display-only — should never be called, but handle gracefully
+        return f"[Widget {message_id}] Map pin (display-only)"
+
+
+# ---------------------------------------------------------------------------
 # Registry - single registration point for all widget types
 # ---------------------------------------------------------------------------
 
 WIDGET_REGISTRY: dict[str, WidgetDescriptor] = {
     "ask_question": AskQuestionDescriptor(),
+    "progress_tracker": ProgressTrackerDescriptor(),
+    "map_pin": MapPinDescriptor(),
 }
 
 

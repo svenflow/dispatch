@@ -40,8 +40,42 @@ export interface AskQuestionWidgetData {
   questions: WidgetQuestion[];
 }
 
+/** A step in a progress_tracker widget */
+export interface ProgressStep {
+  label: string;
+  status?: "pending" | "in_progress" | "complete" | "error"; // default "pending"
+  detail?: string | null;
+}
+
+/** progress_tracker widget payload (display-only) */
+export interface ProgressTrackerWidgetData {
+  v: number;
+  type: "progress_tracker";
+  title?: string | null;
+  steps: ProgressStep[];
+}
+
+/** A pin on a map_pin widget */
+export interface MapPinItem {
+  latitude: number;
+  longitude: number;
+  label?: string | null;
+}
+
+/** map_pin widget payload (display-only) */
+export interface MapPinWidgetData {
+  v: number;
+  type: "map_pin";
+  pins: MapPinItem[];
+  zoom?: number; // default 14
+  title?: string | null;
+}
+
 /** Union of all widget data types (extensible via registry pattern) */
-export type WidgetData = AskQuestionWidgetData;
+export type WidgetData =
+  | AskQuestionWidgetData
+  | ProgressTrackerWidgetData
+  | MapPinWidgetData;
 
 /** A single question's answer in a form response */
 export interface QuestionAnswer {
@@ -238,6 +272,9 @@ export interface DashboardHealth {
 
   // Session health
   session_health: SessionHealthSummary;
+
+  // Quota velocity (5h utilization delta over ~1 hour)
+  velocity: { delta: number; period_minutes: number } | null;
 }
 
 /** A session from GET /api/dashboard/sessions */
@@ -361,12 +398,46 @@ export interface DashboardCcuResponse {
     seven_day?: QuotaBucket | null;
     seven_day_sonnet?: QuotaBucket | null;
     seven_day_opus?: QuotaBucket | null;
+    extra_usage?: {
+      is_enabled: boolean;
+      monthly_limit: number | null;
+      used_credits: number | null;
+      utilization: number | null;
+    } | null;
   } | null;
   _loading: boolean;
   _updated_at: string | null;
   _error: string | null;
   _quota_error: string | null;
   _quota_updated_at: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Health Events dashboard types
+// ---------------------------------------------------------------------------
+
+/** A health diagnostic event from the bus */
+export interface HealthEvent {
+  type: string;
+  timestamp: number;
+  payload: Record<string, unknown>;
+  age_seconds: number;
+}
+
+/** Summary counts for health events */
+export interface HealthEventSummary {
+  total: number;
+  verdicts: number;
+  fatal_count: number;
+  stuck_count: number;
+  circuit_breaker_events: number;
+  quota_alerts: number;
+}
+
+/** Response from GET /api/dashboard/health-events */
+export interface HealthEventsResponse {
+  events: HealthEvent[];
+  summary: HealthEventSummary;
 }
 
 /** A single quota utilization snapshot from bus events */
@@ -399,4 +470,59 @@ export interface QuotaHistoryResponse {
   };
   current_quota: DashboardCcuResponse["quota"];
   _quota_updated_at: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Facts / Knowledge Base types
+// ---------------------------------------------------------------------------
+
+/** A single extracted fact from GET /api/dashboard/facts */
+export interface Fact {
+  id: number;
+  contact: string;
+  fact_type: string;
+  summary: string;
+  details: string | null;
+  confidence: number;
+  starts_at: string | null;
+  ends_at: string | null;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+  source: string;
+}
+
+/** Response from GET /api/dashboard/facts */
+export interface FactsResponse {
+  facts: Fact[];
+  total: number;
+}
+
+// ---------------------------------------------------------------------------
+// Cost Analytics / Usage types
+// ---------------------------------------------------------------------------
+
+/** Per-session usage data from GET /api/dashboard/usage */
+export interface UsageSession {
+  session_id: string;
+  contact_name: string | null;
+  total_cost: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  total_cache_read_tokens: number;
+  total_cache_write_tokens: number;
+  model_breakdown: Record<string, { cost: number; input_tokens: number; output_tokens: number }>;
+  conversation_count: number;
+}
+
+/** Response from GET /api/dashboard/usage */
+export interface UsageResponse {
+  sessions: UsageSession[];
+  total_cost: number;
+  total_tokens: number;
+  session_count: number;
+  since: string;
+  _loading: boolean;
+  _updated_at: string | null;
+  _error: string | null;
 }

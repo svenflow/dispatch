@@ -1,0 +1,63 @@
+#!/bin/bash
+# Get current location of a person sharing via Find My
+# Usage: findmy-location [person_name | --list]
+#
+# --list        List all people currently sharing location with you
+# person_name   Get location for a specific person
+#
+# Uses macOS accessibility API (axctl). Works for any person in Find My People tab.
+
+AXCTL="$HOME/.claude/skills/axctl/scripts/axctl"
+SHARING_SUFFIX="This person shares location with you"
+
+# Activate Find My
+osascript -e 'tell application "System Events" to set frontmost of process "FindMy" to true' 2>/dev/null
+sleep 0.5
+
+# Get all AX text elements
+AX_OUTPUT=$("$AXCTL" search "Find My" --role AXStaticText 2>/dev/null)
+
+# Helper: extract just the name from a sidebar entry like:
+#   [N] AXStaticText desc='Name, This person shares location with you...'
+extract_name() {
+    echo "$1" | grep "$SHARING_SUFFIX" | while IFS= read -r line; do
+        name=$(echo "$line" | sed "s/\[.*\] AXStaticText desc='//")
+        name="${name%%,*}"
+        echo "$name"
+    done
+}
+
+if [[ "${1}" == "--list" || -z "${1}" ]]; then
+    extract_name "$AX_OUTPUT"
+    exit 0
+fi
+
+PERSON="${1}"
+
+# Verify this person is sharing
+if ! extract_name "$AX_OUTPUT" | grep -qx "$PERSON"; then
+    echo "Error: '$PERSON' is not sharing location with you (or Find My hasn't loaded yet)"
+    echo "Currently sharing:"
+    extract_name "$AX_OUTPUT" | sed 's/^/  - /'
+    exit 1
+fi
+
+# Build the full sidebar description to click
+SIDEBAR_LINE=$(echo "$AX_OUTPUT" | grep "^.*'${PERSON},")
+SIDEBAR_DESC=$(echo "$SIDEBAR_LINE" | sed "s/\[.*\] AXStaticText desc='//;s/'$//")
+
+"$AXCTL" click "Find My" --desc "$SIDEBAR_DESC" 2>/dev/null
+sleep 1
+
+# Re-read — location line contains "•"
+LOCATION=$("$AXCTL" search "Find My" --role AXStaticText 2>/dev/null \
+  | grep "•" \
+  | head -1 \
+  | sed "s/\[.*\] AXStaticText desc='//;s/'$//")
+
+if [ -n "$LOCATION" ]; then
+    echo "$PERSON: $LOCATION"
+else
+    echo "Could not read location for '$PERSON' — Find My may still be loading"
+    exit 1
+fi

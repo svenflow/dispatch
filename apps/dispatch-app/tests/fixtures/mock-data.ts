@@ -75,7 +75,7 @@ export const MOCK_NEW_CHAT: Conversation = {
 // Chat Messages (for Chat Alpha)
 // ---------------------------------------------------------------------------
 
-const LONG_MESSAGE = "A".repeat(900);
+const LONG_MESSAGE = "A".repeat(1600);
 
 export const MOCK_MESSAGES: ChatMessage[] = [
   {

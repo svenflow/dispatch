@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Alert, Animated, Platform, Pressable, Share, StyleSheet, Text, type TextLayoutEventData, type NativeSyntheticEvent, View } from "react-native";
+import { LinearGradient } from "expo-linear-gradient";
 import { Image } from "expo-image";
 import { useRouter } from "expo-router";
 import * as Clipboard from "expo-clipboard";
@@ -13,8 +14,10 @@ import { relativeTime } from "../utils/time";
 import { PulsingDots } from "./PulsingDots";
 import { SimpleMarkdown } from "./SimpleMarkdown";
 import { AskQuestionWidget } from "./AskQuestionWidget";
+import { ProgressTrackerWidget } from "./ProgressTrackerWidget";
+import { MapPinWidget } from "./MapPinWidget";
 import { submitWidgetResponse } from "../api/chats";
-import type { AskQuestionWidgetData, FormResponse } from "../api/types";
+import type { AskQuestionWidgetData, FormResponse, ProgressTrackerWidgetData, MapPinWidgetData } from "../api/types";
 
 const URL_REGEX = /https?:\/\/[^\s<>\"'\])},]+/gi;
 
@@ -171,6 +174,7 @@ export function MessageBubble({ message, chatId, audioState, onRetry, onLongPres
   // -- Shrink-wrap: measure text line widths to compute tightest bubble width --
   // Only shrink-wraps single-line text-only messages. Multi-line → 80% width.
   const hasMedia = !!(imageUrl || videoUrl || localImageUri || audioUrl);
+  const hasWidget = !!message.widgetData;
   const [measuredBubbleWidth, setMeasuredBubbleWidth] = useState<number | undefined>(undefined);
   const [isMultiLine, setIsMultiLine] = useState(false);
   const maxLineWidthRef = useRef(0);
@@ -255,7 +259,7 @@ export function MessageBubble({ message, chatId, audioState, onRetry, onLongPres
   const isLong = (content || "").length > MAX_COLLAPSED_LENGTH;
   const displayText =
     isLong && !expanded
-      ? (content || "").slice(0, COLLAPSED_HEAD_CHARS) + "\n\n⋯\n\n" + (content || "").slice(-COLLAPSED_TAIL_CHARS)
+      ? (content || "").slice(0, COLLAPSED_HEAD_CHARS)
       : content || "";
 
   const isCurrentMessage = audioState?.currentMessageId === message.id;
@@ -365,9 +369,11 @@ export function MessageBubble({ message, chatId, audioState, onRetry, onLongPres
         isUser && styles.bubbleRowUser,
         // Audio messages: force full width so waveform is consistent across messages
         !!audioUrl && styles.bubbleRowFullWidth,
+        // Widget messages: always full width
+        hasWidget && styles.bubbleRowMultiLine,
         // Multi-line text: 80% width. Single-line: shrink-wrap to measured width.
-        !hasMedia && isMultiLine && styles.bubbleRowMultiLine,
-        !hasMedia && !isMultiLine && measuredBubbleWidth !== undefined && { width: measuredBubbleWidth, maxWidth: isUser ? "75%" : "90%" },
+        !hasMedia && !hasWidget && isMultiLine && styles.bubbleRowMultiLine,
+        !hasMedia && !hasWidget && !isMultiLine && measuredBubbleWidth !== undefined && { width: measuredBubbleWidth, maxWidth: isUser ? "75%" : "90%" },
       ]}>
         {sendFailed && (
           <Pressable
@@ -387,7 +393,8 @@ export function MessageBubble({ message, chatId, audioState, onRetry, onLongPres
           style={[
             styles.bubble,
             isUser ? styles.bubbleUser : styles.bubbleAssistant,
-            // Multi-line text or audio: expand bubble to fill row width
+            // Multi-line text, audio, or widgets: expand bubble to fill row width
+            hasWidget && styles.bubbleFullWidth,
             (!hasMedia && isMultiLine) && styles.bubbleFullWidth,
             !!audioUrl && styles.bubbleFullWidth,
             isFailed && styles.bubbleGenerationFailed,
@@ -443,17 +450,35 @@ export function MessageBubble({ message, chatId, audioState, onRetry, onLongPres
                 linkColor="#d4e8ff"
                 onTextLayout={handleUserTextLayout}
               />
-            ) : (
+            ) : message.widgetData ? null : (
               <SimpleMarkdown onMaxLineWidth={handleMaxLineWidth}>{displayText}</SimpleMarkdown>
             )
           ) : null}
-          {isLong && (
+          {isLong && !expanded && (
+            <View style={styles.fadeOverlayContainer}>
+              <LinearGradient
+                colors={[
+                  isUser ? "rgba(37, 99, 235, 0)" : "rgba(39, 39, 42, 0)",
+                  isUser ? "rgba(37, 99, 235, 1)" : "rgba(39, 39, 42, 1)",
+                ]}
+                style={styles.fadeGradient}
+              />
+              <Pressable
+                onPress={() => setExpanded(true)}
+                style={styles.showMoreButton}
+                hitSlop={8}
+              >
+                <Text style={styles.showMoreText}>Show more</Text>
+              </Pressable>
+            </View>
+          )}
+          {isLong && expanded && (
             <Pressable
-              onPress={() => setExpanded((v) => !v)}
+              onPress={() => setExpanded(false)}
               hitSlop={8}
             >
               <Text style={styles.expandToggle}>
-                {expanded ? "Show less" : "Show more"}
+                Show less
               </Text>
             </Pressable>
           )}
@@ -467,6 +492,16 @@ export function MessageBubble({ message, chatId, audioState, onRetry, onLongPres
               onRespond={async (resp) => {
                 await submitWidgetResponse(chatId, message.id, resp);
               }}
+            />
+          )}
+          {message.widgetData?.type === "progress_tracker" && (
+            <ProgressTrackerWidget
+              data={message.widgetData as ProgressTrackerWidgetData}
+            />
+          )}
+          {message.widgetData?.type === "map_pin" && (
+            <MapPinWidget
+              data={message.widgetData as MapPinWidgetData}
             />
           )}
           {/* Inline audio player for uploaded audio (user or assistant) */}
@@ -840,6 +875,24 @@ const styles = StyleSheet.create({
   },
   textAssistant: {
     color: "#fafafa",
+  },
+  fadeOverlayContainer: {
+    position: "relative",
+    marginTop: -60,
+    paddingTop: 0,
+  },
+  fadeGradient: {
+    height: 60,
+    width: "100%",
+  },
+  showMoreButton: {
+    alignItems: "center",
+    paddingVertical: 8,
+  },
+  showMoreText: {
+    color: "#a1a1aa",
+    fontSize: 13,
+    fontWeight: "600",
   },
   expandToggle: {
     color: "#a1a1aa",

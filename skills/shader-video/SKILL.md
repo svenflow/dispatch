@@ -264,6 +264,53 @@ Boid flocking simulation inspired by r/generative.
 - `birdSize` - Size of bird chevrons (default: 0.015)
 ```
 
+
+## Concurrency Protection
+
+**CRITICAL: render-shader has no built-in lock protection.** When SDK sessions restart mid-render, multiple ffmpeg processes can write to the same `.mov` file simultaneously, causing "moov atom not found" corruption.
+
+### Lock File Pattern
+
+Always use a lock file when starting a render:
+
+```bash
+LOCKFILE="/tmp/render-shader-$(basename $OUTPUT).lock"
+
+# Acquire lock (fail fast if already running)
+if [ -f "$LOCKFILE" ]; then
+  echo "ERROR: Another render is already running for $OUTPUT (lock: $LOCKFILE)"
+  echo "Kill it first: kill $(cat $LOCKFILE) && rm $LOCKFILE"
+  exit 1
+fi
+
+echo $$ > "$LOCKFILE"
+trap "rm -f $LOCKFILE" EXIT
+
+~/.claude/skills/shader-video/scripts/render-shader shader.frag output.mov
+```
+
+### Kill Existing Renders (--replace pattern)
+
+To kill any existing render on the same output file before starting a new one:
+
+```bash
+LOCKFILE="/tmp/render-shader-$(basename $OUTPUT).lock"
+if [ -f "$LOCKFILE" ]; then
+  OLD_PID=$(cat "$LOCKFILE")
+  echo "Killing existing render (PID $OLD_PID)..."
+  kill "$OLD_PID" 2>/dev/null
+  rm -f "$LOCKFILE"
+  sleep 1  # let ffmpeg flush/clean up
+fi
+```
+
+### Diagnosing Corruption
+
+If you see "moov atom not found" when playing a .mov:
+1. Check for orphaned ffmpeg processes: `ps aux | grep ffmpeg`
+2. Kill them: `pkill -f "ffmpeg.*output.mov"`
+3. Delete the corrupt file and re-render
+
 ## Files
 
 - `scripts/render-shader` - Main rendering CLI (ModernGL backend)

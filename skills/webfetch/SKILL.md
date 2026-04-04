@@ -68,7 +68,28 @@ Do NOT use `chrome open` + `sleep` + `chrome text` + `chrome close` — just use
 
 # Raw HTML output
 ~/.claude/skills/webfetch/scripts/webfetch "https://example.com" --raw
+
+# JS-rendered pages (Redfin, Zillow, SPAs) — wait for content to load
+~/.claude/skills/webfetch/scripts/webfetch "https://redfin.com/..." --tier 2 --network-idle --wait 3000 --raw
+
+# Wait for a specific CSS selector to appear
+~/.claude/skills/webfetch/scripts/webfetch "https://zillow.com/..." --tier 2 --network-idle --wait-selector "[data-testid=\"price\"]"
 ```
+
+### JS-Rendered Page Options (Tier 2 only)
+
+These options only apply to tier 2 (StealthyFetcher/Camoufox) since tier 1 is HTTP-only:
+
+| Flag | What it does |
+|------|-------------|
+| `--network-idle` | Wait until no network connections for 500ms — essential for SPAs |
+| `--wait MS` | Extra millisecond delay after page loads (e.g. `--wait 3000` for 3s) |
+| `--wait-selector CSS` | Wait for a specific CSS selector to appear before returning |
+
+**For Redfin/Zillow listing pages**, always use: `--tier 2 --network-idle --wait 3000 --raw`
+- `--network-idle` waits for React to finish rendering
+- `--wait 3000` adds a buffer for late-loading photo carousels
+- `--raw` returns full HTML (markdown conversion strips `<img>` tags)
 
 ## The Two Tiers
 

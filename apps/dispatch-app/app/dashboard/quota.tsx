@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
-  Dimensions,
   Platform,
   Pressable,
   RefreshControl,
@@ -13,25 +12,16 @@ import {
 import { Stack } from "expo-router";
 import { getDashboardQuotaHistory } from "@/src/api/dashboard";
 import type { QuotaHistoryResponse, QuotaSnapshot, QuotaHeavySession } from "@/src/api/types";
+import { Dimensions } from "react-native";
+import { quotaBarColor, formatResetTime, formatTimestamp, computeQuotaPrediction, predictionIcon, predictionColor } from "@/src/utils/quotaHelpers";
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function quotaBarColor(util: number): string {
-  if (util >= 80) return "#ef4444";
-  if (util >= 50) return "#eab308";
-  return "#22c55e";
-}
-
-function formatResetTime(resetsAt: string): string {
-  const diffMs = new Date(resetsAt).getTime() - Date.now();
-  if (diffMs <= 0) return "now";
-  const hours = Math.floor(diffMs / 3_600_000);
-  const mins = Math.floor((diffMs % 3_600_000) / 60_000);
-  if (hours > 24) return `${Math.floor(hours / 24)}d ${hours % 24}h`;
-  if (hours > 0) return `${hours}h ${mins}m`;
-  return `${mins}m`;
+/** Force a re-render every `ms` so time-relative text stays fresh */
+function useTick(ms = 30_000) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick((t) => t + 1), ms);
+    return () => clearInterval(id);
+  }, [ms]);
 }
 
 function formatAge(isoStr: string): string {
@@ -45,134 +35,8 @@ function formatAge(isoStr: string): string {
   return `${hours}h ${mins % 60}m ago`;
 }
 
-function formatTimestamp(isoStr: string): string {
-  const d = new Date(isoStr);
-  return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-}
-
-// ---------------------------------------------------------------------------
-// SparklineChart component
-// ---------------------------------------------------------------------------
-
-function SparklineChart({
-  snapshots,
-  field,
-  label,
-  height = 120,
-}: {
-  snapshots: QuotaSnapshot[];
-  field: "five_hour" | "seven_day";
-  label: string;
-  height?: number;
-}) {
-  const [containerWidth, setContainerWidth] = useState(
-    Dimensions.get("window").width - 48,
-  );
-
-  if (snapshots.length < 2) {
-    return (
-      <View style={sparkStyles.container}>
-        <Text style={sparkStyles.label}>{label}</Text>
-        <View style={[sparkStyles.chartArea, { height }]}>
-          <Text style={sparkStyles.emptyText}>
-            Collecting data — check back in ~15 min
-          </Text>
-        </View>
-      </View>
-    );
-  }
-
-  const barWidth = Math.max(3, Math.floor(containerWidth / snapshots.length) - 1);
-  const gap = 1;
-
-  // X-axis labels: first, middle, last
-  const firstTs = formatTimestamp(snapshots[0].ts);
-  const midTs = formatTimestamp(snapshots[Math.floor(snapshots.length / 2)].ts);
-  const lastTs = formatTimestamp(snapshots[snapshots.length - 1].ts);
-
-  return (
-    <View style={sparkStyles.container}>
-      <Text style={sparkStyles.label}>{label}</Text>
-      <View
-        style={[sparkStyles.chartArea, { height }]}
-        onLayout={(e) => setContainerWidth(e.nativeEvent.layout.width)}
-      >
-        <View style={sparkStyles.barsRow}>
-          {snapshots.map((snap, i) => {
-            const val = snap[field] ?? 0;
-            const barHeight = Math.max(1, (val / 100) * (height - 20));
-            const color = val === 0 && snap[field] === null
-              ? "#3f3f46"  // NULL → gray
-              : quotaBarColor(val);
-            return (
-              <View
-                key={i}
-                style={{
-                  width: barWidth,
-                  height: barHeight,
-                  backgroundColor: color,
-                  borderRadius: 1,
-                  marginRight: gap,
-                  alignSelf: "flex-end",
-                }}
-              />
-            );
-          })}
-        </View>
-      </View>
-      <View style={sparkStyles.xAxis}>
-        <Text style={sparkStyles.xLabel}>{firstTs}</Text>
-        <Text style={sparkStyles.xLabel}>{midTs}</Text>
-        <Text style={sparkStyles.xLabel}>{lastTs}</Text>
-      </View>
-    </View>
-  );
-}
-
-const sparkStyles = StyleSheet.create({
-  container: {
-    marginBottom: 16,
-  },
-  label: {
-    color: "#a1a1aa",
-    fontSize: 12,
-    fontWeight: "600",
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
-    marginBottom: 8,
-    paddingHorizontal: 4,
-  },
-  chartArea: {
-    backgroundColor: "#18181b",
-    borderRadius: 8,
-    paddingHorizontal: 8,
-    paddingTop: 8,
-    paddingBottom: 4,
-    justifyContent: "flex-end",
-  },
-  barsRow: {
-    flexDirection: "row",
-    alignItems: "flex-end",
-    flex: 1,
-  },
-  emptyText: {
-    color: "#52525b",
-    fontSize: 13,
-    textAlign: "center",
-    alignSelf: "center",
-  },
-  xAxis: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    paddingHorizontal: 4,
-    marginTop: 4,
-  },
-  xLabel: {
-    color: "#52525b",
-    fontSize: 10,
-    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
-  },
-});
+// SparklineChart — imported from shared component
+import { SparklineChart } from "@/src/components/SparklineChart";
 
 // ---------------------------------------------------------------------------
 // Expanded quota bar (larger version for detail screen)
@@ -189,10 +53,19 @@ function ExpandedBar({
   resetsAt: string;
   subtitle?: string;
 }) {
+  const prediction = resetsAt ? computeQuotaPrediction(label, utilization, resetsAt) : null;
+  const showAlert = prediction != null && (prediction.status === "tight" || prediction.status === "danger");
   return (
     <View style={barStyles.barRow}>
       <View style={barStyles.labelRow}>
-        <Text style={barStyles.label}>{label}</Text>
+        <View style={barStyles.labelWithAlert}>
+          <Text style={barStyles.label}>{label}</Text>
+          {showAlert && (
+            <Text style={[barStyles.alertText, { color: predictionColor(prediction.status) }]}>
+              {predictionIcon(prediction.status)} {prediction.message}
+            </Text>
+          )}
+        </View>
         <Text style={barStyles.percentage}>
           {Math.round(utilization)}%
         </Text>
@@ -230,10 +103,19 @@ const barStyles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 6,
   },
+  labelWithAlert: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    flex: 1,
+  },
   label: {
     color: "#fafafa",
     fontSize: 15,
     fontWeight: "600",
+  },
+  alertText: {
+    fontSize: 12,
   },
   percentage: {
     color: "#fafafa",
@@ -251,10 +133,327 @@ const barStyles = StyleSheet.create({
     height: "100%",
     borderRadius: 6,
   },
+  barPct: {
+    color: "#a1a1aa",
+    fontSize: 14,
+    fontWeight: "600",
+    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+    width: 38,
+    textAlign: "right",
+  },
   resetText: {
     color: "#71717a",
     fontSize: 12,
     marginTop: 4,
+  },
+  predictionText: {
+    fontSize: 12,
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Inline mini sparkline (compact, placed under each quota bar)
+// ---------------------------------------------------------------------------
+
+const INLINE_SPARK_HEIGHT = 36;
+const SPARK_USABLE_HEIGHT = INLINE_SPARK_HEIGHT - 6;
+
+function MiniSparkline({
+  snapshots,
+  field,
+  rangeHours,
+}: {
+  snapshots: QuotaSnapshot[];
+  field: "five_hour" | "seven_day";
+  rangeHours?: number;
+}) {
+  const [containerWidth, setContainerWidth] = useState(
+    Dimensions.get("window").width - 64,
+  );
+
+  if (snapshots.length < 2) return null;
+
+  const barWidth = Math.max(2, Math.floor(containerWidth / snapshots.length) - 1);
+  const gap = 1;
+  const lastIdx = snapshots.length - 1;
+  const firstTs = formatTimestamp(snapshots[0].ts, rangeHours);
+  const lastTs = formatTimestamp(snapshots[lastIdx].ts, rangeHours);
+  const thresholdBottom = 0.8 * SPARK_USABLE_HEIGHT;
+
+  return (
+    <View style={miniStyles.wrapper}>
+      <View
+        style={miniStyles.container}
+        onLayout={(e) => setContainerWidth(e.nativeEvent.layout.width)}
+      >
+        <View style={[miniStyles.thresholdLine, { bottom: thresholdBottom + 3 }]}>
+          <Text style={miniStyles.thresholdLabel}>80%</Text>
+        </View>
+        <View style={miniStyles.barsRow}>
+          {snapshots.map((snap, i) => {
+            const val = snap[field] ?? 0;
+            const barHeight = Math.max(1, (val / 100) * SPARK_USABLE_HEIGHT);
+            const isLast = i === lastIdx;
+            const color = snap[field] === null ? "#3f3f46" : quotaBarColor(val);
+            return (
+              <View
+                key={i}
+                style={{
+                  width: barWidth,
+                  height: barHeight,
+                  backgroundColor: color,
+                  borderRadius: 1,
+                  marginRight: gap,
+                  alignSelf: "flex-end",
+                  opacity: isLast ? 1 : 0.65,
+                }}
+              />
+            );
+          })}
+        </View>
+      </View>
+      <View style={miniStyles.timeRow}>
+        <Text style={miniStyles.timeLabel}>{firstTs}</Text>
+        <Text style={miniStyles.timeLabel}>{lastTs}</Text>
+      </View>
+    </View>
+  );
+}
+
+const miniStyles = StyleSheet.create({
+  wrapper: {
+    marginHorizontal: 16,
+    marginTop: 8,
+    marginBottom: 4,
+  },
+  container: {
+    height: INLINE_SPARK_HEIGHT,
+    backgroundColor: "#1c1c1f",
+    borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    justifyContent: "flex-end",
+    overflow: "hidden",
+  },
+  barsRow: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    flex: 1,
+  },
+  thresholdLine: {
+    position: "absolute",
+    left: 6,
+    right: 6,
+    height: 1,
+    backgroundColor: "#71717a",
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  thresholdLabel: {
+    position: "absolute",
+    right: 0,
+    color: "#71717a",
+    fontSize: 7,
+    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+    top: -9,
+  },
+  timeRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginTop: 2,
+    paddingHorizontal: 2,
+  },
+  timeLabel: {
+    color: "#52525b",
+    fontSize: 9,
+    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Burn rate chart — computed from 5h quota deltas between snapshots
+// ---------------------------------------------------------------------------
+
+// Fixed absolute scale for burn rate (values above MAX_BURN are clipped)
+const MAX_BURN = 20; // %/hr
+
+function BurnRateChart({ snapshots }: { snapshots: QuotaSnapshot[] }) {
+  const [containerWidth, setContainerWidth] = useState(
+    Dimensions.get("window").width - 64,
+  );
+
+  if (snapshots.length < 3) return null;
+
+  // Compute deltas: positive = burning quota, negative = recovering
+  const deltas: Array<{ ts: string; delta: number }> = [];
+  for (let i = 1; i < snapshots.length; i++) {
+    const prev = snapshots[i - 1].five_hour;
+    const curr = snapshots[i].five_hour;
+    if (prev != null && curr != null) {
+      const timeDiffMin = (new Date(snapshots[i].ts).getTime() - new Date(snapshots[i - 1].ts).getTime()) / 60_000;
+      if (timeDiffMin > 0) {
+        const deltaPerHour = ((curr - prev) / timeDiffMin) * 60;
+        deltas.push({ ts: snapshots[i].ts, delta: deltaPerHour });
+      }
+    }
+  }
+
+  if (deltas.length < 2) return null;
+
+  const barWidth = Math.max(2, Math.floor(containerWidth / deltas.length) - 1);
+  const gap = 1;
+  const chartHeight = 80;
+  const halfHeight = chartHeight / 2;
+
+  const firstTs = formatTimestamp(deltas[0].ts);
+  const lastTs = formatTimestamp(deltas[deltas.length - 1].ts);
+
+  return (
+    <View style={burnStyles.wrapper}>
+      <Text style={burnStyles.label}>BURN RATE</Text>
+      <Text style={burnStyles.subtitle}>5-hour quota block consumption rate (%/hr)</Text>
+      <View style={burnStyles.chartRow}>
+        {/* Y-axis labels */}
+        <View style={burnStyles.yAxis}>
+          <Text style={burnStyles.yLabel}>+{MAX_BURN}</Text>
+          <Text style={burnStyles.yLabelZero}>0</Text>
+          <Text style={burnStyles.yLabel}>-{MAX_BURN}</Text>
+        </View>
+        <View
+          style={[burnStyles.container, { height: chartHeight, flex: 1 }]}
+          onLayout={(e) => setContainerWidth(e.nativeEvent.layout.width)}
+        >
+          {/* Zero line */}
+          <View style={[burnStyles.zeroLine, { top: halfHeight }]} />
+          <View style={burnStyles.barsRow}>
+            {deltas.map((d, i) => {
+              const isLast = i === deltas.length - 1;
+              // Fixed scale: clip to MAX_BURN
+              const clipped = Math.min(Math.abs(d.delta), MAX_BURN);
+              const barHeight = Math.max(1, (clipped / MAX_BURN) * (halfHeight - 2));
+              const isPositive = d.delta >= 0;
+              const color = isPositive
+                ? (Math.abs(d.delta) > 5 ? "#ef4444" : Math.abs(d.delta) > 2 ? "#eab308" : "#a1a1aa")
+                : "#22c55e";
+              return (
+                <View
+                  key={i}
+                  style={{
+                    width: barWidth,
+                    height: barHeight,
+                    backgroundColor: color,
+                    borderRadius: 1,
+                    marginRight: gap,
+                    opacity: isLast ? 1 : 0.65,
+                    position: "absolute",
+                    left: i * (barWidth + gap),
+                    ...(isPositive
+                      ? { bottom: halfHeight }
+                      : { top: halfHeight }),
+                  }}
+                />
+              );
+            })}
+          </View>
+        </View>
+      </View>
+      <View style={burnStyles.legendRow}>
+        <Text style={miniStyles.timeLabel}>{firstTs}</Text>
+        <View style={burnStyles.legendCenter}>
+          <View style={[burnStyles.legendDot, { backgroundColor: "#ef4444" }]} />
+          <Text style={burnStyles.legendText}>burning</Text>
+          <View style={[burnStyles.legendDot, { backgroundColor: "#22c55e" }]} />
+          <Text style={burnStyles.legendText}>recovering</Text>
+        </View>
+        <Text style={miniStyles.timeLabel}>{lastTs}</Text>
+      </View>
+    </View>
+  );
+}
+
+const burnStyles = StyleSheet.create({
+  wrapper: {
+    marginBottom: 16,
+  },
+  label: {
+    color: "#a1a1aa",
+    fontSize: 12,
+    fontWeight: "600",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    marginBottom: 8,
+    paddingHorizontal: 4,
+  },
+  subtitle: {
+    color: "#52525b",
+    fontSize: 10,
+    marginBottom: 8,
+    paddingHorizontal: 4,
+  },
+  chartRow: {
+    flexDirection: "row",
+    alignItems: "stretch",
+  },
+  yAxis: {
+    width: 28,
+    justifyContent: "space-between",
+    alignItems: "flex-end",
+    paddingRight: 4,
+    paddingVertical: 2,
+  },
+  yLabel: {
+    color: "#52525b",
+    fontSize: 8,
+    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+  },
+  yLabelZero: {
+    color: "#71717a",
+    fontSize: 8,
+    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+  },
+  container: {
+    backgroundColor: "#1c1c1f",
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    overflow: "hidden",
+    position: "relative",
+  },
+  barsRow: {
+    position: "absolute",
+    left: 8,
+    right: 8,
+    top: 0,
+    bottom: 0,
+  },
+  zeroLine: {
+    position: "absolute",
+    left: 8,
+    right: 8,
+    height: 1,
+    backgroundColor: "#52525b",
+  },
+  legendRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginTop: 4,
+    paddingHorizontal: 2,
+  },
+  legendCenter: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  legendDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  legendText: {
+    color: "#52525b",
+    fontSize: 9,
+    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+    marginRight: 6,
   },
 });
 
@@ -333,7 +532,7 @@ const pickerStyles = StyleSheet.create({
 // ---------------------------------------------------------------------------
 
 /** Group heavy sessions by window, show delta + top sessions */
-function HeavyHitters({ sessions }: { sessions: QuotaHeavySession[] }) {
+function HeavyHitters({ sessions, rangeHours }: { sessions: QuotaHeavySession[]; rangeHours?: number }) {
   if (sessions.length === 0) return null;
 
   // Group by window
@@ -361,8 +560,8 @@ function HeavyHitters({ sessions }: { sessions: QuotaHeavySession[] }) {
     <View style={hhStyles.container}>
       <Text style={hhStyles.sectionLabel}>HEAVY HITTERS</Text>
       {sortedWindows.map((w, wi) => {
-        const startTime = new Date(w.start).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-        const endTime = new Date(w.end).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+        const startTime = formatTimestamp(w.start, rangeHours);
+        const endTime = formatTimestamp(w.end, rangeHours);
         const hasDelta = w.fhDelta > 0 || w.sdDelta > 0;
         return (
           <View key={wi} style={hhStyles.window}>
@@ -475,12 +674,14 @@ const hhStyles = StyleSheet.create({
 // ---------------------------------------------------------------------------
 
 export default function QuotaDetailScreen() {
+  useTick(30_000); // keep reset countdowns live
   const [data, setData] = useState<QuotaHistoryResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hours, setHours] = useState(24);
   const mountedRef = useRef(true);
+  const lastFetchRef = useRef(Date.now());
 
   const load = useCallback(
     async (h: number, refresh = false) => {
@@ -517,39 +718,35 @@ export default function QuotaDetailScreen() {
       if (h === hours || isLoading) return;
       setHours(h);
       setIsLoading(true);
+      lastFetchRef.current = Date.now();
       load(h);
     },
     [hours, isLoading, load],
   );
 
   const handleRefresh = useCallback(() => {
+    lastFetchRef.current = Date.now();
     load(hours, true);
   }, [hours, load]);
 
   // Build quota bars from current_quota
   const quota = data?.current_quota;
-  const bars: Array<{ label: string; utilization: number; resetsAt: string }> = [];
+  const bars: Array<{ label: string; utilization: number; resetsAt: string; sparkField?: "five_hour" | "seven_day" }> = [];
   if (quota?.five_hour) {
-    bars.push({ label: "5-Hour", utilization: quota.five_hour.utilization, resetsAt: quota.five_hour.resets_at });
+    bars.push({ label: "5-Hour", utilization: quota.five_hour.utilization, resetsAt: quota.five_hour.resets_at, sparkField: "five_hour" });
   }
   if (quota?.seven_day) {
-    bars.push({ label: "7-Day", utilization: quota.seven_day.utilization, resetsAt: quota.seven_day.resets_at });
+    bars.push({ label: "7-Day", utilization: quota.seven_day.utilization, resetsAt: quota.seven_day.resets_at, sparkField: "seven_day" });
   }
-  if ((quota as Record<string, unknown>)?.seven_day_opus) {
-    const opus = (quota as Record<string, unknown>).seven_day_opus as { utilization: number; resets_at: string };
-    bars.push({ label: "7-Day Opus", utilization: opus.utilization, resetsAt: opus.resets_at });
+  if (quota?.seven_day_opus) {
+    bars.push({ label: "7-Day Opus", utilization: quota.seven_day_opus.utilization, resetsAt: quota.seven_day_opus.resets_at });
   }
   if (quota?.seven_day_sonnet) {
     bars.push({ label: "7-Day Sonnet", utilization: quota.seven_day_sonnet.utilization, resetsAt: quota.seven_day_sonnet.resets_at });
   }
 
   // Extra usage (overage spend)
-  const extraUsage = (quota as Record<string, unknown>)?.extra_usage as {
-    is_enabled: boolean;
-    monthly_limit: number | null;
-    used_credits: number | null;
-    utilization: number | null;
-  } | undefined;
+  const extraUsage = quota?.extra_usage;
 
   // Backoff / staleness status
   const backoff = data?.current_backoff;
@@ -560,6 +757,17 @@ export default function QuotaDetailScreen() {
   const isStale = lastSnapshotTs
     ? Date.now() - new Date(lastSnapshotTs).getTime() > 20 * 60 * 1000
     : false;
+
+  // Auto-refresh every 90s since last fetch (resets on manual interactions)
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (!isLoading && !isRefreshing && Date.now() - lastFetchRef.current >= 90_000) {
+        lastFetchRef.current = Date.now();
+        load(hours);
+      }
+    }, 15_000); // check every 15s but only fetch if 90s elapsed since last
+    return () => clearInterval(id);
+  }, [hours, isLoading, isRefreshing, load]);
 
   return (
     <>
@@ -577,103 +785,115 @@ export default function QuotaDetailScreen() {
             </Pressable>
           </View>
         ) : (
-          <ScrollView
-            contentContainerStyle={styles.scrollContent}
-            refreshControl={
-              <RefreshControl
-                refreshing={isRefreshing}
-                onRefresh={handleRefresh}
-                tintColor="#71717a"
+          <>
+            {/* Sticky time range picker */}
+            <View style={styles.stickyPicker}>
+              <TimeRangePicker
+                activeHours={hours}
+                onSelect={handleTimeRange}
+                disabled={isLoading}
               />
-            }
-          >
-            {error && (
-              <View style={styles.errorBanner}>
-                <Text style={styles.errorBannerText}>⚠️ {error}</Text>
-              </View>
-            )}
-
-            {/* Expanded quota bars */}
-            <View style={styles.card}>
-              <Text style={styles.sectionHeader}>CURRENT QUOTA</Text>
-              {bars.length > 0 ? (
-                bars.map((bar, i) => (
-                  <React.Fragment key={bar.label}>
-                    {i > 0 && <View style={styles.separator} />}
-                    <ExpandedBar
-                      label={bar.label}
-                      utilization={bar.utilization}
-                      resetsAt={bar.resetsAt}
-                    />
-                  </React.Fragment>
-                ))
-              ) : (
-                <Text style={styles.mutedText}>
-                  {isLoading ? "Loading quota…" : "No quota data"}
-                </Text>
-              )}
             </View>
 
-            {/* Extra usage card */}
-            {extraUsage?.is_enabled && extraUsage.utilization != null && (
-              <View style={styles.card}>
-                <Text style={styles.sectionHeader}>EXTRA USAGE</Text>
-                <ExpandedBar
-                  label="Extra Usage"
-                  utilization={extraUsage.utilization}
-                  resetsAt=""
-                  subtitle={`$${((extraUsage.used_credits ?? 0) / 100).toFixed(2)} of $${((extraUsage.monthly_limit ?? 0) / 100).toFixed(2)} · Resets monthly`}
+            <ScrollView
+              contentContainerStyle={styles.scrollContent}
+              refreshControl={
+                <RefreshControl
+                  refreshing={isRefreshing}
+                  onRefresh={handleRefresh}
+                  tintColor="#71717a"
                 />
-              </View>
-            )}
-
-            {/* Time range picker */}
-            <TimeRangePicker
-              activeHours={hours}
-              onSelect={handleTimeRange}
-              disabled={isLoading}
-            />
-
-            {/* Sparkline charts */}
-            <SparklineChart
-              snapshots={snapshots}
-              field="five_hour"
-              label="5-HOUR QUOTA OVER TIME"
-              height={120}
-            />
-            <SparklineChart
-              snapshots={snapshots}
-              field="seven_day"
-              label="ROLLING 7-DAY QUOTA OVER TIME"
-              height={120}
-            />
-
-            {/* Heavy hitters */}
-            <HeavyHitters sessions={data?.heavy_sessions ?? []} />
-
-            {/* Status footer */}
-            <View style={styles.statusSection}>
-              {failures > 0 ? (
-                <Text style={styles.statusWarning}>
-                  ⚠️ API unreachable — retrying in{" "}
-                  {Math.round((backoff?.backoff_seconds ?? 900) / 60)}m ({failures}{" "}
-                  {failures === 1 ? "failure" : "failures"})
-                </Text>
-              ) : quotaUpdated ? (
-                <Text style={styles.statusOk}>
-                  ✓ Quota healthy — fetched {formatAge(quotaUpdated)}
-                </Text>
-              ) : null}
-              {isStale && (
-                <Text style={styles.statusStale}>
-                  ⚠ Latest snapshot is over 20 min old — fetcher may be down
-                </Text>
+              }
+            >
+              {error && (
+                <View style={styles.errorBanner}>
+                  <Text style={styles.errorBannerText}>⚠️ {error}</Text>
+                </View>
               )}
-              <Text style={styles.snapshotCount}>
-                {snapshots.length} snapshots in range
-              </Text>
-            </View>
-          </ScrollView>
+
+              {/* Expanded quota bars */}
+              <View style={styles.card}>
+                <Text style={styles.sectionHeader}>CURRENT QUOTA</Text>
+                {bars.length > 0 ? (
+                  bars.map((bar, i) => (
+                    <React.Fragment key={bar.label}>
+                      {i > 0 && <View style={styles.separator} />}
+                      <ExpandedBar
+                        label={bar.label}
+                        utilization={bar.utilization}
+                        resetsAt={bar.resetsAt}
+                      />
+                      {bar.sparkField && snapshots.length >= 2 && (
+                        <MiniSparkline snapshots={snapshots} field={bar.sparkField} rangeHours={hours} />
+                      )}
+                    </React.Fragment>
+                  ))
+                ) : (
+                  <Text style={styles.mutedText}>
+                    {isLoading ? "Loading quota…" : "No quota data"}
+                  </Text>
+                )}
+              </View>
+
+              {/* Extra usage card */}
+              {extraUsage?.is_enabled && extraUsage.utilization != null && (
+                <View style={styles.card}>
+                  <Text style={styles.sectionHeader}>EXTRA USAGE</Text>
+                  <ExpandedBar
+                    label="Extra Usage"
+                    utilization={extraUsage.utilization}
+                    resetsAt=""
+                    subtitle={`$${((extraUsage.used_credits ?? 0) / 100).toFixed(2)} of $${((extraUsage.monthly_limit ?? 0) / 100).toFixed(2)} · Resets monthly`}
+                  />
+                </View>
+              )}
+
+              {/* Sparkline charts */}
+              <SparklineChart
+                snapshots={snapshots}
+                field="five_hour"
+                label="5-HOUR QUOTA OVER TIME"
+                height={120}
+                rangeHours={hours}
+              />
+              <SparklineChart
+                snapshots={snapshots}
+                field="seven_day"
+                label="ROLLING 7-DAY QUOTA OVER TIME"
+                height={120}
+                rangeHours={hours}
+              />
+
+              {/* Burn rate chart */}
+              <BurnRateChart snapshots={snapshots} />
+
+              {/* Heavy hitters */}
+              <HeavyHitters sessions={data?.heavy_sessions ?? []} rangeHours={hours} />
+
+              {/* Status footer */}
+              <View style={styles.statusSection}>
+                {failures > 0 ? (
+                  <Text style={styles.statusWarning}>
+                    ⚠️ API unreachable — retrying in{" "}
+                    {Math.round((backoff?.backoff_seconds ?? 900) / 60)}m ({failures}{" "}
+                    {failures === 1 ? "failure" : "failures"})
+                  </Text>
+                ) : quotaUpdated ? (
+                  <Text style={styles.statusOk}>
+                    ✓ Quota healthy — fetched {formatAge(quotaUpdated)}
+                  </Text>
+                ) : null}
+                {isStale && (
+                  <Text style={styles.statusStale}>
+                    ⚠ Latest snapshot is over 20 min old — fetcher may be down
+                  </Text>
+                )}
+                <Text style={styles.snapshotCount}>
+                  {snapshots.length} snapshots in range
+                </Text>
+              </View>
+            </ScrollView>
+          </>
         )}
       </View>
     </>
@@ -695,8 +915,15 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingHorizontal: 32,
   },
+  stickyPicker: {
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 4,
+    backgroundColor: "#09090b",
+  },
   scrollContent: {
     padding: 16,
+    paddingTop: 8,
     paddingBottom: 48,
   },
   card: {

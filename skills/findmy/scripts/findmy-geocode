@@ -1,0 +1,40 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["requests"]
+# ///
+"""
+Reverse geocode GPS coordinates to a human-readable address.
+Uses OpenStreetMap Nominatim (free, no API key required).
+Usage: findmy-geocode <lat> <lon>
+"""
+import sys
+import requests
+
+def reverse_geocode(lat: float, lon: float) -> dict:
+    resp = requests.get(
+        "https://nominatim.openstreetmap.org/reverse",
+        params={"lat": lat, "lon": lon, "format": "json"},
+        headers={"User-Agent": "dispatch-assistant/1.0"},
+        timeout=10,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+def main():
+    if len(sys.argv) < 3:
+        print("Usage: findmy-geocode <lat> <lon>")
+        sys.exit(1)
+    lat, lon = float(sys.argv[1]), float(sys.argv[2])
+    data = reverse_geocode(lat, lon)
+    addr = data.get("address", {})
+    display = data.get("display_name", "Unknown")
+    # Short form
+    parts = [addr.get(k) for k in ("road", "suburb", "city", "county", "state") if addr.get(k)]
+    short = ", ".join(parts[:3]) if parts else display
+    print(f"Short: {short}")
+    print(f"Full:  {display}")
+    print(f"Lat/Lon: {data.get('lat')}, {data.get('lon')}")
+
+if __name__ == "__main__":
+    main()

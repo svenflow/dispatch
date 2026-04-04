@@ -21,7 +21,21 @@ Before creating a plan, ask clarifying questions to understand:
 - Who's the audience/user?
 - What's the scope?
 
-**IMPORTANT:** Ask ALL questions in a SINGLE numbered message. Wait for user to answer all questions before responding or creating the plan. Don't reply to partial answers - let them finish.
+**In dispatch-app sessions**, use an `ask_question` widget instead of plain text. This gives the user structured options to tap instead of typing freeform answers:
+
+```bash
+cat <<'EOF' | ~/.claude/skills/dispatch-app/scripts/reply-widget "<chat_id>" ask_question
+{"questions":[
+  {"question":"What's the main goal?","options":[{"label":"New app","description":"Build something from scratch"},{"label":"New feature","description":"Add to existing project"},{"label":"Refactor","description":"Improve existing code"},{"label":"Research","description":"Explore options"}]},
+  {"question":"What's the scope?","options":[{"label":"Small","description":"A few hours of work"},{"label":"Medium","description":"A few days"},{"label":"Large","description":"A week+"}]},
+  {"question":"Any key constraints?","options":[{"label":"Specific tech stack"},{"label":"Timeline pressure"},{"label":"Budget limits"},{"label":"None"}]}
+]}
+EOF
+```
+
+Customize the questions and options based on what the user said. The widget supports 1-4 questions with 2-4 options each. Each question includes an "Other" text input by default for freeform answers. After the widget response comes back, proceed to create the plan.
+
+**In non-dispatch-app sessions** (iMessage, Signal, etc.), ask ALL questions in a SINGLE numbered message. Wait for user to answer all questions before responding or creating the plan. Don't reply to partial answers - let them finish.
 
 ### 2. Create Initial Plan
 

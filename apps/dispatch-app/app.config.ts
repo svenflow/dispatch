@@ -45,6 +45,7 @@ export default ({ config: _config }: ConfigContext): ExpoConfig => ({
   name: config.appName,
   slug: "dispatch-app",
   version: "1.0.0",
+  runtimeVersion: "1.0.0",
   orientation: "portrait",
   icon: config.iconPath,
   scheme: config.scheme,
@@ -62,6 +63,7 @@ export default ({ config: _config }: ConfigContext): ExpoConfig => ({
       NSAppTransportSecurity: {
         NSAllowsArbitraryLoads: true,
       },
+      ...(merged.metroHost ? { RCTMetroHost: merged.metroHost } : {}),
     },
     entitlements: {
       "aps-environment": "development",
@@ -78,7 +80,14 @@ export default ({ config: _config }: ConfigContext): ExpoConfig => ({
     output: "static",
     favicon: "./assets/images/favicon.png",
   },
+  updates: {
+    enabled: true,
+    checkAutomatically: "ON_LOAD",
+    fallbackToCacheTimeout: 5000,
+    url: `http://${config.apiHost || "localhost:9091"}/api/updates/manifest`,
+  },
   plugins: [
+      "expo-updates",
       "expo-router",
       "expo-secure-store",
       "expo-video",

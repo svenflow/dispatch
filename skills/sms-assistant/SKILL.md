@@ -30,6 +30,21 @@ When your session starts or restarts, follow these steps:
 
 Works for both individual chats (phone number) and group chats (hex UUID).
 
+### Bootstrap CONTEXT.md (Group Chats Only)
+
+For group chats, check if CONTEXT.md exists. If missing, run consolidation immediately — don't wait for the nightly cron:
+
+```bash
+# Check if CONTEXT.md exists (only needed for group chats — hex UUID chat_ids)
+TRANSCRIPT_DIR=~/transcripts/{{BACKEND}}/{{SANITIZED_CHAT_ID}}
+if [ ! -f "$TRANSCRIPT_DIR/CONTEXT.md" ]; then
+  echo "No CONTEXT.md found — bootstrapping..."
+  uv run ~/dispatch/prototypes/memory-consolidation/consolidate_chat.py --chat "{{CHAT_ID}}"
+fi
+```
+
+Skip this step for individual chats (phone number chat_ids like `_1XXXXXXXXXX`). Only run for group chats (hex UUID chat_ids like `b3d258b9a4de447ca412eb335c82a077`).
+
 ### After Reading Messages
 
 Look at the output and determine:
@@ -135,6 +150,7 @@ Think of it like being in a group chat - you don't comment on every message, jus
 4. **Report when done** - Text the user what you accomplished and any results
 5. **Keep it brief** - SMS has limits, people read on phones
 6. **Don't over-explain** - No "I am an AI assistant..." or long paragraphs
+7. **Verify prices before stating them** - Never quote specific retail prices, product costs, or specs as fact without verification. Either (a) search the current price, or (b) hedge with "last I checked" / "worth verifying." Training data goes stale; prices change constantly.
 
 ## Request Handling Flow
 
@@ -268,6 +284,19 @@ For Signal messages, use the Signal-specific CLIs:
 # Send file with message
 ~/.claude/skills/sms-assistant/scripts/send-sms "{{CHAT_ID}}" "Here's the doc you asked for" --file "/path/to/file.txt"
 ```
+
+### File Delivery Fallback
+
+If `--file` attachment fails (large files, unsupported formats):
+1. **Retry once** with the same command
+2. **Upload to sven-pages** and send a link:
+   ```bash
+   # Upload file and get public URL
+   ~/.claude/skills/sven-pages/scripts/publish /path/to/file.pdf
+   # Then send the URL as a text message
+   ```
+3. **Never silently fail** — always tell the user if delivery failed and why
+
 
 ## Tapback Reactions (iMessage only)
 

@@ -1,0 +1,111 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+"""Quota gate check — exits 0 to proceed, 1 to skip/defer.
+
+Checks two conditions:
+  1. Weekly usage percentage is below threshold (default: 80%)
+  2. Time until reset is within the window (default: 5.0 hours)
+
+Exit codes:
+  0 = proceed (quota is OK or reset is close enough to burn tokens)
+  1 = skip (quota too high AND reset is far away)
+  2 = error (could not read quota cache)
+
+Usage:
+    quota-check                      # Default: skip if >80% AND reset >5h away
+    quota-check --threshold 90       # Custom usage % threshold
+    quota-check --hours 3.0          # Custom reset window in hours
+    quota-check --verbose            # Print reason for skip/proceed decision
+"""
+
+import json
+import sys
+from pathlib import Path
+
+QUOTA_CACHE_FILE = Path.home() / "dispatch" / "state" / "quota_cache.json"
+
+
+def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Quota gate check")
+    parser.add_argument("--threshold", type=float, default=80.0,
+                        help="Usage %% threshold to gate on (default: 80)")
+    parser.add_argument("--hours", type=float, default=5.0,
+                        help="Hours-until-reset window to always proceed (default: 5.0)")
+    parser.add_argument("--verbose", action="store_true",
+                        help="Print decision reason to stderr")
+    args = parser.parse_args()
+
+    # Read cache
+    if not QUOTA_CACHE_FILE.exists():
+        if args.verbose:
+            print("quota-check: cache not found, proceeding", file=sys.stderr)
+        sys.exit(0)
+
+    try:
+        raw = json.loads(QUOTA_CACHE_FILE.read_text())
+        data = raw.get("data") or {}
+    except Exception as e:
+        if args.verbose:
+            print(f"quota-check: error reading cache: {e}", file=sys.stderr)
+        sys.exit(2)
+
+    # Extract 7-day utilization and reset time
+    seven_day = data.get("seven_day") or {}
+    utilization = seven_day.get("utilization")
+    resets_at_iso = seven_day.get("resets_at")
+
+    if utilization is None:
+        if args.verbose:
+            print("quota-check: no utilization data, proceeding", file=sys.stderr)
+        sys.exit(0)
+
+    # Calculate hours until reset
+    hours_until_reset = None
+    if resets_at_iso:
+        try:
+            from datetime import datetime, timezone
+            resets_at = datetime.fromisoformat(resets_at_iso.replace("Z", "+00:00"))
+            now = datetime.now(timezone.utc)
+            delta = resets_at - now
+            hours_until_reset = delta.total_seconds() / 3600
+        except Exception:
+            pass
+
+    # Decision logic:
+    # Proceed if usage is below threshold (plenty of quota left)
+    # Proceed if reset is within the window (burn tokens that would reset anyway)
+    # Skip if usage is high AND reset is far away (wasteful)
+
+    usage_ok = utilization < args.threshold
+    reset_close = hours_until_reset is not None and hours_until_reset <= args.hours
+
+    if usage_ok:
+        if args.verbose:
+            print(
+                f"quota-check: proceed — usage {utilization:.1f}% < {args.threshold:.0f}% threshold",
+                file=sys.stderr,
+            )
+        sys.exit(0)
+    elif reset_close:
+        if args.verbose:
+            print(
+                f"quota-check: proceed — reset in {hours_until_reset:.1f}h (<= {args.hours:.1f}h window), burn tokens",
+                file=sys.stderr,
+            )
+        sys.exit(0)
+    else:
+        reset_msg = f"{hours_until_reset:.1f}h until reset" if hours_until_reset is not None else "reset time unknown"
+        if args.verbose:
+            print(
+                f"quota-check: skip — usage {utilization:.1f}% >= {args.threshold:.0f}% and {reset_msg} (> {args.hours:.1f}h window)",
+                file=sys.stderr,
+            )
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

@@ -298,9 +298,12 @@ export function InputBar({ onSend, onSendWithImage, disabled, chatId, voiceConve
     setText("");
     delete draftCache[draftKey];
     persistDraftCache();
-    // Reset height to single line without remounting (remount kills keyboard focus)
-    if (Platform.OS !== "web") setInputHeight(undefined);
-    // Refocus input so keyboard stays up after send
+    // Reset height to single line by remounting the TextInput
+    if (Platform.OS !== "web") {
+      setInputHeight(undefined);
+      setInputKey((k) => k + 1);
+    }
+    // Refocus input so keyboard stays up after send (needs rAF to wait for remount)
     requestAnimationFrame(() => inputRef.current?.focus());
     setSelectedAttachments([]);
     setPreDictationText("");

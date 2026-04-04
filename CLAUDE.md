@@ -35,7 +35,7 @@ uv run python script.py
 
 You communicate with humans via SMS/iMessage using the skills in `~/.claude/skills/`:
 - `/contacts` - Manage contacts and tiers
-- `/imessage` - Read and send messages
+- `/sms-assistant` - Read and send messages
 
 ## Tier System
 
@@ -95,12 +95,15 @@ The system includes an event bus built on SQLite for audit trails, analytics, an
   - `records` table: Business events (messages, sessions, system) with 7-day retention
   - `sdk_events` table: Tool call traces with structured columns, 3-day retention
 
-**Event taxonomy (v6) — 5 topics:**
+**Event taxonomy (v6) — 8 topics:**
 - `messages`: message.received/sent/failed/ignored, reaction.received/ignored
 - `sessions`: session.created/restarted/killed/crashed/injected/idle_killed/prewarmed/tier_mismatch, permission.denied, command.restart
 - `system`: daemon.started/stopped, health.check_completed/failed, consumer.crashed, sdk.turn_complete, signal.connection_state, and more
 - `reminders`: reminder.fired, task.requested
 - `tasks`: task.started/completed/failed/timeout
+- `messages.dlq`: dead-lettered messages (failed delivery, 30-day retention)
+- `facts`: fact.created/updated/expired — structured contact facts (travel, events, preferences)
+- `imessage.ui`: tapback reactions, typing indicators (1-day retention)
 
 **Integration status:** Fully integrated. `produce_event()` is called throughout manager.py and sdk_backend.py — all message routing, session lifecycle, health checks, and system events are recorded. The `Producer` is initialized in Manager and registered with the ResourceRegistry for clean shutdown.
 
@@ -391,18 +394,22 @@ Each contact has their own directory, organized by backend:
 ~/transcripts/
 ├── imessage/
 │   ├── _15555550100/           # Phone number (+ replaced with _)
-│   │   └── .claude -> ~/.claude
+│   │   └── .claude/            # Directory with individual symlinks
+│   │       ├── CLAUDE.md -> ~/.claude/CLAUDE.md
+│   │       ├── SOUL.md -> ~/.claude/SOUL.md
+│   │       ├── skills -> ~/.claude/skills
+│   │       └── settings.json   # Per-session Claude Code settings
 │   └── b3d258b9a4de447ca412eb335c82a077/  # Group UUID
-│       └── .claude -> ~/.claude
+│       └── .claude/            # Same structure
 ├── signal/
 │   └── _15555550100/
-│       └── .claude -> ~/.claude
+│       └── .claude/            # Same structure
 └── master/                     # Master session (unchanged)
 ```
 
 Session names use the format `{backend}/{sanitized_chat_id}` (e.g., `imessage/_15555550100`).
 
-SDK sessions run with `cwd` set to the transcript directory, so skills and CLAUDE.md are picked up automatically via the `.claude` symlink.
+SDK sessions run with `cwd` set to the transcript directory, so skills and CLAUDE.md are picked up automatically via the `.claude/` directory containing individual symlinks to `~/.claude/`.
 
 ## Session Startup
 
@@ -537,6 +544,25 @@ extra-paths = [
     # ... paths for dynamically imported modules
 ]
 ```
+
+## Diagnostic Events (Bus)
+
+**Sink authority:** Log files are authoritative (complete record, crash recovery, `tail -f`/`grep`). Bus has a structured subset for pattern queries across time. Bus is a convenience layer — if bus writes fail, events fall back to log-only silently.
+
+| Event | Key Fields | Query |
+|---|---|---|
+| `health.haiku_verdict` | check_run_id, check_type (deep/stuck), session_name, chat_id, verdict (FATAL/HEALTHY/STUCK/WORKING), action_taken (restart/none) | `bus replay system --type health.haiku_verdict --limit 50` |
+| `health.circuit_breaker` | check_run_id? (see below), session_name, chat_id, transition (opened/closed), restart_count | `bus replay system --type health.circuit_breaker --limit 50` |
+| `health.quota_alert` | quota_type (5-hour/7-day all/7-day sonnet/7-day opus/extra usage), utilization, threshold, resets_at | `bus replay system --type health.quota_alert --limit 50` |
+| `health.bus_check` | status:"ok" — startup canary only | N/A |
+
+**Cross-event correlation:** `bus search "<check_run_id_uuid>" --topic system` — shows all events from the same health check cycle.
+
+**Schema rules:**
+- Producer: add new optional fields freely, no version bump. Breaking changes → bump `schema_v`.
+- Consumer: use `.get()` for optional fields. On unexpected `schema_v`, log-warn and process best-effort — don't raise.
+
+**`check_run_id` on circuit_breaker:** Present when transition occurs within a health check cycle. Absent means transition outside a cycle (e.g., `is_open()` auto-transitions open→half_open on timeout, which is not captured as an event). Not a bug — just a different code path.
 
 ## Related Repos
 

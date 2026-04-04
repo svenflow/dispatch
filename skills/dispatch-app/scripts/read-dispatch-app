@@ -1,0 +1,97 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+"""
+read-dispatch-app - Read messages from dispatch-messages.db
+
+Usage:
+    read-dispatch-app --chat <chat_id> --limit 20
+    read-dispatch-app --chat 8d69bda5-df71-4372-bbc7-827106108cec
+    read-dispatch-app --chat debug-esp32-microphone --limit 10
+
+Handles both dispatch-app (UUID) and dispatch-api (prefixed) chat IDs.
+If a bare dispatch-api chat_id is given (no prefix), the script tries
+both bare and prefixed versions to find matches.
+
+Output format matches read-sms convention:
+    [2026-04-03 20:15:00] User: hello
+    [2026-04-03 20:15:05] Sven: hey! what's up?
+"""
+
+import argparse
+import sqlite3
+import sys
+from pathlib import Path
+
+DB_PATH = Path.home() / "dispatch" / "state" / "dispatch-messages.db"
+
+
+def read_messages(chat_id: str, limit: int) -> list[tuple[str, str, str]]:
+    """Read recent messages for a chat_id. Returns (created_at, role, content) tuples."""
+    if not DB_PATH.exists():
+        print(f"Database not found: {DB_PATH}", file=sys.stderr)
+        return []
+
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
+
+    # Try exact chat_id first
+    rows = conn.execute(
+        "SELECT created_at, role, content FROM messages "
+        "WHERE chat_id = ? ORDER BY created_at DESC LIMIT ?",
+        (chat_id, limit),
+    ).fetchall()
+
+    # If no results and chat_id doesn't have a prefix, try with dispatch-api: prefix
+    if not rows and ":" not in chat_id:
+        rows = conn.execute(
+            "SELECT created_at, role, content FROM messages "
+            "WHERE chat_id = ? ORDER BY created_at DESC LIMIT ?",
+            (f"dispatch-api:{chat_id}", limit),
+        ).fetchall()
+
+    conn.close()
+    return list(reversed(rows))  # Chronological order
+
+
+def format_role(role: str) -> str:
+    """Convert DB role to display name."""
+    if role == "assistant":
+        return "Sven"
+    return "User"
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Read dispatch-app/dispatch-api messages")
+    parser.add_argument("--chat", required=True, help="Chat ID (UUID or dispatch-api:name)")
+    parser.add_argument("--limit", type=int, default=20, help="Number of messages to show (default: 20)")
+    args = parser.parse_args()
+
+    if args.limit < 1:
+        print("Error: --limit must be positive", file=sys.stderr)
+        sys.exit(1)
+
+    messages = read_messages(args.chat, args.limit)
+
+    if not messages:
+        print(f"No messages found for chat: {args.chat}", file=sys.stderr)
+        return
+
+    for created_at, role, content in messages:
+        if not content:
+            continue
+        sender = format_role(role)
+        # Normalize timestamp: replace T separator with space, strip Z suffix
+        ts = (created_at or "").replace("T", " ").rstrip("Z")
+        # Show first line inline, indent continuation lines
+        lines = content.strip().split("\n")
+        print(f"[{ts}] {sender}: {lines[0]}")
+        for line in lines[1:]:
+            print(f"    {line}")
+
+
+if __name__ == "__main__":
+    main()

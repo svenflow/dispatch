@@ -27,6 +27,8 @@ Full-stack mobile app for the dispatch personal assistant. Frontend (Expo/React 
 | New JS-only npm package | either | `scripts/metro restart --clear` |
 | Native (new pod/module, entitlements, Info.plist) | either | `deploy-ios` (full rebuild) |
 | Web UI | N/A | `npx expo export --platform web --clear && claude-assistant restart` |
+| Remote (traveling, no cable) | JS only | `publish-update` (self-hosted OTA) |
+| Remote (traveling, no cable) | Native changes | `serve-ipa` (HTTPS/Tailscale) |
 
 ### Check Metro Before Spawning Any Build
 
@@ -49,6 +51,59 @@ If Metro is healthy and the change is JS-only — **stop here, just save the fil
 # JS fallback (Metro unavailable)
 ~/dispatch/apps/dispatch-app/scripts/deploy-ios --quick
 ```
+
+---
+
+## Remote Deploy (Traveling / No Cable)
+
+When you don't have physical access to the phone, use these two scripts from `~/dispatch/apps/dispatch-app/scripts/`:
+
+### JS-Only Changes: `publish-update`
+Exports a JS bundle and publishes it as a self-hosted OTA update. The dispatch-api manifest endpoint automatically serves the latest update to the app.
+
+```bash
+cd ~/dispatch/apps/dispatch-app
+scripts/publish-update                          # uses runtimeVersion from app.config.ts
+scripts/publish-update --message "Fix widgets" # with optional message
+```
+
+**Limitation:** Only works for JS/TS changes. Native changes (new pods, entitlements, Info.plist) require a full rebuild — use serve-ipa instead.
+
+**Incompatible with dev builds.** Only works on production/ad-hoc builds that have expo-updates configured.
+
+### Native Changes: `serve-ipa`
+Serves a pre-built IPA over HTTPS via Tailscale for ad-hoc installation (itms-services protocol).
+
+**CRITICAL: Always build with `-configuration Debug`** so the binary connects to Metro for hot reload over Tailscale. The Debug build reads `RCTMetroHost` from Info.plist (baked from `metroHost` in `app.yaml`) and sets `jsLocation` in AppDelegate.swift, so the device finds Metro at the Tailscale IP instead of scanning local LAN interfaces.
+
+```bash
+cd ~/dispatch/apps/dispatch-app
+
+# Step 1: Archive with Debug config
+xcodebuild archive \
+  -workspace ios/Sven.xcworkspace \
+  -scheme Sven \
+  -configuration Debug \
+  -archivePath /tmp/SvenDebug/Sven.xcarchive \
+  -destination "generic/platform=iOS" \
+  CODE_SIGN_IDENTITY="Apple Development"
+
+# Step 2: Export with development method
+xcodebuild -exportArchive \
+  -archivePath /tmp/SvenDebug/Sven.xcarchive \
+  -exportPath /tmp/SvenDebugIPA \
+  -exportOptionsPlist ExportOptions.plist \
+  -allowProvisioningUpdates
+
+# Step 3: Serve
+scripts/serve-ipa /tmp/SvenDebugIPA/Sven.ipa
+```
+
+This starts an HTTPS server on port 8444 using Tailscale certs, generates an itms-services manifest, and prints an install link. The user opens the link on their iPhone to install.
+
+**Requirements:** Phone must be on Tailscale network. Metro must be running (`npm start`). IPA must be signed for development with the phone's UDID.
+
+**Never use `-configuration Release` for serve-ipa builds** — Release bundles JS statically, so there's no hot reload and you'd have to rebuild for every JS change.
 
 ---
 
@@ -315,7 +370,7 @@ cat <<'EOF' | reply-widget <chat_id> ask_question
 EOF
 ```
 
-**When to use:** Need specific choice from options -> widget. Open-ended question -> plain text.
+**When to use ask_question:** Need specific choice from options -> widget. Open-ended question -> plain text.
 
 **UX behavior:**
 - All questions rendered at once (not paginated)
@@ -336,12 +391,55 @@ Q: "Timeline?" -> Other: "3 weeks, need to sync with deploy"
 
 **Error handling:** On validation failure: prints error to stderr, exit code 1, no DB write.
 
+#### progress_tracker widget
+
+Display-only widget showing multi-step task progress. No user response needed — agent sends updates by sending a new message with updated statuses.
+
+```bash
+# Show task progress
+cat <<'EOF' | reply-widget <chat_id> progress_tracker
+{"title": "Deploying update", "steps": [{"label": "Building app", "status": "complete"}, {"label": "Running tests", "status": "in_progress", "detail": "42/50 passed"}, {"label": "Deploying to production", "status": "pending"}]}
+EOF
+
+# Minimal (no title, just steps)
+cat <<'EOF' | reply-widget <chat_id> progress_tracker
+{"steps": [{"label": "Searching flights", "status": "complete"}, {"label": "Comparing prices", "status": "in_progress"}, {"label": "Booking best option"}]}
+EOF
+```
+
+**Step statuses:** `pending` (default), `in_progress`, `complete`, `error`
+**Limits:** 1-10 steps per widget, optional `title`, optional `detail` per step.
+**Updating progress:** Send a new progress_tracker message with updated statuses. Each widget message is immutable — updates are new messages.
+**When to use:** Multi-step tasks where the user would otherwise wait in silence. Great for: deployments, searches, data processing, any async workflow.
+
+#### map_pin widget
+
+Display-only widget showing location pins. Tapping a pin or the "Open in Maps" button opens Apple Maps.
+
+```bash
+# Single location
+cat <<'EOF' | reply-widget <chat_id> map_pin
+{"title": "Boston Common", "pins": [{"latitude": 42.3551, "longitude": -71.0657, "label": "Boston Common"}]}
+EOF
+
+# Multiple pins
+cat <<'EOF' | reply-widget <chat_id> map_pin
+{"title": "Restaurant options", "pins": [{"latitude": 42.3601, "longitude": -71.0589, "label": "Legal Sea Foods"}, {"latitude": 42.3625, "longitude": -71.0567, "label": "No. 9 Park"}], "zoom": 15}
+EOF
+```
+
+**Limits:** 1-10 pins, optional `title`, optional `label` per pin, `zoom` 1-20 (default 14).
+**When to use:** Discussing places, restaurants, directions, real estate, travel destinations. Any time a location is relevant.
+
 ### Widget System Architecture
 
 - **Shared models**: `~/.claude/skills/dispatch-app/scripts/widget_models.py` -- pydantic models, per-type descriptor pattern, FormResponse with batch answers
 - **DB columns**: `widget_data TEXT`, `widget_response TEXT`, `responded_at DATETIME` on messages table
 - **API endpoint**: `POST /conversations/{chat_id}/messages/{message_id}/widget-response` -- validates, injects, persists
-- **App component**: `AskQuestionWidget.tsx` -- form UI, radio/checkbox + Other text input, Save button, 3 states
+- **App components**:
+  - `AskQuestionWidget.tsx` -- interactive form UI, radio/checkbox + Other text input, Save button, 3 states
+  - `ProgressTrackerWidget.tsx` -- display-only, vertical step timeline with status icons
+  - `MapPinWidget.tsx` -- display-only, location cards with "Open in Maps" button (no native maps dependency)
 - **Graceful degradation**: Old clients see plain-text fallback in `content` column
 
 ### Sessions (Multi-Chat)

@@ -1,0 +1,156 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+"""
+Serve an IPA for ad-hoc installation over HTTPS via Tailscale.
+
+Usage:
+    ./scripts/serve-ipa /path/to/App.ipa
+
+Opens an HTTPS server on port 8443 using Tailscale certs,
+serves the IPA with an itms-services manifest, and prints
+the install link.
+"""
+
+import http.server
+import json
+import os
+import plistlib
+import ssl
+import sys
+import urllib.parse
+
+PORT = 8444
+HOSTNAME = os.environ.get("DISPATCH_HOSTNAME", "localhost")
+CERT_DIR = os.path.expanduser("~/dispatch/services/dispatch-api/certs")
+CERT_FILE = os.path.join(CERT_DIR, f"{HOSTNAME}.crt")
+KEY_FILE = os.path.join(CERT_DIR, f"{HOSTNAME}.key")
+
+
+def create_manifest(ipa_url: str, bundle_id: str, version: str, title: str) -> bytes:
+    """Create an itms-services manifest plist."""
+    manifest = {
+        "items": [
+            {
+                "assets": [
+                    {
+                        "kind": "software-package",
+                        "url": ipa_url,
+                    }
+                ],
+                "metadata": {
+                    "bundle-identifier": bundle_id,
+                    "bundle-version": version,
+                    "kind": "software",
+                    "title": title,
+                },
+            }
+        ]
+    }
+    return plistlib.dumps(manifest)
+
+
+class IPAHandler(http.server.SimpleHTTPRequestHandler):
+    def __init__(self, *args, ipa_path: str, **kwargs):
+        self.ipa_path = ipa_path
+        self.ipa_filename = os.path.basename(ipa_path)
+        super().__init__(*args, **kwargs)
+
+    def do_GET(self):
+        if self.path == "/manifest.plist":
+            ipa_url = f"https://{HOSTNAME}:{PORT}/app.ipa"
+            manifest = create_manifest(
+                ipa_url=ipa_url,
+                bundle_id="com.nikhil.sven",
+                version="1.0.0",
+                title="Sven",
+            )
+            self.send_response(200)
+            self.send_header("Content-Type", "application/xml")
+            self.send_header("Content-Length", len(manifest))
+            self.end_headers()
+            self.wfile.write(manifest)
+
+        elif self.path == "/app.ipa":
+            with open(self.ipa_path, "rb") as f:
+                data = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Disposition", f"attachment; filename={self.ipa_filename}")
+            self.send_header("Content-Length", len(data))
+            self.end_headers()
+            self.wfile.write(data)
+
+        elif self.path == "/install":
+            manifest_url = urllib.parse.quote(f"https://{HOSTNAME}:{PORT}/manifest.plist", safe=":/")
+            install_url = f"itms-services://?action=download-manifest&url={manifest_url}"
+            html = f"""<!DOCTYPE html>
+<html>
+<head><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Install Sven</title>
+<style>
+body {{ font-family: -apple-system; background: #09090b; color: #fafafa;
+       display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }}
+a {{ background: #3478f7; color: white; padding: 16px 32px; border-radius: 12px;
+     text-decoration: none; font-size: 18px; font-weight: 600; }}
+</style></head>
+<body><a href="{install_url}">Install Sven</a></body>
+</html>"""
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", len(html.encode()))
+            self.end_headers()
+            self.wfile.write(html.encode())
+
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def log_message(self, format, *args):
+        print(f"[serve-ipa] {args[0]}")
+
+
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: serve-ipa <path-to-ipa>")
+        sys.exit(1)
+
+    ipa_path = os.path.abspath(sys.argv[1])
+    if not os.path.exists(ipa_path):
+        print(f"Error: IPA not found at {ipa_path}")
+        sys.exit(1)
+
+    if not os.path.exists(CERT_FILE) or not os.path.exists(KEY_FILE):
+        print(f"Error: TLS certs not found. Run: tailscale cert {HOSTNAME}")
+        sys.exit(1)
+
+    # Create handler factory with ipa_path bound
+    def handler_factory(*args, **kwargs):
+        return IPAHandler(*args, ipa_path=ipa_path, **kwargs)
+
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(CERT_FILE, KEY_FILE)
+
+    server = http.server.HTTPServer(("0.0.0.0", PORT), handler_factory)
+    server.socket = context.wrap_socket(server.socket, server_side=True)
+
+    install_page = f"https://{HOSTNAME}:{PORT}/install"
+    itms_url = f"itms-services://?action=download-manifest&url={urllib.parse.quote(f'https://{HOSTNAME}:{PORT}/manifest.plist', safe=':/')}"
+
+    print(f"\n{'='*60}")
+    print(f"  IPA Install Server running on port {PORT}")
+    print(f"  Install page: {install_page}")
+    print(f"  Direct link:  {itms_url}")
+    print(f"{'='*60}\n")
+
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nShutting down.")
+        server.shutdown()
+
+
+if __name__ == "__main__":
+    main()

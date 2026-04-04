@@ -12,7 +12,7 @@ import {
 import { Stack, useLocalSearchParams } from "expo-router";
 import { getDashboardSkillDetail } from "@/src/api/dashboard";
 import type { DashboardSkillDetail } from "@/src/api/types";
-import { timeAgoMs, formatDateMs, formatDuration } from "@/src/utils/time";
+import { timeAgoMs, formatDateMs } from "@/src/utils/time";
 import { SimpleMarkdown } from "@/src/components/SimpleMarkdown";
 
 // ── Discriminated union for section items ────────────────────────────────────
@@ -84,14 +84,6 @@ export default function SkillDetailScreen() {
     return () => { mountedRef.current = false; };
   }, [load]);
 
-  const errorRate = useMemo(
-    () =>
-      detail && detail.total_invocations > 0
-        ? ((detail.error_count / detail.total_invocations) * 100).toFixed(1)
-        : "0",
-    [detail],
-  );
-
   const sections = useMemo<SectionItem[]>(() => {
     if (!detail) return [];
     return [
@@ -139,23 +131,6 @@ export default function SkillDetailScreen() {
                 {detail.last_used_ms ? timeAgoMs(detail.last_used_ms) : "never"}
               </Text>
               <Text style={styles.statLabel}>Last Used</Text>
-            </View>
-            <View style={styles.statCard}>
-              <Text style={styles.statValue}>
-                {formatDuration(detail.avg_duration_ms)}
-              </Text>
-              <Text style={styles.statLabel}>Avg Duration</Text>
-            </View>
-            <View style={styles.statCard}>
-              <Text
-                style={[
-                  styles.statValue,
-                  detail.error_count > 0 && styles.statValueError,
-                ]}
-              >
-                {errorRate}%
-              </Text>
-              <Text style={styles.statLabel}>Error Rate</Text>
             </View>
           </View>
         );
@@ -221,24 +196,13 @@ export default function SkillDetailScreen() {
         return (
           <View style={styles.recentRow}>
             <View style={styles.recentLeft}>
-              <View style={styles.recentDotRow}>
-                <View
-                  style={[
-                    styles.recentDot,
-                    inv.is_error ? styles.dotError : styles.dotSuccess,
-                  ]}
-                />
-                <Text style={styles.recentTime}>
-                  {formatDateMs(inv.timestamp_ms)}
-                </Text>
-              </View>
+              <Text style={styles.recentTime}>
+                {formatDateMs(inv.timestamp_ms)}
+              </Text>
               <Text style={styles.recentSession} numberOfLines={1}>
                 {inv.session_name}
               </Text>
             </View>
-            <Text style={styles.recentDuration}>
-              {formatDuration(inv.duration_ms)}
-            </Text>
           </View>
         );
       }
@@ -246,7 +210,7 @@ export default function SkillDetailScreen() {
       default:
         return null;
     }
-  }, [detail, showMd, errorRate]);
+  }, [detail, showMd]);
 
   if (isLoading) {
     return (
@@ -333,9 +297,6 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: "700",
     fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
-  },
-  statValueError: {
-    color: "#ef4444",
   },
   statLabel: {
     color: "#71717a",
@@ -428,22 +389,6 @@ const styles = StyleSheet.create({
     flex: 1,
     gap: 2,
   },
-  recentDotRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-  },
-  recentDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-  },
-  dotSuccess: {
-    backgroundColor: "#22c55e",
-  },
-  dotError: {
-    backgroundColor: "#ef4444",
-  },
   recentTime: {
     color: "#a1a1aa",
     fontSize: 13,
@@ -451,12 +396,6 @@ const styles = StyleSheet.create({
   recentSession: {
     color: "#52525b",
     fontSize: 12,
-    marginLeft: 12,
-  },
-  recentDuration: {
-    color: "#71717a",
-    fontSize: 13,
-    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
   },
   // Empty / Error
   emptyCenter: {

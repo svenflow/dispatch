@@ -74,7 +74,18 @@ export function ChatDetailPanel({ chatId, chatTitle, onTitleChange, onDelete }: 
   // Poll SDK events when thinking
   const sdkSessionId = useMemo(() => `${sessionPrefix}:${chatId}`, [chatId]);
   const { events: sdkEvents, isComplete: sdkComplete } = useSdkEvents(sdkSessionId, isThinking);
-  const showThinking = isThinking && !sdkComplete;
+  // Let server-driven isThinking control visibility — sdkComplete races ahead
+  // of message poll and caused flicker. See app/chat/[id].tsx for full invariant.
+  const showThinking = isThinking;
+
+  // Dev warning: detect stuck thinking indicator (isThinking true for >60s)
+  useEffect(() => {
+    if (!isThinking || !__DEV__) return;
+    const timer = setTimeout(() => {
+      console.warn("[thinking] indicator visible for 60s — possible stuck state");
+    }, 60_000);
+    return () => clearTimeout(timer);
+  }, [isThinking]);
 
   const invertedMessages = useMemo(() => [...messages].reverse(), [messages]);
 

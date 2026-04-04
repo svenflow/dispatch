@@ -46,13 +46,32 @@ def fetch_with_scrapling_http(url: str, timeout: int = 30) -> tuple[str | None, 
         return None, str(e)
 
 
-def fetch_with_scrapling_stealthy(url: str, timeout: int = 30) -> tuple[str | None, str | None]:
-    """Tier 2: Stealthy fetch with Camoufox (Firefox-based)."""
+def fetch_with_scrapling_stealthy(url: str, timeout: int = 30, network_idle: bool = False,
+                                   wait: int = 0, wait_selector: str = None) -> tuple[str | None, str | None]:
+    """Tier 2: Stealthy fetch with Camoufox (Firefox-based).
+    
+    Args:
+        network_idle: Wait until no network connections for 500ms (good for JS-rendered SPAs)
+        wait: Extra milliseconds to wait after page loads (e.g. 2000 for 2s buffer)
+        wait_selector: CSS selector to wait for before returning (e.g. "[data-rf-test-id=\'abp-price\']")
+    """
     try:
         from scrapling import StealthyFetcher
 
         fetcher = StealthyFetcher()
-        page = fetcher.fetch(url, headless=True, timeout=timeout * 1000)
+        fetch_kwargs = {
+            "headless": True,
+            "timeout": timeout * 1000,
+        }
+        if network_idle:
+            fetch_kwargs["network_idle"] = True
+        if wait > 0:
+            fetch_kwargs["wait"] = wait
+        if wait_selector:
+            fetch_kwargs["wait_selector"] = wait_selector
+            fetch_kwargs["wait_selector_state"] = "visible"
+
+        page = fetcher.fetch(url, **fetch_kwargs)
         html = page.html_content if hasattr(page, 'html_content') else None
 
         if html and len(html) > 500:
@@ -139,6 +158,18 @@ def main():
         "--tier", type=int, choices=[1, 2], default=0,
         help="Force specific tier (1=scrapling HTTP, 2=scrapling Stealthy)"
     )
+    parser.add_argument(
+        "--network-idle", action="store_true",
+        help="Wait for network idle (no connections for 500ms) — good for JS-rendered pages"
+    )
+    parser.add_argument(
+        "--wait", type=int, default=0,
+        help="Extra milliseconds to wait after page loads (e.g. 2000)"
+    )
+    parser.add_argument(
+        "--wait-selector", type=str, default=None,
+        help="CSS selector to wait for before returning content"
+    )
     # Deprecated flags kept for backwards compat
     parser.add_argument("--force-headless", action="store_true", help="Deprecated")
     parser.add_argument("--force-playwright", action="store_true", help="Deprecated")
@@ -167,7 +198,12 @@ def main():
 
         elif tier == 2:
             print("[tier 2] scrapling Stealthy (Camoufox)...", file=sys.stderr)
-            html, error = fetch_with_scrapling_stealthy(url, args.timeout)
+            html, error = fetch_with_scrapling_stealthy(
+                    url, args.timeout,
+                    network_idle=args.network_idle,
+                    wait=args.wait,
+                    wait_selector=args.wait_selector,
+                )
             if html and not looks_like_antibot_page(html):
                 tier_used = 2
                 break

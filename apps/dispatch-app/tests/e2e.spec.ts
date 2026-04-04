@@ -232,7 +232,7 @@ test.describe("Chat Conversation", () => {
   test("C15: Expand/collapse long messages - Show more/less toggle", async ({ page }) => {
     await openChatAlpha(page);
 
-    // msg-4 is 900 chars (> MAX_COLLAPSED_LENGTH of 840)
+    // msg-4 is 1600 chars (> MAX_COLLAPSED_LENGTH of 1500)
     // It should show truncated with "Show more"
     const showMore = page.getByText("Show more");
     await expect(showMore.first()).toBeVisible({ timeout: 5000 });

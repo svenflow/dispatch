@@ -1,0 +1,118 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# dependencies = ["pycryptodome", "requests"]
+# ///
+"""
+Get real-time GPS coordinates of people sharing via Find My.
+Requires one-time key extraction setup (see ~/.claude/skills/findmy/SETUP.md).
+
+Usage:
+  findmy-gps                     # List all sharing people with GPS coords
+  findmy-gps "Nikhil Thorat"    # Get GPS for specific person
+  findmy-gps --raw               # JSON output
+"""
+import sys, os, sqlite3, plistlib, subprocess, json, shutil, tempfile
+from pathlib import Path
+
+KEY_FILE = Path.home() / "code/findmy-key-extractor/keys/LocalStorage.key"
+DECRYPT_SCRIPT = Path.home() / "code/findmy-key-extractor/decrypt_localstorage.py"
+
+def check_setup():
+    if not KEY_FILE.exists():
+        print("GPS key not found. Run the one-time setup first: ~/.claude/skills/findmy/SETUP.md", file=sys.stderr)
+        sys.exit(1)
+
+def decrypt_db():
+    work_dir = DECRYPT_SCRIPT.parent
+    subprocess.run([sys.executable, str(DECRYPT_SCRIPT), str(KEY_FILE)],
+                   capture_output=True, cwd=work_dir)
+    return str(work_dir / "LocalStorage_decrypted.sqlite")
+
+def reverse_geocode(lat, lon):
+    try:
+        import requests
+        r = requests.get("https://nominatim.openstreetmap.org/reverse",
+                         params={"lat": lat, "lon": lon, "format": "json"},
+                         headers={"User-Agent": "findmy-gps/1.0"}, timeout=5)
+        if r.ok:
+            addr = r.json().get("address", {})
+            parts = [addr.get("house_number",""), addr.get("road",""),
+                     addr.get("neighbourhood","") or addr.get("suburb",""),
+                     addr.get("city","") or addr.get("town",""), addr.get("state","")]
+            return ", ".join(p for p in parts if p)
+    except Exception:
+        pass
+    return f"{lat:.4f}, {lon:.4f}"
+
+def query_locations(db_path):
+    conn = sqlite3.connect(db_path)
+    friends = {r[0]: r[1] or r[0] for r in conn.execute("SELECT handleIdentifier, handlePrettyName FROM friends")}
+    server_to_friend = {}
+    for row in conn.execute("SELECT handleIdentifier, friendInfo FROM friends"):
+        identifier, blob = row
+        if not blob: continue
+        try:
+            data = plistlib.loads(blob)
+            if isinstance(data, list): data = data[0]
+            sid = data.get("serverID","")
+            if sid: server_to_friend[sid] = identifier
+        except Exception: pass
+    locations = []
+    for row in conn.execute("SELECT serverUserID, value FROM secureLocations"):
+        sid, blob = row
+        if not blob: continue
+        try:
+            loc = plistlib.loads(blob)
+            identifier = server_to_friend.get(sid, sid)
+            name = friends.get(identifier, identifier)
+            ts = loc.get("timestamp","")
+            locations.append({"name": name, "identifier": identifier,
+                "latitude": loc.get("latitude"), "longitude": loc.get("longitude"),
+                "altitude": loc.get("altitude"), "speed": loc.get("speed"),
+                "course": loc.get("course"), "horizontal_accuracy": loc.get("horizontalAccuracy"),
+                "motion_state": loc.get("motionActivityState", 0), "timestamp": str(ts)})
+        except Exception: pass
+    conn.close()
+    return locations
+
+def format_motion(state):
+    return {0:"stationary",1:"walking",2:"running",3:"driving"}.get(state, f"state:{state}")
+
+def main():
+    args = sys.argv[1:]
+    raw = "--raw" in args
+    args = [a for a in args if a != "--raw"]
+    target = args[0] if args else None
+    check_setup()
+    db_path = decrypt_db()
+    locations = query_locations(db_path)
+    if not locations:
+        print("No location data. Open Find My app and retry.")
+        sys.exit(1)
+    if target:
+        locations = [l for l in locations if target.lower() in l["name"].lower() or target in l["identifier"]]
+        if not locations:
+            print(f"No location data for '{target}'")
+            sys.exit(1)
+    for loc in locations:
+        if loc["latitude"] and loc["longitude"]:
+            loc["address"] = reverse_geocode(loc["latitude"], loc["longitude"])
+        else:
+            loc["address"] = "unknown"
+    if raw:
+        print(json.dumps(locations, indent=2, default=str))
+        return
+    for loc in locations:
+        speed = loc["speed"] or 0
+        motion = format_motion(loc.get("motion_state",0))
+        accuracy = loc.get("horizontal_accuracy")
+        speed_str = f", {speed:.0f} m/s" if speed and speed > 0.5 else ""
+        accuracy_str = f", ±{accuracy:.0f}m" if accuracy else ""
+        print(f"📍 {loc['name']}")
+        print(f"   {loc['address']}")
+        print(f"   ({loc['latitude']:.6f}, {loc['longitude']:.6f}){accuracy_str}")
+        print(f"   {motion}{speed_str} • {loc['timestamp']}")
+        print()
+
+if __name__ == "__main__":
+    main()

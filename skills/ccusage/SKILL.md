@@ -166,10 +166,46 @@ fi
 
 ## Quota-Gate Pattern for Expensive Tasks
 
-When scheduling expensive agent tasks (bugfinder, latency finder, etc.), use this pattern to only run them when the weekly quota is about to reset — burning tokens that would otherwise be wasted:
+**Use the `quota-check` CLI** — it checks both usage percentage AND time-to-reset in one call. Agents that copy-paste the inline snippet often miss cases or skip the check entirely, causing retry-loop token explosions.
 
 ```bash
-# Quota-gate: skip if reset is more than 5 hours away
+# Standard quota gate (skip if >80% used AND reset >5h away)
+~/.claude/skills/ccusage/scripts/quota-check --verbose
+if [ $? -eq 1 ]; then
+  echo "Skipping — quota too high and reset not soon"
+  exit 0
+fi
+# Proceed with expensive task...
+```
+
+### quota-check CLI
+
+```bash
+~/.claude/skills/ccusage/scripts/quota-check              # Default: 80% threshold, 5h window
+~/.claude/skills/ccusage/scripts/quota-check --threshold 90  # Gate at 90% instead
+~/.claude/skills/ccusage/scripts/quota-check --hours 3.0     # Tighter window (3h)
+~/.claude/skills/ccusage/scripts/quota-check --verbose       # Print decision reason to stderr
+```
+
+Exit codes:
+- `0` = proceed (usage is below threshold OR reset is within the window)
+- `1` = skip (usage high AND reset is far away)
+- `2` = error reading cache (fail open — treat as proceed)
+
+Decision logic: **proceed** if usage < threshold (quota available) OR if reset is within the window (burn tokens that would reset anyway). **Skip** only when both conditions are unfavorable.
+
+In agent task prompts, use the direct form:
+```
+FIRST: Run ~/.claude/skills/ccusage/scripts/quota-check --verbose
+If exit code is 1, log "Skipping — quota gate" and EXIT immediately.
+```
+
+This pattern is used by nightly bugfinder and latency finder tasks in `~/dispatch/scripts/setup-nightly-tasks.py`.
+
+### Legacy inline pattern (deprecated — use quota-check instead)
+
+```bash
+# Only use this if quota-check CLI is unavailable for some reason
 HOURS=$(~/.claude/skills/ccusage/scripts/server-usage --hours-until-reset 2>/dev/null)
 if [ $? -ne 0 ] || [ -z "$HOURS" ]; then
   echo "Could not check quota — skipping"
@@ -179,17 +215,7 @@ if [ "$(echo "$HOURS > 5.0" | bc)" -eq 1 ]; then
   echo "Skipping — reset not within 5h window (${HOURS}h remaining)"
   exit 0
 fi
-# Proceed with expensive task...
 ```
-
-In agent task prompts, use the inline version:
-```
-FIRST: Run ~/.claude/skills/ccusage/scripts/server-usage --hours-until-reset
-If result > 5.0 hours, log 'Skipping — reset not within 5h window' and EXIT.
-ONLY proceed if hours until reset <= 5.0.
-```
-
-This pattern is used by nightly bugfinder and latency finder tasks in `~/dispatch/scripts/setup-nightly-tasks.py`.
 
 ## SMS Response Format
 

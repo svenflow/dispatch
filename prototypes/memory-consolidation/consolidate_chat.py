@@ -500,7 +500,7 @@ def fetch_messages_from_bus(chat_id: str, limit: int = 200) -> str:
             p = json.loads(payload_str)
         except json.JSONDecodeError:
             continue
-        text = p.get("text", "").strip()
+        text = (p.get("text") or "").strip()
         if not text:
             continue
         # Determine direction

@@ -9,6 +9,10 @@ import type {
   DashboardEventsResponse,
   DashboardCcuResponse,
   QuotaHistoryResponse,
+  HealthEventsResponse,
+  FactsResponse,
+  Fact,
+  UsageResponse,
 } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -41,6 +45,8 @@ const DEFAULT_HEALTH: DashboardHealth = {
   signal_socket_age_seconds: null,
   // Session health
   session_health: { healthy: 0, degraded: 0, unhealthy: 0, degraded_sessions: [] },
+  // Quota velocity
+  velocity: null,
 };
 
 const DEFAULT_SESSIONS_RESPONSE: DashboardSessionsResponse = {
@@ -161,6 +167,28 @@ export async function getDashboardSkills(): Promise<DashboardSkillsResponse> {
   return withDefaults(DEFAULT_SKILLS_RESPONSE, data);
 }
 
+/** Fetch health diagnostic events from the bus */
+export async function getDashboardHealthEvents(
+  hours = 48,
+  limit = 100,
+): Promise<HealthEventsResponse> {
+  const data = await apiRequest<Partial<HealthEventsResponse>>(
+    "/api/dashboard/health-events",
+    { params: { hours, limit } },
+  );
+  return {
+    events: data.events ?? [],
+    summary: {
+      total: data.summary?.total ?? 0,
+      verdicts: data.summary?.verdicts ?? 0,
+      fatal_count: data.summary?.fatal_count ?? 0,
+      stuck_count: data.summary?.stuck_count ?? 0,
+      circuit_breaker_events: data.summary?.circuit_breaker_events ?? 0,
+      quota_alerts: data.summary?.quota_alerts ?? 0,
+    },
+  };
+}
+
 /** Fetch detailed usage metrics for a single skill */
 export async function getDashboardSkillDetail(
   skillName: string,
@@ -180,4 +208,79 @@ export async function getDashboardSkillDetail(
     recent_invocations: data.recent_invocations ?? [],
     skill_md: data.skill_md ?? null,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Facts / Knowledge Base
+// ---------------------------------------------------------------------------
+
+const DEFAULT_FACTS_RESPONSE: FactsResponse = {
+  facts: [],
+  total: 0,
+};
+
+const DEFAULT_USAGE_RESPONSE: UsageResponse = {
+  sessions: [],
+  total_cost: 0,
+  total_tokens: 0,
+  session_count: 0,
+  since: "",
+  _loading: false,
+  _updated_at: null,
+  _error: null,
+};
+
+/** Fetch all extracted facts */
+export async function getDashboardFacts(): Promise<FactsResponse> {
+  const data = await apiRequest<Partial<FactsResponse>>("/api/dashboard/facts");
+  return withDefaults(DEFAULT_FACTS_RESPONSE, data);
+}
+
+/** Create a new manual fact */
+export async function createFact(fact: {
+  contact: string;
+  fact_type: string;
+  summary: string;
+  details?: string;
+  confidence?: number;
+}): Promise<Fact> {
+  return apiRequest<Fact>("/api/dashboard/facts", {
+    method: "POST",
+    body: JSON.stringify(fact),
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+/** Update an existing fact */
+export async function updateFact(
+  id: number,
+  updates: Partial<Pick<Fact, "summary" | "details" | "fact_type" | "active" | "confidence">>,
+): Promise<Fact> {
+  return apiRequest<Fact>(`/api/dashboard/facts/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(updates),
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+/** Delete a fact */
+export async function deleteFact(id: number): Promise<void> {
+  await apiRequest<{ status: string }>(`/api/dashboard/facts/${id}`, {
+    method: "DELETE",
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Cost Analytics / Usage
+// ---------------------------------------------------------------------------
+
+/** Fetch per-session cost/usage data */
+export async function getDashboardUsage(since?: string): Promise<UsageResponse> {
+  const params: Record<string, string> = {};
+  if (since) params.since = since;
+  const data = await apiRequest<Partial<UsageResponse>>(
+    "/api/dashboard/usage",
+    { params },
+  );
+  return withDefaults(DEFAULT_USAGE_RESPONSE, data);
 }
