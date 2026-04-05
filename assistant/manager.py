@@ -2205,6 +2205,7 @@ class Manager:
         """Navigate Messages.app to the specified chat.
 
         Uses `open imessage://` URL scheme for individual chats.
+        For group chats, uses Messages sidebar search to find and select the chat.
         Skips navigation if already on the target chat.
         Returns True if navigation succeeded (or was unnecessary).
         """
@@ -2214,8 +2215,7 @@ class Manager:
 
         is_group = not chat_id.startswith("+")
         if is_group:
-            log.warning(f"IMESSAGE_UI | group chat navigation not yet supported: {chat_id}")
-            return False
+            return self._navigate_to_group_chat(chat_id)
 
         open_result = subprocess.run(
             ["open", f"imessage://{chat_id}"],
@@ -2229,6 +2229,133 @@ class Manager:
         time.sleep(1.0)
         self._current_chat_id = chat_id
         return True
+
+    def _navigate_to_group_chat(self, chat_id: str) -> bool:
+        """Navigate Messages.app to a group chat using sidebar search.
+
+        Looks up the group's display_name from chat.db, then uses AppleScript
+        to search the Messages sidebar and click the matching chat button.
+        Returns True if navigation succeeded.
+        """
+        # Look up group display name from chat.db
+        try:
+            conn = sqlite3.connect(f"file:{MESSAGES_DB}?mode=ro", uri=True)
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT display_name FROM chat WHERE chat_identifier = ?",
+                (chat_id,)
+            )
+            row = cursor.fetchone()
+            conn.close()
+            if not row or not row[0]:
+                log.error(f"IMESSAGE_UI | no display_name found for group {chat_id}")
+                return False
+            group_name = row[0]
+        except Exception as e:
+            log.error(f"IMESSAGE_UI | failed to look up group name for {chat_id}: {e}")
+            return False
+
+        log.info(f"IMESSAGE_UI | navigating to group chat '{group_name}' ({chat_id})")
+
+        # Use AppleScript to search sidebar and click the matching chat button.
+        # Steps: Escape any state → find search field → set search text →
+        # find button matching group name in results → click it → escape search.
+        # The search field description varies ("Search" or "search text field"),
+        # so we match with "contains earch".
+        script = f'''
+            tell application "Messages"
+                activate
+            end tell
+
+            delay 0.3
+
+            tell application "System Events"
+                tell process "Messages"
+                    -- Escape any existing state
+                    key code 53
+                    delay 0.3
+
+                    -- Find the search text field (description varies between OS versions)
+                    set allElements to entire contents of window 1
+                    set searchField to missing value
+                    repeat with elem in allElements
+                        try
+                            if class of elem is text field then
+                                set d to description of elem
+                                if d contains "earch" then
+                                    set searchField to elem
+                                    exit repeat
+                                end if
+                            end if
+                        end try
+                    end repeat
+
+                    if searchField is missing value then
+                        return "ERROR: Search field not found"
+                    end if
+
+                    -- Click search field and enter group name
+                    click searchField
+                    delay 0.5
+                    set value of searchField to "{group_name}"
+                    delay 1.5
+
+                    -- Find and click the button matching the group name in search results
+                    set allElements to entire contents of window 1
+                    repeat with elem in allElements
+                        try
+                            if class of elem is button then
+                                set d to description of elem
+                                if d is "{group_name}" then
+                                    click elem
+                                    delay 0.5
+                                    -- Clear the search with Escape
+                                    key code 53
+                                    delay 0.3
+                                    return name of window 1
+                                end if
+                            end if
+                        end try
+                    end repeat
+
+                    -- Fallback: escape and report failure
+                    key code 53
+                    delay 0.3
+                    return "ERROR: Group chat button not found in search results"
+                end tell
+            end tell
+        '''
+
+        try:
+            result = subprocess.run(
+                ["osascript", "-e", script],
+                capture_output=True, text=True, timeout=20
+            )
+            output = result.stdout.strip()
+
+            if result.returncode != 0 or output.startswith("ERROR:"):
+                log.error(f"IMESSAGE_UI | group chat navigation failed: {result.stderr or output}")
+                return False
+
+            # Verify window title matches the group name
+            if group_name.lower() in output.lower():
+                log.info(f"IMESSAGE_UI | navigated to group chat '{output}'")
+                self._current_chat_id = chat_id
+                return True
+            else:
+                log.warning(
+                    f"IMESSAGE_UI | window title mismatch: got '{output}', "
+                    f"expected '{group_name}' — proceeding anyway"
+                )
+                self._current_chat_id = chat_id
+                return True
+
+        except subprocess.TimeoutExpired:
+            log.error(f"IMESSAGE_UI | group chat navigation timed out for {chat_id}")
+            return False
+        except Exception as e:
+            log.error(f"IMESSAGE_UI | group chat navigation error: {e}")
+            return False
 
     def _execute_tapback(self, chat_id: str, reaction: str, guid: str) -> bool:
         """Execute a tapback reaction via Messages.app UI automation.
