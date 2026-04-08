@@ -21,6 +21,7 @@ import sqlite3
 import subprocess
 import logging
 import socket
+import tempfile
 import threading
 import queue
 import asyncio
@@ -2163,15 +2164,25 @@ class Manager:
         return ConsumerRunner(self._bus, configs)
 
     def _start_consumer_thread(self):
-        """Start ConsumerRunner in a background thread."""
+        """Start ConsumerRunner in a background thread with auto-restart."""
         def _run():
-            try:
-                log.info("ConsumerRunner started (background thread)")
-                self._consumer_runner.run_forever(poll_interval_ms=500)
-            except Exception as e:
-                log.error(f"ConsumerRunner crashed: {e}")
-                produce_event(self._producer, "system", "consumer.crashed",
-                    {"error": str(e)}, source="consumer")
+            while True:
+                try:
+                    log.info("ConsumerRunner started (background thread)")
+                    self._consumer_runner.run_forever(poll_interval_ms=500)
+                except Exception as e:
+                    log.error(f"ConsumerRunner crashed: {e} — restarting in 5s")
+                    produce_event(self._producer, "system", "consumer.crashed",
+                        {"error": str(e)}, source="consumer")
+                    import time
+                    time.sleep(5)
+                    # Rebuild consumer runner so it gets fresh DB connections
+                    try:
+                        self._consumer_runner = self._build_consumer_runner()
+                        log.info("ConsumerRunner rebuilt after crash, restarting loop")
+                    except Exception as rebuild_err:
+                        log.error(f"ConsumerRunner rebuild failed: {rebuild_err} — retrying in 30s")
+                        time.sleep(30)
 
         thread = threading.Thread(
             target=_run,
@@ -2594,11 +2605,57 @@ class Manager:
             except Exception as e:
                 log.error(f"COMPACTION_CONSUMER | error processing record: {e}")
 
+    # ── Quota cache file staleness threshold ──────────────────────────
+    # One fetch interval (15 min).  If the file is older than this, the
+    # self-heal path in _run_health_checks() will rewrite it from memory.
+    _QUOTA_CACHE_STALE_S = 15 * 60
+
+    @staticmethod
+    def _write_quota_cache(data: dict, source: str = "unknown") -> bool:
+        """Atomically write quota_cache.json.  Returns True on success.
+
+        Used by three callers (most → least reliable):
+          1. Health check direct-write   — PRIMARY path
+          2. Self-heal in health check   — BACKSTOP for persistent failures
+          3. Bus consumer                — NON-CRITICAL safety net
+
+        Concurrent writers are safe: os.replace() is atomic on POSIX, and
+        quota data changes at ~15-min granularity so any valid write within
+        a cycle is acceptable (last-write-wins).
+        """
+        quota_path = STATE_DIR / "quota_cache.json"
+        try:
+            payload = json.dumps({
+                "data": data,
+                "updated_at": datetime.now().isoformat(),
+                "error": None,
+            })
+            fd, tmp = tempfile.mkstemp(dir=STATE_DIR, suffix=".tmp")
+            try:
+                os.write(fd, payload.encode())
+                os.close(fd)
+                os.replace(tmp, str(quota_path))
+            except Exception:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+                raise
+            log.debug("QUOTA_CACHE | Written via %s to %s", source, quota_path)
+            return True
+        except Exception as e:
+            log.error("QUOTA_CACHE | Write via %s failed: %s", source, e)
+            return False
+
     def _handle_quota_event(self, records):
         """Bus consumer handler for quota.fetched events.
 
         Processes quota data in 4 independently error-isolated steps:
-        1. Write quota_cache.json for dispatch-api to serve
+        1. Write quota_cache.json (redundant with health check direct-write — safety net)
         2. Check thresholds → SMS alerts if crossed
         3. QuotaManager model degradation transitions
         4. Perf gauge metrics
@@ -2615,36 +2672,11 @@ class Manager:
 
             admin_phone = config.get("owner.phone")
 
-            # Step 1: Write quota_cache.json (for dispatch-api to serve to app)
-            try:
-                import tempfile
-                quota_path = STATE_DIR / "quota_cache.json"
-                # Strip backoff metadata from the cached data — only usage buckets
-                cache_data = {k: v for k, v in usage.items()
-                              if k not in ("backoff_seconds", "consecutive_failures")}
-                quota_payload = json.dumps({
-                    "data": cache_data,
-                    "updated_at": datetime.now().isoformat(),
-                    "error": None,
-                })
-                fd, tmp = tempfile.mkstemp(dir=STATE_DIR, suffix=".tmp")
-                try:
-                    os.write(fd, quota_payload.encode())
-                    os.close(fd)
-                    os.replace(tmp, str(quota_path))
-                except Exception:
-                    try:
-                        os.close(fd)
-                    except OSError:
-                        pass
-                    try:
-                        os.unlink(tmp)
-                    except OSError:
-                        pass
-                    raise
-                log.debug("QUOTA_CACHE | Written to %s", quota_path)
-            except Exception as e:
-                log.error("QUOTA_CACHE | Failed: %s", e)
+            # Step 1: Write quota_cache.json — redundant with health check
+            # direct-write, kept as safety net
+            cache_data = {k: v for k, v in usage.items()
+                          if k not in ("backoff_seconds", "consecutive_failures")}
+            self._write_quota_cache(cache_data, source="consumer")
 
             # Step 2: Threshold alerts (80/90/95% → SMS + bus event)
             try:
@@ -3655,6 +3687,24 @@ class Manager:
         if killed_any:
             time.sleep(1)  # Sync sleep OK — called from supervisor which handles async context
 
+        # Ensure dispatch-app web build exists (prevents 500 on root endpoint)
+        _web_index = DISPATCH_APP_DIR / "dist" / "index.html"
+        if not _web_index.is_file():
+            log.info("Dispatch app web build missing — running expo export")
+            try:
+                subprocess.run(
+                    ["npx", "expo", "export", "--platform", "web"],
+                    cwd=str(DISPATCH_APP_DIR),
+                    capture_output=True,
+                    timeout=120,
+                )
+                if _web_index.is_file():
+                    log.info("Dispatch app web build completed successfully")
+                else:
+                    log.warning("Dispatch app web build ran but index.html still missing")
+            except Exception as e:
+                log.warning(f"Dispatch app web build failed: {e}")
+
         try:
             proc = subprocess.Popen(
                 [str(UV), "run", str(DISPATCH_API_SCRIPT)],
@@ -4126,13 +4176,28 @@ class Manager:
             except Exception as e:
                 log.error(f"Disk space check failed: {e}")
 
-            # Quota monitoring — fetch and emit bus event (consumers handle the rest)
+            # Quota monitoring — fetch, write cache, emit bus event
+            #
+            # Quota cache write hierarchy (most → least reliable):
+            # 1. Direct write here after fetch_quota()  — PRIMARY path
+            # 2. Self-heal below if file mtime stale    — BACKSTOP
+            # 3. Bus consumer _handle_quota_event        — NON-CRITICAL for freshness
+            #    (its real job: alerts, model degradation, perf gauges)
+            #
+            # Quota data changes at ~15-min granularity.  Any valid write
+            # within a cycle is acceptable.  Concurrent atomic writes are
+            # safe (last-write-wins, no locking needed).
             try:
-                from assistant.health import fetch_quota, get_quota_backoff_state
+                from assistant.health import fetch_quota, get_quota_backoff_state, get_quota_cached
                 from assistant.bus_helpers import produce_event
                 usage, _quota_ts, is_fresh = fetch_quota()
                 if usage and is_fresh:
-                    # Emit quota.fetched bus event — consumers handle cache, alerts, degradation
+                    # Primary cache write — this alone prevents the 22h stale-cache incident
+                    cache_data = {k: v for k, v in usage.items()
+                                  if k not in ("backoff_seconds", "consecutive_failures")}
+                    if not self._write_quota_cache(cache_data, source="direct"):
+                        log.error("QUOTA_CACHE | Direct write failed — self-heal will backstop")
+                    # Bus event for consumer (alerts, degradation, perf gauges)
                     backoff = get_quota_backoff_state()
                     produce_event(self._producer, "system", "quota.fetched",
                                   payload={**usage, **backoff},
@@ -4154,6 +4219,29 @@ class Manager:
                                   source="daemon")
                 except Exception:
                     pass
+
+            # Self-heal: detect persistent write failures from prior cycles.
+            # A single stat() call checks if the file is stale; if so, rewrite
+            # from in-memory data.  This catches cases where BOTH the direct-write
+            # above AND the consumer have been failing across multiple cycles.
+            try:
+                quota_path = STATE_DIR / "quota_cache.json"
+                if quota_path.exists():
+                    file_age_s = time.time() - quota_path.stat().st_mtime
+                    if file_age_s > self._QUOTA_CACHE_STALE_S:
+                        cached_data, _cached_ts = get_quota_cached()
+                        if cached_data:
+                            log.warning("QUOTA_CACHE | File stale by %dm, self-healing from memory",
+                                        int(file_age_s / 60))
+                            if not self._write_quota_cache(cached_data, source="self-heal"):
+                                log.error("QUOTA_CACHE | Self-heal write also failed")
+                        else:
+                            # First boot or fetcher hasn't run yet — expected, not alarming
+                            log.debug("QUOTA_CACHE | File stale by %dm but no in-memory data yet",
+                                      int(file_age_s / 60))
+                # else: first boot, no file — will be created on first successful fetch
+            except Exception as e:
+                log.error("QUOTA_CACHE | Staleness check failed: %s", e)
 
             # Process circuit breaker actions from deep_health_check
             try:
@@ -5081,6 +5169,32 @@ You have 15 minutes. Work efficiently.
             self.metro_supervisor.run_forever(),
             name="supervisor-metro",
         )
+
+        # Start auth dialog monitor (Phase 1: detection + logging, dry_run only)
+        try:
+            from assistant.auth_dialog import AuthDialogMonitor, load_default_config
+            auth_cfg = load_default_config()
+
+            async def _auth_dialog_escalate(msg: str):
+                """Route auth dialog escalations — log + bus event for now.
+                Phase 4 will add SMS/dispatch-app notification."""
+                log.warning(f"AUTH_DIALOG_ESCALATE | {msg}")
+                produce_event(
+                    self._producer, "system", "auth_dialog.escalation",
+                    {"message": msg}, source="auth-dialog-monitor",
+                )
+
+            self._auth_dialog_monitor = AuthDialogMonitor(
+                config=auth_cfg,
+                producer=self._producer,
+                escalate_fn=_auth_dialog_escalate,
+            )
+            asyncio.create_task(
+                self._auth_dialog_monitor.start(),
+                name="auth-dialog-monitor-start",
+            )
+        except Exception as e:
+            log.warning(f"AUTH_DIALOG | Failed to start monitor: {e}")
 
         # Track last health check time — first check 30s after start (not full 300s wait)
         last_health_check = time.time() - 270  # 300 - 30 = triggers in 30s
