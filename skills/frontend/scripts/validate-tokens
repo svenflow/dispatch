@@ -1,0 +1,54 @@
+#!/bin/bash
+# Validates design-tokens.css against the canonical token allowlist.
+# Removes non-canonical variables and reports what was kept/removed.
+# Expected input: CSS :root block with --variable-name: value; lines.
+# Handles comments, blank lines, and whitespace variations.
+set -euo pipefail
+
+FILE="${1:-./design-tokens.css}"
+TOKEN_FILE="$(dirname "$0")/../impeccable/style/canonical-tokens.txt"
+MIN_TOKENS=5  # Minimum canonical tokens for valid extraction. Set to 5 because a useful design system needs at least color palette + font family.
+
+if [ ! -f "$FILE" ]; then
+  echo "Error: $FILE not found" >&2; exit 1
+fi
+if [ ! -f "$TOKEN_FILE" ]; then
+  echo "Error: canonical-tokens.txt not found at $TOKEN_FILE" >&2; exit 1
+fi
+
+ALLOWED=$(paste -sd'|' "$TOKEN_FILE")
+TEMP=$(mktemp)
+KEPT=0; REMOVED=0; REMOVED_NAMES=""
+
+while IFS= read -r line; do
+  if echo "$line" | grep -qE "^\s*--(${ALLOWED})\s*:"; then
+    echo "$line" >> "$TEMP"
+    KEPT=$((KEPT + 1))
+  elif echo "$line" | grep -qE "^\s*--[a-zA-Z]"; then
+    REMOVED=$((REMOVED + 1))
+    VARNAME=$(echo "$line" | grep -oE '\-\-[a-zA-Z][a-zA-Z0-9-]*')
+    REMOVED_NAMES="${REMOVED_NAMES}  Removed: ${VARNAME}\n"
+  else
+    echo "$line" >> "$TEMP"
+  fi
+done < "$FILE"
+
+mv "$TEMP" "$FILE"
+
+if [ "$REMOVED" -gt 0 ]; then
+  printf "$REMOVED_NAMES" >&2
+fi
+echo "Validated: $KEPT canonical, $REMOVED removed." >&2
+
+# Threshold: need at least MIN_TOKENS canonical tokens and at least 1 color or font
+HAS_COLOR=$(grep -cE '^\s*--color-' "$FILE" || true)
+HAS_FONT=$(grep -cE '^\s*--font-' "$FILE" || true)
+if [ "$HAS_COLOR" -eq 0 ] && [ "$HAS_FONT" -eq 0 ]; then
+  echo "WARNING: No color or font tokens. DESIGN.md may be malformed." >&2
+  exit 1
+fi
+if [ "$KEPT" -lt "$MIN_TOKENS" ]; then
+  echo "WARNING: Only $KEPT tokens extracted (minimum $MIN_TOKENS). Extraction may be incomplete." >&2
+  exit 1
+fi
+exit 0

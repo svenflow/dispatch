@@ -393,6 +393,87 @@ To reload the Chrome Control extension after making changes:
 echo '{"command": "_reload_extension"}' | nc -U /tmp/chrome_control_*.sock
 ```
 
+## Bypassing CSP with `debugger_eval` (Direct Socket)
+
+When sites block both `chrome js` (uses `chrome.scripting.executeScript` with `eval()` in MAIN world, blocked by CSP) **and** `iframe-click` doesn't find the element, you can use the `debugger_eval` command directly via the Unix socket. This uses CDP `Runtime.evaluate` in an **isolated world** with universal access, completely bypassing CSP.
+
+**When to use:** Sites like Bandcamp, PayPal, or any site where:
+- `chrome js` fails with CSP error ("unsafe-eval not allowed")
+- `chrome iframe-click` can't find the target element
+- `chrome click-by-name` clicks the wrong element (e.g., a text node instead of the button)
+- You need to read DOM state, click buttons, or set form values programmatically
+
+**How to call it (Python):**
+
+```python
+import json, socket
+
+SOCK_PATH = "/tmp/chrome_control_PROFILE_ID.sock"  # Find via: ls /tmp/chrome_control_*.sock
+
+def debugger_eval(tab_id, code):
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.connect(SOCK_PATH)
+    sock.settimeout(15)
+    msg = json.dumps({
+        "command": "debugger_eval",
+        "params": {"tabId": tab_id, "code": code}
+    }) + "\n"
+    sock.sendall(msg.encode())
+    data = b""
+    while b"\n" not in data:
+        data += sock.recv(65536)
+    result = json.loads(data.decode().strip())
+    sock.close()
+    return result.get("result", {})
+
+# Example: Click a button on a CSP-protected page
+r = debugger_eval(TAB_ID, """
+    var btn = document.querySelector('button.buy-link');
+    if (btn) { btn.click(); return 'clicked'; }
+    return 'not found';
+""")
+print(r)  # {'success': True, 'result': 'clicked'}
+```
+
+**Key details:**
+- Code runs in an **isolated world** (not MAIN world), so page-level JS variables (e.g., `window.Cart`) are NOT accessible
+- `return` statements work - the code is wrapped in a function
+- Only **synchronous** return values work. Promises return `{}`. Use `XMLHttpRequest` (sync mode) instead of `fetch` for HTTP calls
+- The socket path is `/tmp/chrome_control_*.sock` - find it with `ls /tmp/chrome_control_*.sock`
+- You can also call `navigate`, `screenshot`, and other commands through the same socket
+
+**Example: Bandcamp add-to-cart (CSP blocks all normal JS):**
+
+```python
+# 1. Navigate to track page
+send_command("navigate", tabId=TAB, url="https://artist.bandcamp.com/track/name")
+time.sleep(4)
+
+# 2. Click "Buy Digital Track" button
+debugger_eval(TAB, "document.querySelector('button.download-link.buy-link').click(); return 'ok';")
+time.sleep(1.5)
+
+# 3. Set price in dialog
+debugger_eval(TAB, """
+    var pi = document.querySelector('#userPrice');
+    pi.value = '1';
+    pi.dispatchEvent(new Event('input', {bubbles: true}));
+    pi.dispatchEvent(new Event('change', {bubbles: true}));
+    return 'price set';
+""")
+
+# 4. Click "Add to cart"
+debugger_eval(TAB, """
+    var btns = document.querySelectorAll('button');
+    for (var i = 0; i < btns.length; i++) {
+        if (btns[i].textContent.trim() === 'Add to cart') {
+            btns[i].click(); return 'added';
+        }
+    }
+    return 'not found';
+""")
+```
+
 ## Known Issues Fixed
 
 - **`iframe-type` double-typing bug (fixed):** The `iframeType` function previously sent a `keyDown` event with `text` properties AND a separate `char` event, both of which caused character insertion. This resulted in every character being typed twice. Fixed by changing `keyDown` to `rawKeyDown` and removing `text`/`unmodifiedText` from it, so only the `char` event inserts text.

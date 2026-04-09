@@ -30,11 +30,25 @@ export default function VideoPlayerScreen() {
     try {
       let localUri = uri;
       if (uri.startsWith("http")) {
-        const filename = `video_${Date.now()}.mp4`;
+        // Download to cache first, then detect extension from response headers
+        const tmpFilename = `video_${Date.now()}.mov`;
         const downloadResult = await FileSystem.downloadAsync(
           uri,
-          FileSystem.cacheDirectory + filename,
+          FileSystem.cacheDirectory + tmpFilename,
         );
+        // Use the content-disposition filename if available, otherwise keep .mov
+        const disposition = downloadResult.headers?.["content-disposition"] ?? "";
+        const filenameMatch = disposition.match(/filename="?([^";\s]+)"?/);
+        const serverExt = filenameMatch?.[1]?.match(/\.\w+$/)?.[0];
+        if (serverExt && serverExt !== ".mov") {
+          const correctedPath = downloadResult.uri.replace(/\.mov$/, serverExt);
+          try {
+            await FileSystem.moveAsync({ from: downloadResult.uri, to: correctedPath });
+            downloadResult.uri = correctedPath;
+          } catch {
+            // Ignore rename failure, .mov should still work
+          }
+        }
         localUri = downloadResult.uri;
       }
 
@@ -90,7 +104,7 @@ export default function VideoPlayerScreen() {
           <VideoView
             player={player}
             style={styles.video}
-            allowsFullscreen
+            fullscreenOptions={{ enable: true }}
             allowsPictureInPicture
             nativeControls
           />

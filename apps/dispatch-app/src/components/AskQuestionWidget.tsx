@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -16,6 +16,7 @@ import type {
   QuestionAnswer,
 } from "../api/types";
 import { branding } from "../config/branding";
+import { useWidgetState, clearWidgetState } from "../hooks/useWidgetState";
 
 type WidgetState = "unanswered" | "pending" | "answered";
 
@@ -23,6 +24,19 @@ type WidgetState = "unanswered" | "pending" | "answered";
 interface QuestionState {
   selected: Set<string>;
   otherText: string;
+}
+
+/** Serializable draft state for persistence */
+interface DraftState {
+  answers: Array<{ selected: string[]; otherText: string }>;
+}
+
+function draftFromQuestionStates(states: QuestionState[]): DraftState {
+  return { answers: states.map((s) => ({ selected: Array.from(s.selected), otherText: s.otherText })) };
+}
+
+function questionStatesFromDraft(draft: DraftState): QuestionState[] {
+  return draft.answers.map((a) => ({ selected: new Set(a.selected), otherText: a.otherText }));
 }
 
 interface AskQuestionWidgetProps {
@@ -63,11 +77,33 @@ export function AskQuestionWidget({
   const [widgetState, setWidgetState] = useState<WidgetState>(
     response ? "answered" : "unanswered",
   );
+
+  // Draft persistence — only used when unanswered (no server response yet)
+  const emptyDraft: DraftState = {
+    answers: data.questions.map(() => ({ selected: [], otherText: "" })),
+  };
+  const [draft, setDraft, draftLoaded] = useWidgetState<DraftState>(
+    messageId,
+    "ask_question",
+    emptyDraft,
+  );
+
   const [answers, setAnswers] = useState<QuestionState[]>(() =>
     response
       ? stateFromResponse(data, response)
       : data.questions.map(() => ({ selected: new Set<string>(), otherText: "" })),
   );
+
+  // Restore draft on load (only if not already answered)
+  useEffect(() => {
+    if (!draftLoaded || response) return;
+    // Check if draft has any selections
+    const hasSelections = draft.answers.some((a) => a.selected.length > 0);
+    if (hasSelections) {
+      setAnswers(questionStatesFromDraft(draft));
+    }
+  }, [draftLoaded]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<ScrollView>(null);
 
@@ -84,6 +120,16 @@ export function AskQuestionWidget({
       !a.otherText.trim(),
   );
   const canSave = allAnswered && !hasIncompleteOther;
+
+  // Persist draft whenever answers change (debounced by the hook)
+  const persistDraft = useCallback(
+    (states: QuestionState[]) => {
+      if (!response) {
+        setDraft(draftFromQuestionStates(states));
+      }
+    },
+    [response, setDraft],
+  );
 
   const handleOptionPress = useCallback(
     (questionIndex: number, label: string) => {
@@ -112,10 +158,11 @@ export function AskQuestionWidget({
           const otherText = label === "Other" ? current.otherText : "";
           next[questionIndex] = { ...current, selected: newSelected, otherText };
         }
+        persistDraft(next);
         return next;
       });
     },
-    [isAnswered, isPending, data.questions],
+    [isAnswered, isPending, data.questions, persistDraft],
   );
 
   const handleOtherTextChange = useCallback(
@@ -124,10 +171,11 @@ export function AskQuestionWidget({
       setAnswers((prev) => {
         const next = [...prev];
         next[questionIndex] = { ...next[questionIndex], otherText: text };
+        persistDraft(next);
         return next;
       });
     },
-    [isAnswered, isPending],
+    [isAnswered, isPending, persistDraft],
   );
 
   const handleSave = useCallback(async () => {
@@ -144,6 +192,8 @@ export function AskQuestionWidget({
     try {
       await onRespond({ answers: formAnswers });
       setWidgetState("answered");
+      // Clear persisted draft after successful submission
+      clearWidgetState("ask_question", messageId);
     } catch {
       setWidgetState("unanswered");
       setError("Failed to send. Tap Save to retry.");

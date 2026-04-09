@@ -124,3 +124,51 @@ Map issues to appropriate commands:
 - Report false positives without verification
 
 Remember: You're a quality auditor with exceptional attention to detail. Document systematically, prioritize ruthlessly, and provide clear paths to improvement. A good audit makes fixing easy.
+## DESIGN.md Compliance (When Active)
+
+When `./DESIGN.md` exists in the project root, add a **6th audit dimension** — Design System Compliance:
+
+### 6. Design System Compliance
+
+Check the codebase against the active DESIGN.md. Use a **two-tier severity model**:
+
+**Violations** (must fix — blocks `/polish`):
+- Wrong font family (e.g., using Inter when DESIGN.md specifies Geist)
+- Color clearly outside the defined palette
+- Pattern explicitly listed in the DESIGN.md's "Don'ts" section
+
+**Warnings** (advisory — doesn't block `/polish`):
+- Border-radius slightly off the defined scale
+- Shadow approach different but not explicitly forbidden
+- Spacing not matching the base unit exactly
+
+**Checks to run:**
+- **Palette compliance**: Are all colors in the codebase found in the DESIGN.md palette?
+- **Font families**: Do heading/body/mono fonts match the DESIGN.md spec?
+- **Border-radius scale**: Do radius values match the system's defined scale?
+- **Shadow approach**: Does the shadow system match (e.g., ring shadows vs drop shadows)?
+- **Do's and Don'ts**: Are the explicit guidelines from section 7 respected?
+- **Responsive breakpoints**: If the DESIGN.md defines breakpoints, are they followed?
+
+### design-audit.json
+
+When DESIGN.md compliance checks are run, write results to `./design-audit.json`:
+
+```json
+{
+  "audited_at": "2026-04-05T11:30:00Z",
+  "violations": 2,
+  "warnings": 3,
+  "details": [
+    "VIOLATION: Wrong font family - using Inter, DESIGN.md specifies Geist",
+    "VIOLATION: Off-palette color #ff0000 not in design system",
+    "WARNING: Button radius 12px, design system specifies 8px",
+    "WARNING: Using drop shadow, design system prefers ring shadows",
+    "WARNING: Spacing 20px not on 8px base grid"
+  ]
+}
+```
+
+This file is **gitignored** (ephemeral build artifact). `/polish` reads it to gate the polish step — violations must be fixed before polish can proceed.
+
+**If no `./DESIGN.md` exists**, skip this entire section. Only the standard 5 audit dimensions apply.

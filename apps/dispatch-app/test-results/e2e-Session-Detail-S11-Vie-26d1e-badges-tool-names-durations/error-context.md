@@ -1,0 +1,125 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e9]:
+  - generic [ref=e14]:
+    - generic [ref=e15]:
+      - generic [ref=e16]:
+        - textbox "Search…" [ref=e17]
+        - generic [ref=e19] [cursor=pointer]: + New
+      - generic [ref=e22]:
+        - button "dashboard in app, on it 👍" [ref=e25] [cursor=pointer]:
+          - generic [ref=e26]:
+            - img [ref=e29]
+            - generic [ref=e31]:
+              - generic [ref=e32]:
+                - generic [ref=e33]: dashboard in app
+                - generic [ref=e34]: just now
+              - generic [ref=e36]: on it 👍
+        - button "Email Integration, Email → Bus Producer ⏳ Plan ⬜ Build ⬜ Test ⬜ Deliver" [ref=e44] [cursor=pointer]:
+          - generic [ref=e45]:
+            - generic [ref=e48]: EI
+            - generic [ref=e50]:
+              - generic [ref=e51]:
+                - generic [ref=e52]: Email Integration
+                - generic [ref=e53]: 1m ago
+              - generic [ref=e55]: Email → Bus Producer ⏳ Plan ⬜ Build ⬜ Test ⬜ Deliver
+        - 'button "Debug Flash Issue, build done, running e2e tests now. the change is really clean: **4 files, ~5 lines of actual logic:** - `showThinking = isThinking` in 3 UI files (was `isThinking && !sdkComplete`) - `setIsComplete(false)` reset in useSdkEvents - dev-mode 60s stuck warning in all 3 UI files implementation review scored **9.0** ✅ waiting on e2e tests..." [ref=e63] [cursor=pointer]':
+          - generic [ref=e64]:
+            - generic [ref=e67]: DF
+            - generic [ref=e69]:
+              - generic [ref=e70]:
+                - generic [ref=e71]: Debug Flash Issue
+                - generic [ref=e72]: 2m ago
+              - generic [ref=e74]: "build done, running e2e tests now. the change is really clean: **4 files, ~5 lines of actual logic:** - `showThinking = isThinking` in 3 UI files (was `isThinking && !sdkComplete`) - `setIsComplete(false)` reset in useSdkEvents - dev-mode 60s stuck warning in all 3 UI files implementation review scored **9.0** ✅ waiting on e2e tests..."
+        - button "widget, oh good call — right now tapping the map itself opens Google Maps, so you can't scroll it. fixing that now — i'll add a separate \"Open in Google Maps\" link below so the map stays interactive" [ref=e82] [cursor=pointer]:
+          - generic [ref=e83]:
+            - generic [ref=e86]: W
+            - generic [ref=e88]:
+              - generic [ref=e89]:
+                - generic [ref=e90]: widget
+                - generic [ref=e91]: 23m ago
+              - generic [ref=e93]: oh good call — right now tapping the map itself opens Google Maps, so you can't scroll it. fixing that now — i'll add a separate "Open in Google Maps" link below so the map stays interactive
+        - 'button "skill loading metrics, done ✓ removed from skill detail page: - **Avg Duration** stat card - **Error Rate** stat card - error/success dots on recent invocations - duration on recent invocations just shows Total Uses + Last Used now, and recent invocations show timestamp + session name only. force-close the app to pick up the changes." [ref=e96] [cursor=pointer]':
+          - generic [ref=e97]:
+            - generic [ref=e100]: SL
+            - generic [ref=e101]:
+              - generic [ref=e102]:
+                - generic [ref=e103]: skill loading metrics
+                - generic [ref=e104]: 6h ago
+              - generic [ref=e106]: "done ✓ removed from skill detail page: - **Avg Duration** stat card - **Error Rate** stat card - error/success dots on recent invocations - duration on recent invocations just shows Total Uses + Last Used now, and recent invocations show timestamp + session name only. force-close the app to pick up the changes."
+        - 'button "[App] Settings, fixed it! the soul edit endpoint was broken because the API server had crashed and restarted without the Anthropic API key in its environment. **root cause**: the edit endpoint was spawning a Python subprocess that called `anthropic.Anthropic()` directly — which needs `ANTHROPIC_API_KEY` in the env. the server doesn''t have that key (it''s only available inside Claude Code sessions via OAuth). **fix**: switched the endpoint to use `claude --print` CLI instead, which handles its own OAuth auth. no API key needed, and it''s more reliable since it uses the same auth mechanism as everything else. tested and working — try editing your soul again 👆" [ref=e109] [cursor=pointer]':
+          - generic [ref=e110]:
+            - generic [ref=e113]: AS
+            - generic [ref=e114]:
+              - generic [ref=e115]:
+                - generic [ref=e116]: "[App] Settings"
+                - generic [ref=e117]: 6h ago
+              - generic [ref=e119]: "fixed it! the soul edit endpoint was broken because the API server had crashed and restarted without the Anthropic API key in its environment. **root cause**: the edit endpoint was spawning a Python subprocess that called `anthropic.Anthropic()` directly — which needs `ANTHROPIC_API_KEY` in the env. the server doesn't have that key (it's only available inside Claude Code sessions via OAuth). **fix**: switched the endpoint to use `claude --print` CLI instead, which handles its own OAuth auth. no API key needed, and it's more reliable since it uses the same auth mechanism as everything else. tested and working — try editing your soul again 👆"
+        - button "Remove Dashboard Title, 👍" [ref=e122] [cursor=pointer]:
+          - generic [ref=e123]:
+            - generic [ref=e126]: RD
+            - generic [ref=e127]:
+              - generic [ref=e128]:
+                - generic [ref=e129]: Remove Dashboard Title
+                - generic [ref=e130]: 6h ago
+              - generic [ref=e132]: 👍
+        - 'button "watchdog / health, on it 👍 three changes: 1. add haiku reasoning text to the bus event payload 2. update the API to return it 3. show it in the app as an expandable detail on verdict rows" [ref=e135] [cursor=pointer]':
+          - generic [ref=e136]:
+            - generic [ref=e139]: WH
+            - generic [ref=e140]:
+              - generic [ref=e141]:
+                - generic [ref=e142]: watchdog / health
+                - generic [ref=e143]: 6h ago
+              - generic [ref=e145]: "on it 👍 three changes: 1. add haiku reasoning text to the bus event payload 2. update the API to return it 3. show it in the app as an expandable detail on verdict rows"
+        - button "Explore Features, nah, this session was the feature brainstorm (v5) and then building A1 (Knowledge Base) + B5 (Cost Analytics). widgets weren't part of the brainstorm list. were you thinking of a different chat? or do you want to add new widget types as a feature here?" [ref=e148] [cursor=pointer]:
+          - generic [ref=e149]:
+            - generic [ref=e152]: EF
+            - generic [ref=e153]:
+              - generic [ref=e154]:
+                - generic [ref=e155]: Explore Features
+                - generic [ref=e156]: 6h ago
+              - generic [ref=e158]: nah, this session was the feature brainstorm (v5) and then building A1 (Knowledge Base) + B5 (Cost Analytics). widgets weren't part of the brainstorm list. were you thinking of a different chat? or do you want to add new widget types as a feature here?
+        - 'button "OTA Update Strategy, done — updated both skills: 1. **ios-app skill** — added \"Always Use Debug Configuration for Device Builds\" section + \"How Metro Over Tailscale Works\" explaining the `RCTMetroHost` + AppDelegate mechanism 2. **dispatch-api skill** — rewrote the `serve-ipa` section to always use `-configuration Debug`, with full build steps and a warning to never use Release for serve-ipa builds shouldn''t get this wrong again 🤞" [ref=e161] [cursor=pointer]':
+          - generic [ref=e162]:
+            - generic [ref=e165]: OU
+            - generic [ref=e166]:
+              - generic [ref=e167]:
+                - generic [ref=e168]: OTA Update Strategy
+                - generic [ref=e169]: 8h ago
+              - generic [ref=e171]: "done — updated both skills: 1. **ios-app skill** — added \"Always Use Debug Configuration for Device Builds\" section + \"How Metro Over Tailscale Works\" explaining the `RCTMetroHost` + AppDelegate mechanism 2. **dispatch-api skill** — rewrote the `serve-ipa` section to always use `-configuration Debug`, with full build steps and a warning to never use Release for serve-ipa builds shouldn't get this wrong again 🤞"
+        - button "Check QR Readers, https://sven-pages-worker.nicklaudethorat.workers.dev/ascii-qr/" [ref=e174] [cursor=pointer]:
+          - generic [ref=e175]:
+            - generic [ref=e178]: CQ
+            - generic [ref=e179]:
+              - generic [ref=e180]:
+                - generic [ref=e181]: Check QR Readers
+                - generic [ref=e182]: Mar 29
+              - generic [ref=e184]: https://sven-pages-worker.nicklaudethorat.workers.dev/ascii-qr/
+        - button "[App] messaging UX, hey Nikhil! 👋" [ref=e187] [cursor=pointer]:
+          - generic [ref=e188]:
+            - generic [ref=e191]: AM
+            - generic [ref=e192]:
+              - generic [ref=e193]:
+                - generic [ref=e194]: "[App] messaging UX"
+                - generic [ref=e195]: Mar 29
+              - generic [ref=e197]: hey Nikhil! 👋
+        - button "Build Rename Modal, nope, left that to you since restarting kills this session. want me to restart now?" [ref=e200] [cursor=pointer]:
+          - generic [ref=e201]:
+            - generic [ref=e204]: BR
+            - generic [ref=e205]:
+              - generic [ref=e206]:
+                - generic [ref=e207]: Build Rename Modal
+                - generic [ref=e208]: Mar 29
+              - generic [ref=e210]: nope, left that to you since restarting kills this session. want me to restart now?
+    - generic [ref=e213]:
+      - generic [ref=e214]: 💬
+      - generic [ref=e215]: Select a conversation
+      - generic [ref=e216]: Choose a chat from the list or create a new one
+  - generic [ref=e217]:
+    - generic [ref=e219] [cursor=pointer]: Chats
+    - generic [ref=e221] [cursor=pointer]: agents
+    - generic [ref=e223] [cursor=pointer]: voice
+    - generic [ref=e225] [cursor=pointer]: Dashboard
+    - generic [ref=e227] [cursor=pointer]: Settings
+```

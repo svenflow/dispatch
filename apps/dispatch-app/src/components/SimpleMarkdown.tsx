@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useMemo } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import * as WebBrowser from "expo-web-browser";
 import { branding } from "../config/branding";
@@ -20,8 +20,8 @@ interface Props {
 }
 
 /** Top-level component: splits text into blocks and renders each. */
-export function SimpleMarkdown({ children, onMaxLineWidth }: Props) {
-  const blocks = parseBlocks(children);
+export const SimpleMarkdown = React.memo(function SimpleMarkdown({ children, onMaxLineWidth }: Props) {
+  const blocks = useMemo(() => parseBlocks(children), [children]);
   return (
     <View>
       {blocks.map((block, i) => (
@@ -29,7 +29,7 @@ export function SimpleMarkdown({ children, onMaxLineWidth }: Props) {
       ))}
     </View>
   );
-}
+});
 
 // ---------------------------------------------------------------------------
 // Block-level parsing

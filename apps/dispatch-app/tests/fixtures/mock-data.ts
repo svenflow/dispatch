@@ -84,6 +84,7 @@ export const MOCK_MESSAGES: ChatMessage[] = [
     content: "Hello, can you help me?",
     audio_url: null,
     image_url: null,
+    video_url: null,
     created_at: twoHoursAgo,
   },
   {
@@ -92,6 +93,7 @@ export const MOCK_MESSAGES: ChatMessage[] = [
     content: "Of course! How can I assist you today?",
     audio_url: "/audio/msg-2",
     image_url: null,
+    video_url: null,
     created_at: oneHourAgo,
   },
   {
@@ -100,6 +102,7 @@ export const MOCK_MESSAGES: ChatMessage[] = [
     content: "Check this image",
     audio_url: null,
     image_url: "/images/user-upload.jpg",
+    video_url: null,
     created_at: thirtyMinAgo,
   },
   {
@@ -108,6 +111,7 @@ export const MOCK_MESSAGES: ChatMessage[] = [
     content: LONG_MESSAGE,
     audio_url: null,
     image_url: null,
+    video_url: null,
     created_at: tenMinAgo,
   },
   {
@@ -116,6 +120,7 @@ export const MOCK_MESSAGES: ChatMessage[] = [
     content: "Here is the image result.",
     audio_url: null,
     image_url: "/images/result.png",
+    video_url: null,
     created_at: fiveMinAgo,
   },
 ];
@@ -137,6 +142,7 @@ export const MOCK_FAILED_MESSAGE: ChatMessage = {
   content: "This message failed to send",
   audio_url: null,
   image_url: null,
+  video_url: null,
   created_at: fiveMinAgo,
 };
 

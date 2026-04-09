@@ -54,3 +54,4 @@ No Chrome or API key required.
 - **NEVER truncate URLs when sharing over SMS.** Always send the full FlightAware URL so it's clickable.
 - The `--json` flag outputs structured data for programmatic use
 - **Times are DST-aware using `zoneinfo` (e.g., `America/Los_Angeles`, `America/New_York`).** Never use hardcoded UTC offset arithmetic — use proper timezone objects so times automatically shift during DST transitions.
+- **Cross-check times before sharing publicly.** Verify displayed time against raw unix timestamps in `--json` output before posting in group chats or SMS. DST edge cases can cause displayed times to be off by 1 hour. To verify: run with `--json` and confirm the human-readable time matches `datetime.fromtimestamp(unix_ts, tz=timezone)` for the destination airport's timezone.

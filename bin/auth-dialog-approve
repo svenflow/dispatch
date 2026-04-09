@@ -1,0 +1,397 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["pyyaml", "pyobjc-framework-ApplicationServices", "pyobjc-framework-Quartz"]
+# ///
+"""
+Auth Dialog Approve/Deny CLI.
+
+Usage:
+  auth-dialog-approve approve <dialog_id>   # Click OK/Allow
+  auth-dialog-approve deny <dialog_id>      # Click Cancel
+  auth-dialog-approve always <dialog_id>    # Approve + add auto_approve rule to config
+  auth-dialog-approve list                  # List pending escalated dialogs
+  auth-dialog-approve info <dialog_id>      # Show dialog details
+
+Pending dialogs are stored in ~/dispatch/state/auth_dialog_pending.json.
+Resolution happens directly via PyObjC — no daemon IPC needed.
+"""
+
+import argparse
+import json
+import os
+import re
+import signal
+import subprocess
+import sys
+from pathlib import Path
+
+STATE_DIR = Path.home() / "dispatch" / "state"
+CONFIG_PATH = Path.home() / "dispatch" / "config.local.yaml"
+PENDING_PATH = STATE_DIR / "auth_dialog_pending.json"
+BUS_DB = STATE_DIR / "bus.db"
+
+
+def _get_producer():
+    """Create a bus producer for logging events."""
+    try:
+        sys.path.insert(0, str(Path.home() / "dispatch"))
+        from bus.bus import Bus
+        bus = Bus(db_path=BUS_DB)
+        return bus, bus.producer()
+    except Exception as e:
+        print(f"Warning: could not init bus producer: {e}", file=sys.stderr)
+        return None, None
+
+
+def _log_resolution(action: str, dialog_id: str, dialog_info: dict, success: bool,
+                    rule_added: str | None = None):
+    """Log approve/deny/always action to bus."""
+    bus, producer = _get_producer()
+    if not producer:
+        return
+    try:
+        from assistant.bus_helpers import produce_event
+        payload = {
+            "action": action,  # "approved", "denied", "always_approved"
+            "dialog_id": dialog_id,
+            "success": success,
+            "dialog": {
+                "app": dialog_info.get("app_name", ""),
+                "action": dialog_info.get("action", ""),
+                "dialog_type": dialog_info.get("dialog_type", ""),
+            },
+        }
+        if rule_added:
+            payload["rule_added"] = rule_added
+        produce_event(
+            producer, "system", f"auth_dialog.{action}", payload,
+            source="auth-dialog-approve",
+        )
+        # Give writer thread a moment to flush
+        import time
+        time.sleep(0.1)
+    except Exception as e:
+        print(f"Warning: bus logging failed: {e}", file=sys.stderr)
+    finally:
+        if producer:
+            try:
+                producer.close()
+            except Exception:
+                pass
+        if bus:
+            try:
+                bus.close()
+            except Exception:
+                pass
+
+
+def load_pending() -> dict:
+    try:
+        return json.loads(PENDING_PATH.read_text())
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def save_pending(pending: dict):
+    PENDING_PATH.parent.mkdir(parents=True, exist_ok=True)
+    PENDING_PATH.write_text(json.dumps(pending, indent=2))
+
+
+def remove_pending(dialog_id: str):
+    pending = load_pending()
+    pending.pop(dialog_id, None)
+    save_pending(pending)
+
+
+def find_security_agent_pid() -> int | None:
+    """Find SecurityAgent PID via Quartz."""
+    from Quartz import CGWindowListCopyWindowInfo, kCGWindowListOptionAll, kCGNullWindowID
+    for w in CGWindowListCopyWindowInfo(kCGWindowListOptionAll, kCGNullWindowID) or []:
+        if w.get("kCGWindowOwnerName") == "SecurityAgent":
+            return w.get("kCGWindowOwnerPID")
+    return None
+
+
+def click_button(title: str) -> bool:
+    """Click a button on the SecurityAgent dialog via PyObjC."""
+    import ApplicationServices as AS
+
+    pid = find_security_agent_pid()
+    if not pid:
+        print("No SecurityAgent dialog found")
+        return False
+
+    app = AS.AXUIElementCreateApplication(pid)
+    err, children = AS.AXUIElementCopyAttributeValue(app, "AXChildren", None)
+    if err != 0 or not children:
+        print("Could not access SecurityAgent AX children")
+        return False
+
+    # Find the window
+    window = children[0] if children else None
+    if not window:
+        print("No SecurityAgent window found")
+        return False
+
+    # Find children of window
+    err, win_children = AS.AXUIElementCopyAttributeValue(window, "AXChildren", None)
+    if err != 0 or not win_children:
+        print("No window children found")
+        return False
+
+    # Find button by title
+    for child in win_children:
+        err, role = AS.AXUIElementCopyAttributeValue(child, "AXRole", None)
+        if err == 0 and role == "AXButton":
+            err, btn_title = AS.AXUIElementCopyAttributeValue(child, "AXTitle", None)
+            if err == 0 and btn_title == title:
+                AS.AXUIElementPerformAction(child, "AXPress")
+                print(f"Clicked '{title}' button")
+                return True
+
+    print(f"Button '{title}' not found")
+    return False
+
+
+def enter_password_and_click_ok() -> bool:
+    """Enter password from keychain and click OK."""
+    import ApplicationServices as AS
+
+    pid = find_security_agent_pid()
+    if not pid:
+        print("No SecurityAgent dialog found")
+        return False
+
+    # Get password from keychain
+    result = subprocess.run(
+        ["security", "find-generic-password", "-l", "mac-admin-password", "-w"],
+        capture_output=True, timeout=10,
+    )
+    if result.returncode != 0:
+        print("Could not retrieve password from keychain")
+        return False
+
+    password = result.stdout.decode().strip()
+
+    app = AS.AXUIElementCreateApplication(pid)
+    err, children = AS.AXUIElementCopyAttributeValue(app, "AXChildren", None)
+    if err != 0 or not children:
+        print("Could not access SecurityAgent AX children")
+        return False
+
+    window = children[0]
+    err, win_children = AS.AXUIElementCopyAttributeValue(window, "AXChildren", None)
+    if err != 0 or not win_children:
+        print("No window children found")
+        return False
+
+    # Find text fields and OK button
+    text_fields = []
+    ok_button = None
+    for child in win_children:
+        err, role = AS.AXUIElementCopyAttributeValue(child, "AXRole", None)
+        if err != 0:
+            continue
+        if role == "AXTextField":
+            text_fields.append(child)
+        elif role == "AXButton":
+            err, title = AS.AXUIElementCopyAttributeValue(child, "AXTitle", None)
+            if err == 0 and title == "OK":
+                ok_button = child
+
+    if not text_fields:
+        print("No text fields found")
+        return False
+    if not ok_button:
+        print("No OK button found")
+        return False
+
+    # Password field is typically the last text field (or index 1)
+    pw_field = text_fields[-1] if len(text_fields) > 1 else text_fields[0]
+
+    # Set password
+    AS.AXUIElementSetAttributeValue(pw_field, "AXFocused", True)
+    AS.AXUIElementSetAttributeValue(pw_field, "AXValue", "")
+    err = AS.AXUIElementSetAttributeValue(pw_field, "AXValue", password)
+
+    if err != 0:
+        print(f"AXValue set failed (err={err}) — trying keystroke fallback")
+        # Keystroke fallback via axctl
+        axctl = Path.home() / ".claude" / "skills" / "axctl" / "scripts" / "axctl"
+        if axctl.exists():
+            proc = subprocess.run(
+                [str(axctl), "type", "SecurityAgent", "--stdin"],
+                input=password.encode(),
+                capture_output=True,
+                env={"HOME": os.environ.get("HOME", ""), "PATH": os.environ.get("PATH", "")},
+                timeout=10,
+            )
+            if proc.returncode != 0:
+                print("Keystroke fallback failed")
+                return False
+
+    # Click OK
+    AS.AXUIElementPerformAction(ok_button, "AXPress")
+
+    # Clear password from memory (best effort)
+    del password
+
+    print("Password entered and OK clicked")
+    return True
+
+
+def add_auto_approve_rule(dialog_info: dict) -> bool:
+    """Add auto_approve rule to config.local.yaml and SIGHUP daemon."""
+    import yaml
+
+    app_name = dialog_info.get("app_name", "")
+    action = dialog_info.get("action", "")
+    dialog_type = dialog_info.get("dialog_type", "unknown")
+
+    rule_name = re.sub(r"[^a-z0-9_]", "_", app_name.lower()).strip("_")
+    if not rule_name:
+        rule_name = f"rule_{dialog_info.get('dialog_id', 'unknown')[:8]}"
+
+    new_rule = {"name": rule_name}
+    if app_name:
+        new_rule["app_pattern"] = re.escape(app_name)
+    if action:
+        new_rule["action_pattern"] = re.escape(action)
+    if dialog_type == "password_auth":
+        new_rule["dialog_type"] = dialog_type
+        new_rule["action"] = "approve_with_password"
+    elif dialog_type == "allow_deny":
+        new_rule["dialog_type"] = dialog_type
+        new_rule["action"] = "approve"
+
+    config_text = CONFIG_PATH.read_text()
+    config = yaml.safe_load(config_text)
+
+    monitor_cfg = config.setdefault("auth_dialog_monitor", {})
+    auto_approve = monitor_cfg.setdefault("auto_approve", [])
+
+    for existing in auto_approve:
+        if existing.get("name") == rule_name:
+            print(f"Rule '{rule_name}' already exists")
+            return True
+
+    auto_approve.append(new_rule)
+    CONFIG_PATH.write_text(yaml.dump(config, default_flow_style=False, sort_keys=False))
+    print(f"Added auto_approve rule: {rule_name}")
+    print(f"  {json.dumps(new_rule)}")
+
+    # SIGHUP daemon
+    try:
+        result = subprocess.run(
+            [str(Path.home() / "dispatch" / "bin" / "claude-assistant"), "status"],
+            capture_output=True, text=True, timeout=5,
+        )
+        m = re.search(r"PID\s+(\d+)", result.stdout)
+        if m:
+            os.kill(int(m.group(1)), signal.SIGHUP)
+            print(f"Config reloaded (SIGHUP sent to daemon PID {m.group(1)})")
+    except Exception as e:
+        print(f"Warning: could not SIGHUP daemon: {e}", file=sys.stderr)
+    return True
+
+
+def cmd_approve(args):
+    dialog_info = load_pending().get(args.dialog_id, {})
+    dialog_type = dialog_info.get("dialog_type", "unknown")
+
+    if dialog_type == "password_auth":
+        success = enter_password_and_click_ok()
+    else:
+        success = click_button("OK") or click_button("Allow")
+
+    _log_resolution("approved", args.dialog_id, dialog_info, success)
+
+    if success:
+        remove_pending(args.dialog_id)
+        print(f"✅ Dialog {args.dialog_id[:12]} approved")
+    else:
+        print(f"❌ Failed to approve dialog {args.dialog_id[:12]}")
+        sys.exit(1)
+
+
+def cmd_deny(args):
+    dialog_info = load_pending().get(args.dialog_id, {})
+    success = click_button("Cancel")
+
+    _log_resolution("denied", args.dialog_id, dialog_info, success)
+
+    if success:
+        remove_pending(args.dialog_id)
+        print(f"❌ Dialog {args.dialog_id[:12]} denied (Cancel clicked)")
+    else:
+        print(f"Failed to deny dialog")
+        sys.exit(1)
+
+
+def cmd_always(args):
+    pending = load_pending()
+    dialog_info = pending.get(args.dialog_id)
+    if not dialog_info:
+        print(f"Error: dialog {args.dialog_id} not found in pending")
+        sys.exit(1)
+
+    # First approve
+    dialog_type = dialog_info.get("dialog_type", "unknown")
+    if dialog_type == "password_auth":
+        success = enter_password_and_click_ok()
+    else:
+        success = click_button("OK") or click_button("Allow")
+
+    if success:
+        remove_pending(args.dialog_id)
+        add_auto_approve_rule(dialog_info)
+        rule_name = re.sub(r"[^a-z0-9_]", "_", dialog_info.get("app_name", "").lower()).strip("_")
+        _log_resolution("always_approved", args.dialog_id, dialog_info, True, rule_added=rule_name)
+        print(f"✅ Approved + rule added for future auto-approval")
+    else:
+        _log_resolution("always_approved", args.dialog_id, dialog_info, False)
+        print(f"❌ Failed to approve dialog — rule NOT added")
+        sys.exit(1)
+
+
+def cmd_list(args):
+    pending = load_pending()
+    if not pending:
+        print("No pending auth dialogs")
+        return
+    for did, info in pending.items():
+        print(f"  {did[:12]}  {info.get('app_name', '?')} — {info.get('action', '?')} [{info.get('dialog_type', '?')}]")
+
+
+def cmd_info(args):
+    info = load_pending().get(args.dialog_id)
+    if not info:
+        print(f"Dialog {args.dialog_id} not found")
+        return
+    print(json.dumps(info, indent=2))
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Auth Dialog Approve/Deny CLI")
+    sub = parser.add_subparsers(dest="command")
+
+    for name in ("approve", "deny", "always"):
+        p = sub.add_parser(name)
+        p.add_argument("dialog_id")
+
+    sub.add_parser("list")
+    p_info = sub.add_parser("info")
+    p_info.add_argument("dialog_id")
+
+    args = parser.parse_args()
+    if not args.command:
+        parser.print_help()
+        sys.exit(1)
+
+    {"approve": cmd_approve, "deny": cmd_deny, "always": cmd_always,
+     "list": cmd_list, "info": cmd_info}[args.command](args)
+
+
+if __name__ == "__main__":
+    main()

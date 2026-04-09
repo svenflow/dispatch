@@ -4,6 +4,7 @@
 # dependencies = [
 #     "fastapi",
 #     "uvicorn",
+#     "websockets",
 #     "pydantic",
 #     "python-multipart",
 #     "pyyaml",
@@ -41,7 +42,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Generator, Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, File, UploadFile, Form
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, File, UploadFile, Form, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -119,25 +120,50 @@ app.add_middleware(
 )
 
 
-@app.middleware("http")
-async def log_requests(request: Request, call_next):
-    """Log all incoming requests and responses."""
-    start_time = time.time()
+class LoggingMiddleware:
+    """Raw ASGI middleware for request/response logging.
+    Uses raw ASGI (not BaseHTTPMiddleware) so WebSocket connections pass through cleanly.
+    BaseHTTPMiddleware intercepts WS upgrades and routes them as HTTP, bypassing WS handlers.
+    """
 
-    # Log incoming request
-    logger.info(f"→ {request.method} {request.url.path} from {request.client.host if request.client else 'unknown'}")
+    def __init__(self, app_instance):
+        self._app = app_instance
 
-    # Process request
-    response = await call_next(request)
+    async def __call__(self, scope, receive, send):
+        # WebSocket connections: pass through without any HTTP wrapping
+        if scope["type"] == "websocket":
+            await self._app(scope, receive, send)
+            return
 
-    # Log response
-    duration_ms = (time.time() - start_time) * 1000
-    logger.info(f"← {request.method} {request.url.path} → {response.status_code} ({duration_ms:.1f}ms)")
+        if scope["type"] != "http":
+            await self._app(scope, receive, send)
+            return
 
-    # Perf logging
-    log_perf("request_ms", duration_ms, endpoint=request.url.path, method=request.method, status=response.status_code)
+        # HTTP request logging
+        method = scope.get("method", "?")
+        path = scope.get("path", "?")
+        client = scope.get("client")
+        host = client[0] if client else "unknown"
 
-    return response
+        logger.info(f"→ {method} {path} from {host}")
+        start_time = time.time()
+
+        status_code = [None]
+
+        async def send_wrapper(message):
+            if message["type"] == "http.response.start":
+                status_code[0] = message.get("status")
+            await send(message)
+
+        await self._app(scope, receive, send_wrapper)
+
+        duration_ms = (time.time() - start_time) * 1000
+        if status_code[0]:
+            logger.info(f"← {method} {path} → {status_code[0]} ({duration_ms:.1f}ms)")
+            log_perf("request_ms", duration_ms, endpoint=path, method=method, status=status_code[0])
+
+
+app.add_middleware(LoggingMiddleware)
 
 
 # Config
@@ -648,9 +674,10 @@ async def inject_prompt_to_app_session(transcript: str, chat_id: str = "voice", 
 async def root():
     """Serve dispatch-app index.html at root"""
     _app_dist = Path(__file__).parent.parent.parent / "apps" / "dispatch-app" / "dist"
-    if _app_dist.is_dir():
+    _index = _app_dist / "index.html"
+    if _index.is_file():
         from starlette.responses import FileResponse as _FR
-        return _FR(_app_dist / "index.html")
+        return _FR(_index)
     from fastapi.responses import HTMLResponse
     return HTMLResponse("<h1>Dispatch</h1><p>App not built yet. Run: npx expo export --platform web</p>")
 
@@ -2393,6 +2420,48 @@ async def stream_chats(token: str = None):
     return EventSourceResponse(event_stream())
 
 
+@app.websocket("/chats/ws")
+async def stream_chats_ws(websocket: WebSocket, token: str = None):
+    """WebSocket stream of chat list updates. Preferred over SSE for React Native clients.
+    Sends full chat list on connect and on any change. Keepalive ping every 15s."""
+    try:
+        validate_token(token)
+    except HTTPException:
+        await websocket.close(code=4001)
+        return
+
+    await websocket.accept()
+    logger.info(f"WebSocket /chats/ws: client connected from {websocket.client.host}")
+
+    last_fingerprint = ""
+    last_ping_time = time.time()
+
+    try:
+        while True:
+            try:
+                chats = _fetch_chat_list()
+                fp = _chat_list_fingerprint(chats)
+
+                if fp != last_fingerprint:
+                    last_fingerprint = fp
+                    await websocket.send_text(json.dumps({"type": "chats", "chats": chats}))
+
+                # Keepalive ping every 15s to prevent relay/proxy timeouts
+                if time.time() - last_ping_time >= 15:
+                    last_ping_time = time.time()
+                    await websocket.send_text(json.dumps({"type": "keepalive"}))
+
+            except WebSocketDisconnect:
+                raise
+            except Exception as e:
+                logger.error(f"chats/ws: error: {e}")
+
+            await asyncio.sleep(2)
+
+    except WebSocketDisconnect:
+        logger.info(f"WebSocket /chats/ws: client disconnected")
+
+
 @app.post("/chats/{chat_id}/open")
 async def mark_chat_opened(chat_id: str, token: str = None):
     """Mark a chat as opened (updates last_opened_at for unread tracking)."""
@@ -2425,6 +2494,49 @@ async def mark_chat_unread(chat_id: str, token: str = None):
         raise HTTPException(status_code=404, detail="Chat not found")
     conn.close()
     return {"ok": True}
+
+
+@app.get("/unread-count")
+async def get_unread_count(token: str = None):
+    """Return the number of unread chats (for APNs badge count).
+
+    Loaded from unread_count.sql (single source of truth); send-push reads the same file.
+    The equivalent JS logic lives in useChatList.ts _isServerUnread().
+    """
+    validate_token(token)
+    # Load shared SQL — single source of truth for unread definition
+    sql_path = Path(__file__).parent / "unread_count.sql"
+    try:
+        sql = sql_path.read_text()
+    except FileNotFoundError:
+        # TODO: remove inline fallback after 2026-07-01 once deployment is stable
+        logger.warning(f"unread_count.sql not found at {sql_path}, using inline fallback")
+        sql = """SELECT COUNT(*) FROM (
+            SELECT c.id FROM chats c
+            LEFT JOIN (
+                SELECT chat_id, created_at, role,
+                       ROW_NUMBER() OVER (PARTITION BY chat_id ORDER BY created_at DESC) AS rn
+                FROM messages
+            ) m ON m.chat_id = c.id AND m.rn = 1
+            WHERE c.marked_unread = 1
+               OR (m.role = 'assistant' AND m.created_at IS NOT NULL
+                   AND (c.last_opened_at IS NULL OR m.created_at > c.last_opened_at))
+        )"""
+    conn = get_db()  # opened after auth to avoid resource waste on bad tokens
+    try:
+        conn.execute("PRAGMA busy_timeout = 2000")
+        # send-push also queries this DB directly at push time; the app re-syncs
+        # on foreground. Brief divergence between the two reads is acceptable.
+        row = conn.execute(sql).fetchone()
+        count = row[0] if row else 0
+    except Exception as e:
+        logger.error(f"Unread count query failed: {e}")
+        count = 0
+    finally:
+        conn.close()
+    count = max(count, 0)
+    logger.info(f"Unread count: {count}")
+    return {"count": count}
 
 
 @app.patch("/chats/{chat_id}")
@@ -4037,6 +4149,192 @@ async def dashboard_skill_detail(skill_name: str, days: int = 30, conn: sqlite3.
     return result
 
 
+@app.get("/api/config/toggles")
+async def config_toggles_get():
+    """Read current config toggles (reminders_enabled, tasks_enabled)."""
+    cfg = _load_dispatch_config()
+    return {
+        "reminders_enabled": cfg.get("reminders_enabled", True),
+        "tasks_enabled": cfg.get("tasks_enabled", True),
+    }
+
+
+@app.post("/api/config/toggles")
+async def config_toggles_set(request: Request):
+    """Update config toggles. Body: {"reminders_enabled": bool} or {"tasks_enabled": bool}."""
+    body = await request.json()
+    config_path = Path.home() / "dispatch" / "config.local.yaml"
+    if not config_path.exists():
+        raise HTTPException(status_code=404, detail="config.local.yaml not found")
+
+    with open(config_path) as f:
+        cfg = yaml.safe_load(f) or {}
+
+    changed = {}
+    for key in ("reminders_enabled", "tasks_enabled"):
+        if key in body and isinstance(body[key], bool):
+            cfg[key] = body[key]
+            changed[key] = body[key]
+
+    if not changed:
+        raise HTTPException(status_code=400, detail="No valid toggle fields provided")
+
+    with open(config_path, "w") as f:
+        yaml.dump(cfg, f, default_flow_style=False, sort_keys=False)
+
+    return {"updated": changed, **{k: cfg.get(k, True) for k in ("reminders_enabled", "tasks_enabled")}}
+
+
+# All known message backends — used to present per-backend toggle switches.
+_ALL_BACKENDS = ["imessage", "signal", "discord"]
+
+# Editable fields in config.local.yaml (dot-path → type).
+# Fields not in this set are read-only in the UI.
+_CONFIG_EDITABLE_FIELDS: dict[str, str] = {
+    "reminders_enabled": "bool",
+    "tasks_enabled": "bool",
+    "disabled_backends": "string_list",
+    "disabled_chats": "string_list",
+    "bloomin8.keepalive_enabled": "bool",
+    "bloomin8.keepalive_interval": "number",
+    "metro.port": "number",
+    "metro.host": "string",
+    "dispatch_api.port": "number",
+    "dispatch_api.host": "string",
+}
+
+
+def _flatten_config(cfg: dict, prefix: str = "") -> list[dict]:
+    """Flatten a nested dict into a list of {key, value, editable, type} items."""
+    items = []
+    for k, v in cfg.items():
+        full_key = f"{prefix}.{k}" if prefix else k
+
+        # Replace disabled_backends list with per-backend toggle switches
+        if full_key == "disabled_backends":
+            disabled = v if isinstance(v, list) else []
+            for backend in _ALL_BACKENDS:
+                items.append({
+                    "key": f"backend_enabled.{backend}",
+                    "value": backend not in disabled,
+                    "type": "bool",
+                    "editable": True,
+                })
+            continue
+
+        if isinstance(v, dict):
+            items.extend(_flatten_config(v, full_key))
+        elif isinstance(v, list):
+            editable_info = _CONFIG_EDITABLE_FIELDS.get(full_key)
+            items.append({
+                "key": full_key,
+                "value": v,
+                "type": editable_info or "list",
+                "editable": editable_info is not None,
+            })
+        else:
+            editable_info = _CONFIG_EDITABLE_FIELDS.get(full_key)
+            val_type = editable_info or ("bool" if isinstance(v, bool) else "number" if isinstance(v, (int, float)) else "string")
+            items.append({
+                "key": full_key,
+                "value": v,
+                "type": val_type,
+                "editable": editable_info is not None,
+            })
+    return items
+
+
+def _group_config_items(items: list[dict]) -> list[dict]:
+    """Group flat config items into sections by top-level key."""
+    from collections import OrderedDict
+    sections: OrderedDict[str, list[dict]] = OrderedDict()
+    for item in items:
+        parts = item["key"].split(".", 1)
+        section = parts[0]
+        sections.setdefault(section, []).append(item)
+    return [{"section": s, "items": its} for s, its in sections.items()]
+
+
+@app.get("/api/config")
+async def config_get():
+    """Return full config.local.yaml as grouped, flattened items with editability."""
+    cfg = _load_dispatch_config()
+    items = _flatten_config(cfg)
+    sections = _group_config_items(items)
+    return {"sections": sections}
+
+
+def _set_nested(cfg: dict, key: str, value):
+    """Set a dotted key path in a nested dict."""
+    parts = key.split(".")
+    d = cfg
+    for p in parts[:-1]:
+        d = d.setdefault(p, {})
+    d[parts[-1]] = value
+
+
+@app.post("/api/config")
+async def config_set(request: Request):
+    """Update one or more editable config fields. Body: {"key": "dotted.path", "value": any}."""
+    body = await request.json()
+    config_path = Path.home() / "dispatch" / "config.local.yaml"
+    if not config_path.exists():
+        raise HTTPException(status_code=404, detail="config.local.yaml not found")
+
+    key = body.get("key")
+    value = body.get("value")
+
+    # Handle virtual backend_enabled.* keys → maps to disabled_backends list
+    if key and key.startswith("backend_enabled."):
+        backend = key.split(".", 1)[1]
+        if backend not in _ALL_BACKENDS:
+            raise HTTPException(status_code=400, detail=f"Unknown backend: {backend}")
+        if not isinstance(value, bool):
+            raise HTTPException(status_code=400, detail="Value must be a boolean")
+
+        with open(config_path) as f:
+            cfg = yaml.safe_load(f) or {}
+
+        disabled = cfg.get("disabled_backends", []) or []
+        if value:
+            # Enable = remove from disabled list
+            disabled = [b for b in disabled if b != backend]
+        else:
+            # Disable = add to disabled list
+            if backend not in disabled:
+                disabled.append(backend)
+        cfg["disabled_backends"] = disabled
+
+        with open(config_path, "w") as f:
+            yaml.dump(cfg, f, default_flow_style=False, sort_keys=False)
+
+        return {"ok": True, "key": key, "value": value}
+
+    if not key or key not in _CONFIG_EDITABLE_FIELDS:
+        raise HTTPException(status_code=400, detail=f"Field '{key}' is not editable")
+
+    field_type = _CONFIG_EDITABLE_FIELDS[key]
+    # Validate type
+    if field_type == "bool" and not isinstance(value, bool):
+        raise HTTPException(status_code=400, detail=f"Field '{key}' must be a boolean")
+    if field_type == "number" and not isinstance(value, (int, float)):
+        raise HTTPException(status_code=400, detail=f"Field '{key}' must be a number")
+    if field_type == "string" and not isinstance(value, str):
+        raise HTTPException(status_code=400, detail=f"Field '{key}' must be a string")
+    if field_type == "string_list" and not isinstance(value, list):
+        raise HTTPException(status_code=400, detail=f"Field '{key}' must be a list")
+
+    with open(config_path) as f:
+        cfg = yaml.safe_load(f) or {}
+
+    _set_nested(cfg, key, value)
+
+    with open(config_path, "w") as f:
+        yaml.dump(cfg, f, default_flow_style=False, sort_keys=False)
+
+    return {"ok": True, "key": key, "value": value}
+
+
 @app.get("/api/dashboard/tasks")
 async def dashboard_tasks():
     """Reminders + recent task events."""
@@ -4638,6 +4936,22 @@ def _usage_fetch(since: str | None = None):
                 else:
                     contact_name = short or sid
 
+            # Build model_breakdown as a dict keyed by model name.
+            # ccusage returns modelBreakdowns as a list; frontend expects
+            # Record<string, {cost, input_tokens, output_tokens}> (see UsageSession in types.ts).
+            model_breakdown: dict = {}
+            for mb in (s.get("modelBreakdowns") or []):
+                # ccusage uses "modelName"; fall back to "model" for forward-compat
+                model_name = mb.get("modelName") or mb.get("model")
+                if not model_name:
+                    logger.warning(f"Usage: model breakdown entry missing modelName in session {sid}")
+                    model_name = "unknown"
+                model_breakdown[model_name] = {
+                    "cost": mb.get("cost") or 0,
+                    "input_tokens": mb.get("inputTokens") or 0,
+                    "output_tokens": mb.get("outputTokens") or 0,
+                }
+
             enriched.append({
                 "session_id": sid,
                 "contact_name": contact_name,
@@ -4645,19 +4959,20 @@ def _usage_fetch(since: str | None = None):
                 "tier": tier,
                 "source": source,
                 "type": session_type,
-                "cost": round(cost, 2),
-                "tokens": tokens,
-                "input_tokens": s.get("inputTokens", 0),
-                "output_tokens": s.get("outputTokens", 0),
-                "cache_creation_tokens": s.get("cacheCreationTokens", 0),
-                "cache_read_tokens": s.get("cacheReadTokens", 0),
+                "total_cost": round(cost or 0, 2),
+                "total_input_tokens": s.get("inputTokens", 0),
+                "total_output_tokens": s.get("outputTokens", 0),
+                "total_cache_write_tokens": s.get("cacheCreationTokens", 0),
+                "total_cache_read_tokens": s.get("cacheReadTokens", 0),
+                "model_breakdown": model_breakdown,
+                # ccusage doesn't emit conversationCount; default 0 (unknown)
+                "conversation_count": s.get("conversationCount", 0),
                 "models": s.get("modelsUsed", []),
-                "model_breakdowns": s.get("modelBreakdowns", []),
                 "last_activity": s.get("lastActivity"),
             })
 
         # Sort by cost descending
-        enriched.sort(key=lambda x: x["cost"], reverse=True)
+        enriched.sort(key=lambda x: x["total_cost"], reverse=True)
 
         result = {
             "sessions": enriched,

@@ -1,0 +1,48 @@
+#!/bin/bash
+# Updates the local DESIGN.md cache from the awesome-design-md repo.
+# Usage: update-design-cache [--check]
+#   --check: report if cache is stale without modifying
+set -euo pipefail
+
+CACHE_DIR="$(dirname "$0")/../design-md"
+CHECK_ONLY=false
+
+if [ "${1:-}" = "--check" ]; then
+  CHECK_ONLY=true
+fi
+
+if ! command -v git &>/dev/null; then
+  echo "Error: git is not installed." >&2; exit 1
+fi
+
+if [ ! -d "$CACHE_DIR/.git" ]; then
+  echo "Error: Cache not found at $CACHE_DIR. Clone first:" >&2
+  echo "  git clone --depth 1 https://github.com/VoltAgent/awesome-design-md.git $CACHE_DIR" >&2
+  exit 1
+fi
+
+cd "$CACHE_DIR"
+
+if $CHECK_ONLY; then
+  LOCAL=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+  REMOTE=$(git ls-remote origin HEAD 2>/dev/null | cut -f1 || echo "fetch-failed")
+  if [ "$REMOTE" = "fetch-failed" ]; then
+    echo "Warning: Could not reach remote. Local cache at $LOCAL." >&2
+    exit 0
+  fi
+  if [ "$LOCAL" = "$REMOTE" ]; then
+    echo "Cache is up to date ($LOCAL)."
+  else
+    echo "Cache is stale. Local: ${LOCAL:0:8}, Remote: ${REMOTE:0:8}. Run update-design-cache to refresh."
+  fi
+  exit 0
+fi
+
+if ! git fetch origin 2>/dev/null; then
+  echo "Error: Failed to fetch from remote. Check network connection." >&2
+  exit 1
+fi
+
+git reset --hard origin/main >/dev/null 2>&1
+COUNT=$(ls -1d design-md/*/ 2>/dev/null | wc -l | tr -d ' ')
+echo "Design cache updated. $COUNT design systems available."

@@ -13,7 +13,7 @@ import { Stack } from "expo-router";
 import { getDashboardQuotaHistory } from "@/src/api/dashboard";
 import type { QuotaHistoryResponse, QuotaSnapshot, QuotaHeavySession } from "@/src/api/types";
 import { Dimensions } from "react-native";
-import { quotaBarColor, formatResetTime, formatTimestamp, computeQuotaPrediction, predictionIcon, predictionColor } from "@/src/utils/quotaHelpers";
+import { quotaBarColor, formatResetTime, formatResetTimeInfo, formatTimestamp, computeQuotaPrediction, predictionIcon, predictionColor } from "@/src/utils/quotaHelpers";
 
 /** Force a re-render every `ms` so time-relative text stays fresh */
 function useTick(ms = 30_000) {
@@ -50,11 +50,11 @@ function ExpandedBar({
 }: {
   label: string;
   utilization: number;
-  resetsAt: string;
+  resetsAt?: string;
   subtitle?: string;
 }) {
   const prediction = resetsAt ? computeQuotaPrediction(label, utilization, resetsAt) : null;
-  const showAlert = prediction != null && (prediction.status === "tight" || prediction.status === "danger");
+  const showAlert = prediction != null && prediction.status === "danger";
   return (
     <View style={barStyles.barRow}>
       <View style={barStyles.labelRow}>
@@ -83,11 +83,14 @@ function ExpandedBar({
       </View>
       {subtitle ? (
         <Text style={barStyles.resetText}>{subtitle}</Text>
-      ) : (
-        <Text style={barStyles.resetText}>
-          Resets in {formatResetTime(resetsAt)}
-        </Text>
-      )}
+      ) : resetsAt ? (() => {
+        const info = formatResetTimeInfo(resetsAt);
+        return (
+          <Text style={[barStyles.resetText, !info.isFresh && { color: "#f59e0b" }]}>
+            {info.isFresh ? `Resets in ${info.text}` : info.text}
+          </Text>
+        );
+      })() : null}
     </View>
   );
 }
@@ -118,7 +121,7 @@ const barStyles = StyleSheet.create({
     fontSize: 12,
   },
   percentage: {
-    color: "#fafafa",
+    color: "#a1a1aa",
     fontSize: 15,
     fontWeight: "600",
     fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
@@ -133,140 +136,10 @@ const barStyles = StyleSheet.create({
     height: "100%",
     borderRadius: 6,
   },
-  barPct: {
-    color: "#a1a1aa",
-    fontSize: 14,
-    fontWeight: "600",
-    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
-    width: 38,
-    textAlign: "right",
-  },
   resetText: {
     color: "#71717a",
     fontSize: 12,
     marginTop: 4,
-  },
-  predictionText: {
-    fontSize: 12,
-  },
-});
-
-// ---------------------------------------------------------------------------
-// Inline mini sparkline (compact, placed under each quota bar)
-// ---------------------------------------------------------------------------
-
-const INLINE_SPARK_HEIGHT = 36;
-const SPARK_USABLE_HEIGHT = INLINE_SPARK_HEIGHT - 6;
-
-function MiniSparkline({
-  snapshots,
-  field,
-  rangeHours,
-}: {
-  snapshots: QuotaSnapshot[];
-  field: "five_hour" | "seven_day";
-  rangeHours?: number;
-}) {
-  const [containerWidth, setContainerWidth] = useState(
-    Dimensions.get("window").width - 64,
-  );
-
-  if (snapshots.length < 2) return null;
-
-  const barWidth = Math.max(2, Math.floor(containerWidth / snapshots.length) - 1);
-  const gap = 1;
-  const lastIdx = snapshots.length - 1;
-  const firstTs = formatTimestamp(snapshots[0].ts, rangeHours);
-  const lastTs = formatTimestamp(snapshots[lastIdx].ts, rangeHours);
-  const thresholdBottom = 0.8 * SPARK_USABLE_HEIGHT;
-
-  return (
-    <View style={miniStyles.wrapper}>
-      <View
-        style={miniStyles.container}
-        onLayout={(e) => setContainerWidth(e.nativeEvent.layout.width)}
-      >
-        <View style={[miniStyles.thresholdLine, { bottom: thresholdBottom + 3 }]}>
-          <Text style={miniStyles.thresholdLabel}>80%</Text>
-        </View>
-        <View style={miniStyles.barsRow}>
-          {snapshots.map((snap, i) => {
-            const val = snap[field] ?? 0;
-            const barHeight = Math.max(1, (val / 100) * SPARK_USABLE_HEIGHT);
-            const isLast = i === lastIdx;
-            const color = snap[field] === null ? "#3f3f46" : quotaBarColor(val);
-            return (
-              <View
-                key={i}
-                style={{
-                  width: barWidth,
-                  height: barHeight,
-                  backgroundColor: color,
-                  borderRadius: 1,
-                  marginRight: gap,
-                  alignSelf: "flex-end",
-                  opacity: isLast ? 1 : 0.65,
-                }}
-              />
-            );
-          })}
-        </View>
-      </View>
-      <View style={miniStyles.timeRow}>
-        <Text style={miniStyles.timeLabel}>{firstTs}</Text>
-        <Text style={miniStyles.timeLabel}>{lastTs}</Text>
-      </View>
-    </View>
-  );
-}
-
-const miniStyles = StyleSheet.create({
-  wrapper: {
-    marginHorizontal: 16,
-    marginTop: 8,
-    marginBottom: 4,
-  },
-  container: {
-    height: INLINE_SPARK_HEIGHT,
-    backgroundColor: "#1c1c1f",
-    borderRadius: 6,
-    paddingHorizontal: 6,
-    paddingVertical: 3,
-    justifyContent: "flex-end",
-    overflow: "hidden",
-  },
-  barsRow: {
-    flexDirection: "row",
-    alignItems: "flex-end",
-    flex: 1,
-  },
-  thresholdLine: {
-    position: "absolute",
-    left: 6,
-    right: 6,
-    height: 1,
-    backgroundColor: "#71717a",
-    flexDirection: "row",
-    alignItems: "center",
-  },
-  thresholdLabel: {
-    position: "absolute",
-    right: 0,
-    color: "#71717a",
-    fontSize: 7,
-    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
-    top: -9,
-  },
-  timeRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginTop: 2,
-    paddingHorizontal: 2,
-  },
-  timeLabel: {
-    color: "#52525b",
-    fontSize: 9,
-    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
   },
 });
 
@@ -310,7 +183,7 @@ function BurnRateChart({ snapshots }: { snapshots: QuotaSnapshot[] }) {
 
   return (
     <View style={burnStyles.wrapper}>
-      <Text style={burnStyles.label}>BURN RATE</Text>
+      <Text style={burnStyles.label}>QUOTA BURN RATE</Text>
       <Text style={burnStyles.subtitle}>5-hour quota block consumption rate (%/hr)</Text>
       <View style={burnStyles.chartRow}>
         {/* Y-axis labels */}
@@ -358,14 +231,14 @@ function BurnRateChart({ snapshots }: { snapshots: QuotaSnapshot[] }) {
         </View>
       </View>
       <View style={burnStyles.legendRow}>
-        <Text style={miniStyles.timeLabel}>{firstTs}</Text>
+        <Text style={burnStyles.timeLabel}>{firstTs}</Text>
         <View style={burnStyles.legendCenter}>
           <View style={[burnStyles.legendDot, { backgroundColor: "#ef4444" }]} />
-          <Text style={burnStyles.legendText}>burning</Text>
+          <Text style={burnStyles.legendText}>using</Text>
           <View style={[burnStyles.legendDot, { backgroundColor: "#22c55e" }]} />
-          <Text style={burnStyles.legendText}>recovering</Text>
+          <Text style={burnStyles.legendText}>freed</Text>
         </View>
-        <Text style={miniStyles.timeLabel}>{lastTs}</Text>
+        <Text style={burnStyles.timeLabel}>{lastTs}</Text>
       </View>
     </View>
   );
@@ -454,6 +327,11 @@ const burnStyles = StyleSheet.create({
     fontSize: 9,
     fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
     marginRight: 6,
+  },
+  timeLabel: {
+    color: "#52525b",
+    fontSize: 9,
+    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
   },
 });
 
@@ -577,13 +455,12 @@ function HeavyHitters({ sessions, rangeHours }: { sessions: QuotaHeavySession[];
               )}
             </View>
             {w.sessions.map((s, si) => {
-              const rawName = s.display_name || s.session_name.replace(/^(imessage|signal|dispatch-app)\//, "");
-              const shortName = rawName.length > 20 ? rawName.slice(0, 8) + "…" + rawName.slice(-8) : rawName;
+              const displayName = s.display_name || s.session_name.replace(/^(imessage|signal|dispatch-app)\//, "");
               return (
                 <View key={si} style={hhStyles.sessionRow}>
                   <View style={hhStyles.sessionInfo}>
-                    <Text style={hhStyles.sessionName} numberOfLines={1}>
-                      {shortName}
+                    <Text style={hhStyles.sessionName} numberOfLines={1} ellipsizeMode="tail">
+                      {displayName}
                     </Text>
                     <Text style={hhStyles.sessionMeta}>
                       {s.event_count} events · {s.duration_sec.toFixed(0)}s
@@ -731,12 +608,12 @@ export default function QuotaDetailScreen() {
 
   // Build quota bars from current_quota
   const quota = data?.current_quota;
-  const bars: Array<{ label: string; utilization: number; resetsAt: string; sparkField?: "five_hour" | "seven_day" }> = [];
+  const bars: Array<{ label: string; utilization: number; resetsAt: string }> = [];
   if (quota?.five_hour) {
-    bars.push({ label: "5-Hour", utilization: quota.five_hour.utilization, resetsAt: quota.five_hour.resets_at, sparkField: "five_hour" });
+    bars.push({ label: "5-Hour", utilization: quota.five_hour.utilization, resetsAt: quota.five_hour.resets_at });
   }
   if (quota?.seven_day) {
-    bars.push({ label: "7-Day", utilization: quota.seven_day.utilization, resetsAt: quota.seven_day.resets_at, sparkField: "seven_day" });
+    bars.push({ label: "7-Day", utilization: quota.seven_day.utilization, resetsAt: quota.seven_day.resets_at });
   }
   if (quota?.seven_day_opus) {
     bars.push({ label: "7-Day Opus", utilization: quota.seven_day_opus.utilization, resetsAt: quota.seven_day_opus.resets_at });
@@ -823,9 +700,6 @@ export default function QuotaDetailScreen() {
                         utilization={bar.utilization}
                         resetsAt={bar.resetsAt}
                       />
-                      {bar.sparkField && snapshots.length >= 2 && (
-                        <MiniSparkline snapshots={snapshots} field={bar.sparkField} rangeHours={hours} />
-                      )}
                     </React.Fragment>
                   ))
                 ) : (
@@ -842,7 +716,6 @@ export default function QuotaDetailScreen() {
                   <ExpandedBar
                     label="Extra Usage"
                     utilization={extraUsage.utilization}
-                    resetsAt=""
                     subtitle={`$${((extraUsage.used_credits ?? 0) / 100).toFixed(2)} of $${((extraUsage.monthly_limit ?? 0) / 100).toFixed(2)} · Resets monthly`}
                   />
                 </View>
@@ -852,16 +725,18 @@ export default function QuotaDetailScreen() {
               <SparklineChart
                 snapshots={snapshots}
                 field="five_hour"
-                label="5-HOUR QUOTA OVER TIME"
+                label="5-HOUR QUOTA"
                 height={120}
                 rangeHours={hours}
+                resetsAt={quota?.five_hour?.resets_at}
               />
               <SparklineChart
                 snapshots={snapshots}
                 field="seven_day"
-                label="ROLLING 7-DAY QUOTA OVER TIME"
+                label="7-DAY QUOTA"
                 height={120}
                 rangeHours={hours}
+                resetsAt={quota?.seven_day?.resets_at}
               />
 
               {/* Burn rate chart */}

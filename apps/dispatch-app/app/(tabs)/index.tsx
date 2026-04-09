@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Animated,
   FlatList,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -86,12 +87,10 @@ export default function ChatListScreen() {
     };
   }, [searchQuery]);
 
-  // Force re-render when screen gains focus (e.g., coming back from chat detail)
+  // Refresh data when screen gains focus (e.g., coming back from chat detail)
   // This ensures optimistic read state is reflected immediately
-  const [, setFocusCount] = useState(0);
   useFocusEffect(
     useCallback(() => {
-      setFocusCount((c) => c + 1);
       loadConversations();
     }, [loadConversations]),
   );
@@ -172,6 +171,8 @@ export default function ChatListScreen() {
 
   const renderItem = useCallback(
     ({ item }: { item: Conversation }) => {
+      // Returns a boolean primitive from module-level Maps — stable across
+      // renders, won't defeat React.memo on ChatRow.
       const unread = isCurrentlyUnread(item);
 
       return (
@@ -216,10 +217,13 @@ export default function ChatListScreen() {
           leftThreshold={40}
           friction={2}
         >
+          {/* ChatRow composes per-item callbacks internally via useCallback.
+              Parent passes stable callbacks that accept a Conversation — no external
+              cache needed, no stale-closure risk. */}
           <ChatRow
             conversation={item}
-            onPress={() => handleOpenChat(item)}
-            onLongPress={() => handleDeleteChat(item)}
+            onPress={handleOpenChat}
+            onLongPress={handleDeleteChat}
             isUnread={unread}
           />
         </Swipeable>
@@ -376,6 +380,16 @@ export default function ChatListScreen() {
             }
             keyboardDismissMode="on-drag"
             keyboardShouldPersistTaps="handled"
+            // Perf: render ~3 screens ahead (windowSize = 2*N+1 screens)
+            // instead of default 21. Rows are variable-height (1-2 line
+            // previews, typing dots) so getItemLayout can't be used.
+            windowSize={7}
+            maxToRenderPerBatch={10}
+            // 15 rows ≈ 2 screens on a 375pt phone (~68pt row height).
+            // May under-render on large tablets — acceptable tradeoff vs TTI.
+            initialNumToRender={15}
+            // removeClippedSubviews can cause blank cells on iOS — only use on Android
+            removeClippedSubviews={Platform.OS === "android"}
           />
           <AnimatedFab onPress={handleNewChat} />
         </>

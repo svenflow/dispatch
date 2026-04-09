@@ -32,6 +32,16 @@ Understand the current state and goals:
 
 **CRITICAL**: Polish is the last step, not the first. Don't polish work that's not functionally complete.
 
+## DESIGN.md Compliance Gate
+
+**Before polishing**, check for `./design-audit.json` in the project root:
+
+- **If it exists and `violations > 0`**: Refuse to polish. Report: "Cannot polish — [N] design violations remain. Run `/audit` to see details, fix violations, then re-run `/audit` to clear."
+- **If it exists and `violations == 0`**: Check staleness — if `audited_at` is more than 24 hours ago OR if `design-tokens.css` modification time is newer than `audited_at`, require re-audit: "Audit is stale (design tokens changed since last audit). Run `/audit` first." Otherwise proceed. Note: "Last audit: [audited_at timestamp]."
+- **If it does not exist**: Proceed normally (no DESIGN.md compliance gate applies).
+
+This gate ensures design system violations are fixed before the final quality pass.
+
 ## Polish Systematically
 
 Work through these dimensions methodically:

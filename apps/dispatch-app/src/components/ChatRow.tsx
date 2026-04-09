@@ -9,8 +9,10 @@ import { useReduceMotion } from "../utils/animation";
 
 interface ChatRowProps {
   conversation: Conversation;
-  onPress: () => void;
-  onLongPress?: () => void;
+  /** Called with conversation when row is pressed. Pass a stable useCallback to avoid re-renders. */
+  onPress: (conversation: Conversation) => void;
+  /** Called with conversation on long press. Pass a stable useCallback to avoid re-renders. */
+  onLongPress?: (conversation: Conversation) => void;
   /** Pre-computed unread state (from isCurrentlyUnread in useChatList) */
   isUnread: boolean;
   /** Whether this row is the currently selected chat (desktop sidebar) */
@@ -22,9 +24,14 @@ const STATUS_COLORS: Record<string, string> = {
   idle: "#71717a",
 };
 
-export function ChatRow({ conversation, onPress, onLongPress, isUnread, isSelected }: ChatRowProps) {
+export const ChatRow = React.memo(function ChatRow({ conversation, onPress, onLongPress, isUnread, isSelected }: ChatRowProps) {
   const { title, last_message, last_message_at, last_message_role, is_thinking, image_url, image_status, status } =
     conversation;
+
+  // Compose stable per-item callbacks inside memo — avoids external cache.
+  // Only re-created if conversation identity or parent callbacks change.
+  const handlePress = useCallback(() => onPress(conversation), [onPress, conversation]);
+  const handleLongPress = useCallback(() => onLongPress?.(conversation), [onLongPress, conversation]);
 
   // Build preview text with "You: " prefix for user messages
   let preview = "";
@@ -64,8 +71,8 @@ export function ChatRow({ conversation, onPress, onLongPress, isUnread, isSelect
 
   return (
     <Pressable
-      onPress={onPress}
-      onLongPress={onLongPress}
+      onPress={handlePress}
+      onLongPress={handleLongPress}
       onPressIn={handlePressIn}
       onPressOut={handlePressOut}
       accessibilityRole="button"
@@ -125,7 +132,7 @@ export function ChatRow({ conversation, onPress, onLongPress, isUnread, isSelect
       </Animated.View>
     </Pressable>
   );
-}
+});
 
 /** Pulsing sparkle avatar shown while cover image is generating.
  *  Respects reduce-motion preference — shows static avatar instead. */

@@ -5175,14 +5175,68 @@ You have 15 minutes. Work efficiently.
             from assistant.auth_dialog import AuthDialogMonitor, load_default_config
             auth_cfg = load_default_config()
 
-            async def _auth_dialog_escalate(msg: str):
-                """Route auth dialog escalations — log + bus event for now.
-                Phase 4 will add SMS/dispatch-app notification."""
+            async def _auth_dialog_escalate(msg: str, dialog_info: dict | None = None):
+                """Route auth dialog escalations — log, bus event, and notify admin."""
                 log.warning(f"AUTH_DIALOG_ESCALATE | {msg}")
+                escalation_payload = {"message": msg}
+                if dialog_info:
+                    escalation_payload["dialog"] = {
+                        "app": dialog_info.get("app_name", ""),
+                        "action": dialog_info.get("action", ""),
+                        "dialog_type": dialog_info.get("dialog_type", ""),
+                        "dialog_id": dialog_info.get("dialog_id", ""),
+                    }
                 produce_event(
                     self._producer, "system", "auth_dialog.escalation",
-                    {"message": msg}, source="auth-dialog-monitor",
+                    escalation_payload, source="auth-dialog-monitor",
                 )
+
+                # Save pending dialog info for approve/deny CLI
+                if dialog_info:
+                    import json
+                    pending_path = STATE_DIR / "auth_dialog_pending.json"
+                    try:
+                        pending = json.loads(pending_path.read_text())
+                    except (FileNotFoundError, json.JSONDecodeError):
+                        pending = {}
+                    did = dialog_info.get("dialog_id", "")
+                    if did and did not in pending:
+                        pending[did] = dialog_info
+                        pending_path.write_text(json.dumps(pending, indent=2))
+
+                # Inject into admin session so the AI can present and handle the reply
+                try:
+                    escalation_chat_id = auth_cfg.resolution.escalation_chat_id
+                    if escalation_chat_id:
+                        did = dialog_info.get("dialog_id", "?") if dialog_info else "?"
+                        app_name = dialog_info.get("app_name", "?") if dialog_info else "?"
+                        action_desc = dialog_info.get("action", "?") if dialog_info else "?"
+                        dialog_type = dialog_info.get("dialog_type", "?") if dialog_info else "?"
+                        inject_msg = (
+                            f"[SYSTEM AUTH_DIALOG_ESCALATION]\n"
+                            f"A macOS auth dialog needs admin attention.\n"
+                            f"  App: {app_name}\n"
+                            f"  Action: {action_desc}\n"
+                            f"  Type: {dialog_type}\n"
+                            f"  Dialog ID: {did}\n"
+                            f"  Reason: {msg}\n\n"
+                            f"Present this to the user and ask what to do. They can:\n"
+                            f"  approve — run: ~/dispatch/bin/auth-dialog-approve approve {did}\n"
+                            f"  deny — run: ~/dispatch/bin/auth-dialog-approve deny {did}\n"
+                            f"  always approve — run: ~/dispatch/bin/auth-dialog-approve always {did}\n"
+                            f"Show the user the app name and action clearly. "
+                            f"If they say 'always', that adds a permanent rule to auto-approve this pattern."
+                        )
+                        # Inject via CLI subprocess (Manager doesn't own _cmd_inject)
+                        import subprocess as sp
+                        cli = str(Path.home() / "dispatch" / "bin" / "claude-assistant")
+                        sp.Popen(
+                            [cli, "inject-prompt", "--admin",
+                             escalation_chat_id, inject_msg],
+                            stdout=sp.DEVNULL, stderr=sp.DEVNULL,
+                        )
+                except Exception as e:
+                    log.error(f"AUTH_DIALOG | Failed to notify admin: {e}")
 
             self._auth_dialog_monitor = AuthDialogMonitor(
                 config=auth_cfg,

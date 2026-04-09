@@ -1,0 +1,231 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e9]:
+  - generic [ref=e14]:
+    - generic [ref=e15]:
+      - generic [ref=e16]:
+        - textbox "Search…" [ref=e17]
+        - generic [ref=e19] [cursor=pointer]: + New
+      - generic [ref=e22]:
+        - 'button "dashboard in app, You: main dashboard and detail page" [ref=e25] [cursor=pointer]':
+          - generic [ref=e26]:
+            - img [ref=e29]
+            - generic [ref=e31]:
+              - generic [ref=e32]:
+                - generic [ref=e33]: dashboard in app
+                - generic [ref=e34]: just now
+              - generic [ref=e36]: "You: main dashboard and detail page"
+        - button "Email Integration, unread, Email → Bus Producer ⏳ Plan ⬜ Build ⬜ Test ⬜ Deliver" [ref=e44] [cursor=pointer]:
+          - generic [ref=e45]:
+            - generic [ref=e49]: EI
+            - generic [ref=e51]:
+              - generic [ref=e52]:
+                - generic [ref=e53]: Email Integration
+                - generic [ref=e54]: just now
+              - generic [ref=e56]: Email → Bus Producer ⏳ Plan ⬜ Build ⬜ Test ⬜ Deliver
+        - 'button "Debug Flash Issue, build done, running e2e tests now. the change is really clean: **4 files, ~5 lines of actual logic:** - `showThinking = isThinking` in 3 UI files (was `isThinking && !sdkComplete`) - `setIsComplete(false)` reset in useSdkEvents - dev-mode 60s stuck warning in all 3 UI files implementation review scored **9.0** ✅ waiting on e2e tests..." [ref=e64] [cursor=pointer]':
+          - generic [ref=e65]:
+            - generic [ref=e68]: DF
+            - generic [ref=e70]:
+              - generic [ref=e71]:
+                - generic [ref=e72]: Debug Flash Issue
+                - generic [ref=e73]: 1m ago
+              - generic [ref=e75]: "build done, running e2e tests now. the change is really clean: **4 files, ~5 lines of actual logic:** - `showThinking = isThinking` in 3 UI files (was `isThinking && !sdkComplete`) - `setIsComplete(false)` reset in useSdkEvents - dev-mode 60s stuck warning in all 3 UI files implementation review scored **9.0** ✅ waiting on e2e tests..."
+        - button "widget, oh good call — right now tapping the map itself opens Google Maps, so you can't scroll it. fixing that now — i'll add a separate \"Open in Google Maps\" link below so the map stays interactive" [ref=e83] [cursor=pointer]:
+          - generic [ref=e84]:
+            - generic [ref=e87]: W
+            - generic [ref=e89]:
+              - generic [ref=e90]:
+                - generic [ref=e91]: widget
+                - generic [ref=e92]: 22m ago
+              - generic [ref=e94]: oh good call — right now tapping the map itself opens Google Maps, so you can't scroll it. fixing that now — i'll add a separate "Open in Google Maps" link below so the map stays interactive
+        - 'button "skill loading metrics, done ✓ removed from skill detail page: - **Avg Duration** stat card - **Error Rate** stat card - error/success dots on recent invocations - duration on recent invocations just shows Total Uses + Last Used now, and recent invocations show timestamp + session name only. force-close the app to pick up the changes." [ref=e97] [cursor=pointer]':
+          - generic [ref=e98]:
+            - generic [ref=e101]: SL
+            - generic [ref=e102]:
+              - generic [ref=e103]:
+                - generic [ref=e104]: skill loading metrics
+                - generic [ref=e105]: 6h ago
+              - generic [ref=e107]: "done ✓ removed from skill detail page: - **Avg Duration** stat card - **Error Rate** stat card - error/success dots on recent invocations - duration on recent invocations just shows Total Uses + Last Used now, and recent invocations show timestamp + session name only. force-close the app to pick up the changes."
+        - 'button "[App] Settings, fixed it! the soul edit endpoint was broken because the API server had crashed and restarted without the Anthropic API key in its environment. **root cause**: the edit endpoint was spawning a Python subprocess that called `anthropic.Anthropic()` directly — which needs `ANTHROPIC_API_KEY` in the env. the server doesn''t have that key (it''s only available inside Claude Code sessions via OAuth). **fix**: switched the endpoint to use `claude --print` CLI instead, which handles its own OAuth auth. no API key needed, and it''s more reliable since it uses the same auth mechanism as everything else. tested and working — try editing your soul again 👆" [ref=e110] [cursor=pointer]':
+          - generic [ref=e111]:
+            - generic [ref=e114]: AS
+            - generic [ref=e115]:
+              - generic [ref=e116]:
+                - generic [ref=e117]: "[App] Settings"
+                - generic [ref=e118]: 6h ago
+              - generic [ref=e120]: "fixed it! the soul edit endpoint was broken because the API server had crashed and restarted without the Anthropic API key in its environment. **root cause**: the edit endpoint was spawning a Python subprocess that called `anthropic.Anthropic()` directly — which needs `ANTHROPIC_API_KEY` in the env. the server doesn't have that key (it's only available inside Claude Code sessions via OAuth). **fix**: switched the endpoint to use `claude --print` CLI instead, which handles its own OAuth auth. no API key needed, and it's more reliable since it uses the same auth mechanism as everything else. tested and working — try editing your soul again 👆"
+        - button "Remove Dashboard Title, 👍" [ref=e123] [cursor=pointer]:
+          - generic [ref=e124]:
+            - generic [ref=e127]: RD
+            - generic [ref=e128]:
+              - generic [ref=e129]:
+                - generic [ref=e130]: Remove Dashboard Title
+                - generic [ref=e131]: 6h ago
+              - generic [ref=e133]: 👍
+        - 'button "watchdog / health, on it 👍 three changes: 1. add haiku reasoning text to the bus event payload 2. update the API to return it 3. show it in the app as an expandable detail on verdict rows" [ref=e136] [cursor=pointer]':
+          - generic [ref=e137]:
+            - generic [ref=e140]: WH
+            - generic [ref=e141]:
+              - generic [ref=e142]:
+                - generic [ref=e143]: watchdog / health
+                - generic [ref=e144]: 6h ago
+              - generic [ref=e146]: "on it 👍 three changes: 1. add haiku reasoning text to the bus event payload 2. update the API to return it 3. show it in the app as an expandable detail on verdict rows"
+        - button "Explore Features, nah, this session was the feature brainstorm (v5) and then building A1 (Knowledge Base) + B5 (Cost Analytics). widgets weren't part of the brainstorm list. were you thinking of a different chat? or do you want to add new widget types as a feature here?" [ref=e149] [cursor=pointer]:
+          - generic [ref=e150]:
+            - generic [ref=e153]: EF
+            - generic [ref=e154]:
+              - generic [ref=e155]:
+                - generic [ref=e156]: Explore Features
+                - generic [ref=e157]: 6h ago
+              - generic [ref=e159]: nah, this session was the feature brainstorm (v5) and then building A1 (Knowledge Base) + B5 (Cost Analytics). widgets weren't part of the brainstorm list. were you thinking of a different chat? or do you want to add new widget types as a feature here?
+        - 'button "OTA Update Strategy, done — updated both skills: 1. **ios-app skill** — added \"Always Use Debug Configuration for Device Builds\" section + \"How Metro Over Tailscale Works\" explaining the `RCTMetroHost` + AppDelegate mechanism 2. **dispatch-api skill** — rewrote the `serve-ipa` section to always use `-configuration Debug`, with full build steps and a warning to never use Release for serve-ipa builds shouldn''t get this wrong again 🤞" [ref=e162] [cursor=pointer]':
+          - generic [ref=e163]:
+            - generic [ref=e166]: OU
+            - generic [ref=e167]:
+              - generic [ref=e168]:
+                - generic [ref=e169]: OTA Update Strategy
+                - generic [ref=e170]: 8h ago
+              - generic [ref=e172]: "done — updated both skills: 1. **ios-app skill** — added \"Always Use Debug Configuration for Device Builds\" section + \"How Metro Over Tailscale Works\" explaining the `RCTMetroHost` + AppDelegate mechanism 2. **dispatch-api skill** — rewrote the `serve-ipa` section to always use `-configuration Debug`, with full build steps and a warning to never use Release for serve-ipa builds shouldn't get this wrong again 🤞"
+        - button "Check QR Readers, https://sven-pages-worker.nicklaudethorat.workers.dev/ascii-qr/" [ref=e176] [cursor=pointer]:
+          - generic [ref=e177]:
+            - generic [ref=e180]: CQ
+            - generic [ref=e181]:
+              - generic [ref=e182]:
+                - generic [ref=e183]: Check QR Readers
+                - generic [ref=e184]: Mar 29
+              - generic [ref=e186]: https://sven-pages-worker.nicklaudethorat.workers.dev/ascii-qr/
+        - button "[App] messaging UX, hey Nikhil! 👋" [ref=e189] [cursor=pointer]:
+          - generic [ref=e190]:
+            - generic [ref=e193]: AM
+            - generic [ref=e194]:
+              - generic [ref=e195]:
+                - generic [ref=e196]: "[App] messaging UX"
+                - generic [ref=e197]: Mar 29
+              - generic [ref=e199]: hey Nikhil! 👋
+        - button "Build Rename Modal, nope, left that to you since restarting kills this session. want me to restart now?" [ref=e202] [cursor=pointer]:
+          - generic [ref=e203]:
+            - generic [ref=e206]: BR
+            - generic [ref=e207]:
+              - generic [ref=e208]:
+                - generic [ref=e209]: Build Rename Modal
+                - generic [ref=e210]: Mar 29
+              - generic [ref=e212]: nope, left that to you since restarting kills this session. want me to restart now?
+        - 'button "Analyze Haiku Logs, done! API server restarted and the new endpoint is live ✅ real data flowing through: - 100 health events in last 48h - 11 haiku verdicts (4 fatal, 0 stuck) - 2 circuit breaker events - 2 quota alerts the health checks page should be accessible from Dashboard → System → Health Checks now. give it a tap and let me know how it looks!" [ref=e215] [cursor=pointer]':
+          - generic [ref=e216]:
+            - generic [ref=e219]: AH
+            - generic [ref=e220]:
+              - generic [ref=e221]:
+                - generic [ref=e222]: Analyze Haiku Logs
+                - generic [ref=e223]: Mar 29
+              - generic [ref=e225]: "done! API server restarted and the new endpoint is live ✅ real data flowing through: - 100 health events in last 48h - 11 haiku verdicts (4 fatal, 0 stuck) - 2 circuit breaker events - 2 quota alerts the health checks page should be accessible from Dashboard → System → Health Checks now. give it a tap and let me know how it looks!"
+        - 'button "markdown, done! updated the plan skill''s SKILL.md. here''s what changed: - **dispatch-app sessions** → clarifying questions now use `ask_question` widgets with tappable options (goal type, scope, constraints) - **iMessage/Signal sessions** → unchanged, still uses numbered text questions - the example widget has 3 questions with contextual options, plus \"Other\" text input on each by default - instructions say to customize the questions/options based on what the user already told you next time you say \"let''s plan something\" in the app, you''ll get a nice structured widget instead of a wall of text 🎯" [ref=e228] [cursor=pointer]':
+          - generic [ref=e229]:
+            - generic [ref=e232]: M
+            - generic [ref=e233]:
+              - generic [ref=e234]:
+                - generic [ref=e235]: markdown
+                - generic [ref=e236]: Mar 29
+              - generic [ref=e238]: "done! updated the plan skill's SKILL.md. here's what changed: - **dispatch-app sessions** → clarifying questions now use `ask_question` widgets with tappable options (goal type, scope, constraints) - **iMessage/Signal sessions** → unchanged, still uses numbered text questions - the example widget has 3 questions with contextual options, plus \"Other\" text input on each by default - instructions say to customize the questions/options based on what the user already told you next time you say \"let's plan something\" in the app, you'll get a nice structured widget instead of a wall of text 🎯"
+        - button "quota, good call — the reset timers were static (only computed once when data loaded). added a 30-second tick so they count down live on both the dashboard and quota detail screen. deployed ✅" [ref=e241] [cursor=pointer]:
+          - generic [ref=e242]:
+            - generic [ref=e245]: Q
+            - generic [ref=e246]:
+              - generic [ref=e247]:
+                - generic [ref=e248]: quota
+                - generic [ref=e249]: Mar 29
+              - generic [ref=e251]: good call — the reset timers were static (only computed once when data loaded). added a 30-second tick so they count down live on both the dashboard and quota detail screen. deployed ✅
+        - 'button "Token Efficiency, done ✅ added to CLAUDE.md under \"Model Policy\" → \"Subagent Model Selection\": - **sonnet** for read-only exploration: file search, codebase browsing, web research, \"Find X / Explore X / Research X\" tasks - **opus** for deep reasoning, code generation, complex analysis also cleaned up the duplicate \"Model Policy\" header that was in there 🧹" [ref=e254] [cursor=pointer]':
+          - generic [ref=e255]:
+            - generic [ref=e258]: TE
+            - generic [ref=e259]:
+              - generic [ref=e260]:
+                - generic [ref=e261]: Token Efficiency
+                - generic [ref=e262]: Mar 29
+              - generic [ref=e264]: "done ✅ added to CLAUDE.md under \"Model Policy\" → \"Subagent Model Selection\": - **sonnet** for read-only exploration: file search, codebase browsing, web research, \"Find X / Explore X / Research X\" tasks - **opus** for deep reasoning, code generation, complex analysis also cleaned up the duplicate \"Model Policy\" header that was in there 🧹"
+        - 'button "Understand Build System, yep, just sent the summary a sec ago — scroll up 👆 tl;dr: SKILL.md rewritten with decision tree, deploy-ios no longer kills Metro, sessions will now default to hot reload for JS changes. all live." [ref=e267] [cursor=pointer]':
+          - generic [ref=e268]:
+            - generic [ref=e271]: UB
+            - generic [ref=e272]:
+              - generic [ref=e273]:
+                - generic [ref=e274]: Understand Build System
+                - generic [ref=e275]: Mar 28
+              - generic [ref=e277]: "yep, just sent the summary a sec ago — scroll up 👆 tl;dr: SKILL.md rewritten with decision tree, deploy-ios no longer kills Metro, sessions will now default to hot reload for JS changes. all live."
+        - 'button "[App] message persistence bug, ok here''s my theory on the thinking bubble flash: **two polling loops racing each other.** message poll (2-3s interval) drives `isThinking`, sdk events poll (1s interval) drives event content. after you send: 1. message poll returns `is_thinking: true` → bubble appears 2. next message poll might briefly return `is_thinking: false` (server already responded between polls) 3. `showThinking = isThinking && !sdkComplete` → bubble hides 4. then sdk events or next message poll catches up → bubble reappears the `ThinkingIndicator` has a `MIN_SHOW_MS = 2000` debounce internally, but it only protects against sdk event flickering — not against the parent `showThinking` prop toggling false→true from the message poll. basically: the message polling `is_thinking` boolean is too volatile. it can flip false for one poll cycle before stabilizing, causing the visible flash." [ref=e280] [cursor=pointer]':
+          - generic [ref=e281]:
+            - generic [ref=e284]: AM
+            - generic [ref=e285]:
+              - generic [ref=e286]:
+                - generic [ref=e287]: "[App] message persistence bug"
+                - generic [ref=e288]: Mar 28
+              - generic [ref=e290]: "ok here's my theory on the thinking bubble flash: **two polling loops racing each other.** message poll (2-3s interval) drives `isThinking`, sdk events poll (1s interval) drives event content. after you send: 1. message poll returns `is_thinking: true` → bubble appears 2. next message poll might briefly return `is_thinking: false` (server already responded between polls) 3. `showThinking = isThinking && !sdkComplete` → bubble hides 4. then sdk events or next message poll catches up → bubble reappears the `ThinkingIndicator` has a `MIN_SHOW_MS = 2000` debounce internally, but it only protects against sdk event flickering — not against the parent `showThinking` prop toggling false→true from the message poll. basically: the message polling `is_thinking` boolean is too volatile. it can flip false for one poll cycle before stabilizing, causing the visible flash."
+        - button "fact check, on it — drafting the skill update now and will iterate with subagent-review until it hits 9.0. this might take a few rounds 🔄" [ref=e293] [cursor=pointer]:
+          - generic [ref=e294]:
+            - generic [ref=e297]: FC
+            - generic [ref=e298]:
+              - generic [ref=e299]:
+                - generic [ref=e300]: fact check
+                - generic [ref=e301]: Mar 28
+              - generic [ref=e303]: on it — drafting the skill update now and will iterate with subagent-review until it hits 9.0. this might take a few rounds 🔄
+        - button "Chat Page Fix, pushed to main 👍 rebuild the app to pick it up" [ref=e306] [cursor=pointer]:
+          - generic [ref=e307]:
+            - generic [ref=e310]: CP
+            - generic [ref=e311]:
+              - generic [ref=e312]:
+                - generic [ref=e313]: Chat Page Fix
+                - generic [ref=e314]: Mar 28
+              - generic [ref=e316]: pushed to main 👍 rebuild the app to pick it up
+        - 'button "search, deployed ✅ search results now show timestamps: - **today**: shows time (e.g. \"2:30 PM\") - **this year**: shows date (e.g. \"Mar 28\") - **older**: full date (e.g. \"Mar 28, 2025\") also sorted newest-first now instead of by relevance. try it out!" [ref=e319] [cursor=pointer]':
+          - generic [ref=e320]:
+            - generic [ref=e323]: S
+            - generic [ref=e324]:
+              - generic [ref=e325]:
+                - generic [ref=e326]: search
+                - generic [ref=e327]: Mar 28
+              - generic [ref=e329]: "deployed ✅ search results now show timestamps: - **today**: shows time (e.g. \"2:30 PM\") - **this year**: shows date (e.g. \"Mar 28\") - **older**: full date (e.g. \"Mar 28, 2025\") also sorted newest-first now instead of by relevance. try it out!"
+        - button [ref=e332] [cursor=pointer]:
+          - generic [ref=e333]:
+            - generic [ref=e336]: AN
+            - generic [ref=e337]:
+              - generic [ref=e338]:
+                - generic [ref=e339]: App Network Error
+                - generic [ref=e340]: Mar 28
+              - generic [ref=e342]: "done! here's what i did: **fixes:** - added `_rebuild_fts()` helper that drops and recreates FTS index + triggers - both `DELETE /chats/{id}` and `DELETE /messages` now catch FTS errors, drop triggers, delete messages, then rebuild FTS cleanly - bumped `busy_timeout` from 5s → 10s for better concurrency handling - already rebuilt the live FTS index earlier **tests (3 new, all passing):** - `test_delete_chat_with_fts` — normal delete verifies both messages table and FTS are cleaned up - `test_delete_chat_fts_corrupted_recovery` — simulates corrupted FTS (content mismatch), verifies auto-recovery works - also fixed a pre-existing test fixture bug where `_init_db_done` wasn't being reset between tests **prevention:** - if FTS ever gets out of sync again (e.g. from manual DB edits, crashes mid-write), the auto-recovery kicks in and rebuilds it transparently - the 10s busy_timeout should handle most concurrent access. if \"database is locked\" still happens under extreme load, we could add explicit retry-with-backoff but that seems overkill for now API server restarted with all fixes. try deleting again 👍"
+    - generic [ref=e346]:
+      - generic [ref=e347]:
+        - generic [ref=e348]: OTA Update Strategy
+        - generic [ref=e349]:
+          - generic [ref=e350] [cursor=pointer]:
+            - generic [ref=e352]: 
+            - generic [ref=e353]: Rename
+          - generic [ref=e356] [cursor=pointer]: 
+      - generic [ref=e357]:
+        - generic [ref=e359]:
+          - generic [ref=e363] [cursor=pointer]:
+            - img [ref=e366]
+            - generic [ref=e368]: Here is the image result.
+          - generic [ref=e372] [cursor=pointer]:
+            - generic [ref=e374]: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+            - generic [ref=e378]: Show more
+          - generic [ref=e380]:
+            - generic [ref=e382] [cursor=pointer]:
+              - img [ref=e385]
+              - generic [ref=e386]: Check this image
+            - generic [ref=e387]: Delivered
+          - generic [ref=e391] [cursor=pointer]:
+            - generic [ref=e393]: Of course! How can I assist you today?
+            - generic [ref=e422]: Audio
+          - generic [ref=e427] [cursor=pointer]: Hello, can you help me?
+        - generic [ref=e429]:
+          - button "Open attachment menu" [ref=e430] [cursor=pointer]:
+            - generic [ref=e433]: 
+          - textbox "Message input" [active] [ref=e435]:
+            - /placeholder: Message Sven...
+  - generic [ref=e436]:
+    - generic [ref=e438] [cursor=pointer]: Chats
+    - generic [ref=e440] [cursor=pointer]: agents
+    - generic [ref=e442] [cursor=pointer]: voice
+    - generic [ref=e444] [cursor=pointer]: Dashboard
+    - generic [ref=e446] [cursor=pointer]: Settings
+```

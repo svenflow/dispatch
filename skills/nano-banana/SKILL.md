@@ -58,6 +58,33 @@ After generating, send to a contact:
 - Supported input formats: JPEG, PNG, WebP
 - Output is always PNG
 
+## Batch Generation Pattern
+
+For generating multiple images in parallel (e.g. 10-12 images on a theme):
+
+### 1. Parallel background generation
+```bash
+# Generate all images in parallel, zero-padded names
+for i in $(seq -w 1 12); do
+  ~/.claude/skills/nano-banana/scripts/nano-banana "your prompt $i" -o /tmp/topic-$i.png &
+done
+wait  # barrier — wait for all to finish
+```
+
+### 2. Sequential send loop
+```bash
+# Send each image with a numbered caption
+for i in $(seq -w 1 12); do
+  ~/.claude/skills/sms-assistant/scripts/reply "Caption for image $i" --image /tmp/topic-$i.png
+done
+```
+
+**Key rules:**
+- Zero-pad filenames: `/tmp/<topic>-01.png`, `/tmp/<topic>-02.png`, etc.
+- Always use `wait` barrier after parallel generation before sending
+- Send sequentially (one at a time) to preserve order and avoid message flooding
+- Use numbered captions to give context per image
+
 ---
 
 # Prompting Techniques

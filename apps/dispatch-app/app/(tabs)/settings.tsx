@@ -555,17 +555,22 @@ export default function SettingsScreen() {
         )}
       </View>
 
-      {/* Soul Section */}
+      {/* Soul & Config Section */}
       <View style={styles.section}>
-        <Text style={styles.sectionHeader}>IDENTITY</Text>
+        <Text style={styles.sectionHeader}>SYSTEM</Text>
         <View style={styles.sectionCard}>
+          <Pressable style={styles.row} onPress={() => router.push("/dashboard/config" as never)}>
+            <Text style={styles.rowLabel}>Config</Text>
+            <Text style={styles.chevron}>&rsaquo;</Text>
+          </Pressable>
+          <View style={styles.separator} />
           <Pressable style={styles.row} onPress={() => router.push("/soul")}>
             <Text style={styles.rowLabel}>Soul</Text>
             <Text style={styles.chevron}>&rsaquo;</Text>
           </Pressable>
         </View>
         <Text style={styles.sectionFooter}>
-          View the personality and identity definition.
+          View and edit config.local.yaml or the personality definition.
         </Text>
       </View>
 

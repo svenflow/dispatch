@@ -5,13 +5,14 @@ import {
   Platform,
   Pressable,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   View,
 } from "react-native";
 import { Stack, router } from "expo-router";
-import { getDashboardTasks } from "@/src/api/dashboard";
-import type { DashboardReminder } from "@/src/api/types";
+import { getDashboardTasks, getConfigToggles, setConfigToggle } from "@/src/api/dashboard";
+import type { DashboardReminder, ConfigToggles } from "@/src/api/types";
 import { relativeTime } from "@/src/utils/time";
 import { humanSchedule } from "@/src/utils/schedule";
 
@@ -72,13 +73,22 @@ export default function TasksDetailScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [toggles, setToggles] = useState<ConfigToggles>({
+    reminders_enabled: true,
+    tasks_enabled: true,
+  });
+  const [togglingKey, setTogglingKey] = useState<string | null>(null);
   const mountedRef = useRef(true);
 
   const load = useCallback(async () => {
     try {
-      const data = await getDashboardTasks();
+      const [tasksData, togglesData] = await Promise.all([
+        getDashboardTasks(),
+        getConfigToggles(),
+      ]);
       if (mountedRef.current) {
-        setReminders(data.reminders);
+        setReminders(tasksData.reminders);
+        setToggles(togglesData);
         setError(null);
       }
     } catch (err) {
@@ -89,6 +99,29 @@ export default function TasksDetailScreen() {
       if (mountedRef.current) setIsLoading(false);
     }
   }, []);
+
+  const handleToggle = useCallback(
+    async (key: keyof ConfigToggles) => {
+      const newValue = !toggles[key];
+      setTogglingKey(key);
+      // Optimistic update
+      setToggles((prev) => ({ ...prev, [key]: newValue }));
+      try {
+        const result = await setConfigToggle({ [key]: newValue });
+        if (mountedRef.current) {
+          setToggles(result);
+        }
+      } catch {
+        // Revert on failure
+        if (mountedRef.current) {
+          setToggles((prev) => ({ ...prev, [key]: !newValue }));
+        }
+      } finally {
+        if (mountedRef.current) setTogglingKey(null);
+      }
+    },
+    [toggles],
+  );
 
   useEffect(() => {
     load();
@@ -196,6 +229,37 @@ export default function TasksDetailScreen() {
   const ListHeader = useCallback(
     () => (
       <View>
+        {/* Global toggles */}
+        <View style={styles.toggleSection}>
+          <View style={styles.toggleRow}>
+            <View style={styles.toggleLabelGroup}>
+              <Text style={styles.toggleLabel}>Reminders</Text>
+              <Text style={styles.toggleSublabel}>Cron & scheduled triggers</Text>
+            </View>
+            <Switch
+              value={toggles.reminders_enabled}
+              onValueChange={() => handleToggle("reminders_enabled")}
+              disabled={togglingKey === "reminders_enabled"}
+              trackColor={{ false: "#3f3f46", true: "#166534" }}
+              thumbColor={toggles.reminders_enabled ? "#22c55e" : "#71717a"}
+            />
+          </View>
+          <View style={styles.toggleDivider} />
+          <View style={styles.toggleRow}>
+            <View style={styles.toggleLabelGroup}>
+              <Text style={styles.toggleLabel}>Task Execution</Text>
+              <Text style={styles.toggleSublabel}>Process task.requested events</Text>
+            </View>
+            <Switch
+              value={toggles.tasks_enabled}
+              onValueChange={() => handleToggle("tasks_enabled")}
+              disabled={togglingKey === "tasks_enabled"}
+              trackColor={{ false: "#3f3f46", true: "#166534" }}
+              thumbColor={toggles.tasks_enabled ? "#22c55e" : "#71717a"}
+            />
+          </View>
+        </View>
+
         <View style={styles.searchContainer}>
           <TextInput
             style={styles.searchInput}
@@ -214,7 +278,7 @@ export default function TasksDetailScreen() {
         </Text>
       </View>
     ),
-    [searchQuery, sortedReminders.length],
+    [searchQuery, sortedReminders.length, toggles, togglingKey, handleToggle],
   );
 
   return (
@@ -278,6 +342,41 @@ const styles = StyleSheet.create({
   },
   listContent: {
     paddingBottom: 24,
+  },
+  toggleSection: {
+    marginHorizontal: 16,
+    marginTop: 12,
+    backgroundColor: "#18181b",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#27272a",
+    overflow: "hidden",
+  },
+  toggleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  toggleDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: "#27272a",
+    marginLeft: 16,
+  },
+  toggleLabelGroup: {
+    flex: 1,
+    marginRight: 12,
+  },
+  toggleLabel: {
+    color: "#fafafa",
+    fontSize: 15,
+    fontWeight: "500",
+  },
+  toggleSublabel: {
+    color: "#52525b",
+    fontSize: 12,
+    marginTop: 2,
   },
   searchContainer: {
     paddingHorizontal: 16,

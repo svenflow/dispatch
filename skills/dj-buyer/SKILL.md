@@ -17,10 +17,18 @@ Search for and purchase DJ tracks across Bandcamp, Beatport, and Amazon Music.
 **ALWAYS check the purchases database before searching or buying a track.** This avoids duplicate purchases.
 
 ```bash
-cd ~/code/dj-buyer && sqlite3 state.db "
+cd ~/code/dj-buyer && sqlite3 ~/.config/dj-buyer/state.db "
 SELECT t.artist, t.title, p.platform, p.price, p.purchased_at, p.download_path
 FROM purchases p JOIN tracks t ON p.track_id = t.id
 WHERE lower(t.artist) LIKE lower('%ARTIST%') AND lower(t.title) LIKE lower('%TITLE%');
+"
+```
+
+Also check if the track exists by name (catches imported tracks without Spotify IDs):
+```bash
+cd ~/code/dj-buyer && sqlite3 ~/.config/dj-buyer/state.db "
+SELECT id, artist, title, file_path FROM tracks
+WHERE lower(artist) LIKE lower('%ARTIST%') AND lower(title) LIKE lower('%TITLE%');
 "
 ```
 
@@ -44,9 +52,46 @@ If the track is already purchased, skip searching and buying — just report tha
 
 This helps the user understand where each track will be purchased from and compare options.
 
-### Search all platforms
+### Primary: Smart Search with Haiku Verification
 
-**Always search ALL 3 platforms, then rerank by price and similarity to find the best deal.**
+**ALWAYS use `smart_search` for track lookups.** It handles multi-query generation, cross-platform search, and LLM-verified matching automatically.
+
+```python
+# Python (from ~/code/dj-buyer)
+cd ~/code/dj-buyer && uv run python -c "
+from dj_buyer.smart_search import smart_search
+results = smart_search('Artist', 'Title', platforms=['beatport', 'bandcamp'])
+for r in results:
+    print(f'{r.confidence}: {r.result.artist} - {r.result.title} ({r.result.site}, \${r.result.price})')
+    print(f'  Reason: {r.reason}')
+"
+```
+
+**How it works:**
+1. Generates multiple query variants (full title, stripped remix/feat info, artist splits, etc.)
+2. Searches each variant on Beatport + Bandcamp
+3. Deduplicates by URL
+4. Sends top 15 candidates to **Haiku** for verification — Haiku picks the correct match with confidence scoring (high/medium/low/none)
+5. Returns only verified matches above the confidence threshold
+
+**Why this is better than raw scraper search:**
+- Catches remix/VIP mismatches (e.g. won't confuse "Catacombs" with "Catacombs VIP")
+- Catches wrong-artist matches (e.g. won't match "DMVU - Dip" to "Davu Flint - Dip")
+- Handles Spotify-to-store artist crediting differences (Spotify often lists 1 artist, stores list all collaborators)
+- Multi-query variants find tracks that single-query misses
+
+**For batch operations** (searching many tracks), write a loop:
+
+```python
+from dj_buyer.smart_search import smart_search
+for track in tracks:
+    results = smart_search(track['artist'], track['title'], platforms=['beatport', 'bandcamp'])
+    # Each track takes ~30-60s (multi-variant search + haiku verification)
+```
+
+### Manual CLI search (fallback)
+
+Individual platform searches, useful for debugging or one-offs:
 
 ```bash
 cd ~/code/dj-buyer && uv run dj-buyer search-bandcamp "Artist" "Title" --json
@@ -56,35 +101,37 @@ cd ~/code/dj-buyer && uv run dj-buyer search-amazon "Artist" "Title" --json
 
 Or search all at once: `cd ~/code/dj-buyer && uv run dj-buyer search "Artist" "Title"`
 
-### How to Rerank Results
+### How to Rerank Results (manual search only)
 
-After collecting results from all 3 platforms:
+When using manual CLI search (not smart_search), rerank results manually:
 
 1. **Filter**: Drop anything with similarity < 0.7
-2. **Verify**: For similarity 0.7-0.9, manually check artist+title match
-3. **Cover detection**: Bandcamp is indie/electronic-focused. When searching mainstream artists, results are frequently covers by different artists with misleadingly high title similarity (0.7+). If the Bandcamp result artist doesn't match the search artist, skip it even if title similarity is high. Prefer Beatport or Amazon for major-label tracks.
-4. **Platform preference**: Always prefer Bandcamp or Beatport over Amazon. Only use Amazon if the track doesn't exist on either Bandcamp or Beatport.
-5. **Price rank** (within preferred platforms): Bandcamp name-your-price ($0) > Bandcamp minimum ($1) > Beatport MP3 ($1.49) > Beatport WAV ($2.49)
-6. **DJ quality tiebreak**: If prices are close, prefer Beatport (best metadata + artwork)
-7. **Amazon fallback**: Only purchase from Amazon ($1.29) when the track is unavailable on both Bandcamp and Beatport
+2. **Haiku review for 0.7-0.9**: For tracks with similarity 0.7-0.9, **always run a haiku subagent review pass** to verify matches. Common false positive patterns:
+   - Extra collaborators: Spotify "Caspa" -> Beatport "Caspa, Mythm" (usually correct — just extra credits)
+   - Wrong artist: "Truth" -> artist named "Transition" (WRONG — different artist entirely)
+   - Wrong version: "Catacombs" matched to "Catacombs VIP" (WRONG — different version)
+   - Cover detection: Bandcamp results by different artists with same title (WRONG!)
+3. **Platform preference**: Always prefer Bandcamp or Beatport over Amazon. Only use Amazon if the track doesn't exist on either Bandcamp or Beatport.
+4. **Price rank** (within preferred platforms): Bandcamp name-your-price ($0) > Bandcamp minimum ($1) > Beatport MP3 ($1.49) > Beatport WAV ($2.49)
+5. **DJ quality tiebreak**: If prices are close, prefer Beatport (best metadata + artwork)
+6. **Amazon fallback**: Only purchase from Amazon ($1.29) when the track is unavailable on both Bandcamp and Beatport
 
 See `search/bandcamp.md`, `search/beatport.md`, `search/amazon.md` for platform-specific matching guidance.
 
 ### Fallback: Web search for NOT FOUND tracks
 
-**If a track returns NOT FOUND from all 3 platform scrapers, do a web search before giving up.** The scrapers sometimes miss tracks that exist — Amazon's digital music search in particular often returns irrelevant products (supplements, books) instead of music results.
+**If smart_search returns no results, do a web search before giving up.** The scrapers sometimes miss tracks that exist.
 
 Fallback steps:
 1. **Web search**: `WebSearch` for `"Artist" "Title" buy MP3 download`
 2. **Check results for known platforms**:
-   - `music.amazon.com/tracks/BXXXXXXXXX` → Amazon ASIN exists, purchasable at ~$1.29
-   - `beatport.com/track/...` → Beatport link, $1.49
-   - `bandcamp.com` links → Bandcamp, check price on page
-   - `music.apple.com` → Apple Music/iTunes, note as alternative
-3. **Direct Amazon Music lookup**: If web search finds an Amazon Music ASIN (e.g. `B0D5L6L2XH`), navigate directly to `https://www.amazon.com/dp/ASIN` — the scraper's keyword search often fails but the product page exists
-4. **Beatport low-similarity matches**: If Beatport returns the right artist + right title but low similarity (e.g. 0.6) because of suffixes like "(Extended Mix)" or "(Original Mix)", it's likely the correct track. Verify manually and accept it.
+   - `music.amazon.com/tracks/BXXXXXXXXX` -> Amazon ASIN exists, purchasable at ~$1.29
+   - `beatport.com/track/...` -> Beatport link, $1.49
+   - `bandcamp.com` links -> Bandcamp, check price on page
+   - `music.apple.com` -> Apple Music/iTunes, note as alternative
+3. **Direct Amazon Music lookup**: If web search finds an Amazon Music ASIN (e.g. `B0D5L6L2XH`), navigate directly to `https://www.amazon.com/dp/ASIN`
 
-**Never report a track as NOT FOUND without trying the web search fallback first.**
+**Never report a track as NOT FOUND without trying smart_search + web search fallback.**
 
 ## Bandcamp Purchase — Step-by-Step Chrome Commands
 
@@ -499,6 +546,80 @@ If the account goes on hold ("Account on hold temporarily"):
 4. **Root cause**: Privacy.com virtual cards trigger Amazon's fraud detection, especially for digital purchases. Failed transactions re-trigger holds.
 5. After hold is lifted, you must re-add the payment card and billing address (they get wiped)
 
+## Genre Classification
+
+All tracks in the library get classified into the Beatport genre taxonomy. Genres use breadcrumb format: `"Drum & Bass > Liquid"`, `"Techno (Raw / Deep / Hypnotic) > Dub"`.
+
+**Database**: `~/.config/dj-buyer/state.db` — `tracks` table has `genre`, `genre_source`, and `genre_old` columns.
+
+**Taxonomy**: Scraped from Beatport's v4 API, saved at `~/code/dj-buyer/data/beatport_taxonomy.json`. 45+ genres with 130+ subgenres. The classifier script also has an inline copy of the taxonomy for the Haiku prompt.
+
+### Architecture (2-phase: evidence gathering → LLM mapping)
+
+**Phase 1: Gather evidence (pure code, no LLM)**
+1. **Beatport** search → genre + subgenre directly from track page `__NEXT_DATA__` JSON (most authoritative)
+2. **Discogs** API search → genre + style tags (crowd-sourced)
+3. **Last.fm** `track.getTopTags` API → crowd-sourced tags (key in keychain: `lastfm-api-key`)
+4. **Spotify** artist genres (already in DB from import)
+
+**Phase 2: Map to taxonomy (Haiku, grounded)**
+- If Beatport found the exact track → use its genre directly, no LLM needed
+- If only Last.fm/Discogs/Spotify data → Haiku maps external tags to the nearest Beatport taxonomy entry
+- Haiku MUST cite which source it used and output confidence (high/medium/low/none)
+- If no source has useful data → `null`, not a guess
+
+**Key principle:** Haiku never invents a genre. It only does semantic mapping between external tags and the fixed taxonomy. It's a translator, not an oracle.
+
+### Running the classifier
+
+```bash
+cd ~/code/dj-buyer
+
+# Classify all tracks
+uv run python scripts/genre_classify.py
+
+# Only unclassified tracks
+uv run python scripts/genre_classify.py --missing
+
+# Limit + dry run
+uv run python scripts/genre_classify.py --missing --limit 20 --dry-run
+
+# Set minimum confidence threshold
+uv run python scripts/genre_classify.py --min-confidence high
+```
+
+### Checking genre stats
+
+```bash
+# Total classified vs unclassified
+sqlite3 ~/.config/dj-buyer/state.db "SELECT count(*) as total, count(genre) as with_genre, count(*) - count(genre) as missing FROM tracks;"
+
+# Genre distribution
+sqlite3 ~/.config/dj-buyer/state.db "SELECT genre, count(*) as n FROM tracks WHERE genre IS NOT NULL GROUP BY genre ORDER BY n DESC LIMIT 20;"
+
+# Sample random classified tracks
+sqlite3 ~/.config/dj-buyer/state.db "SELECT artist, title, genre FROM tracks WHERE genre IS NOT NULL ORDER BY RANDOM() LIMIT 25;"
+```
+
+### Last.fm API
+
+API key stored in macOS Keychain: `security find-generic-password -s "lastfm-api-key" -w`
+
+```bash
+# Get top tags for a track
+curl -s "http://ws.audioscrobbler.com/2.0/?method=track.getTopTags&artist=ARTIST&track=TITLE&api_key=API_KEY&format=json"
+
+# Get top tags for an artist
+curl -s "http://ws.audioscrobbler.com/2.0/?method=artist.getTopTags&artist=ARTIST&api_key=API_KEY&format=json"
+```
+
+### Important notes
+
+- **DB path**: ALWAYS use `~/.config/dj-buyer/state.db` — there's a stale `~/code/dj-buyer/state.db` with only test data. Never query the code-dir one.
+- **genre_source**: `"haiku_verified"` for LLM-classified, direct Beatport matches also get this tag currently
+- **genre_old**: backup of previous genre before reclassification (for rollback)
+- **import-* tracks**: tracks with `spotify_id LIKE 'import-%'` are skipped by the classifier (manual imports without Spotify IDs)
+
 ## Scrapling Architecture
 
 - **`Fetcher`**: HTTP-only with TLS fingerprinting. Used for search. Access HTML via `response.html_content` (NOT `.text`).
@@ -714,6 +835,28 @@ When the refresh token is revoked and you need fresh auth:
 - **Amazon account holds** — Privacy.com virtual cards trigger Amazon's fraud detection. Failed transactions re-trigger holds. See "Amazon account hold recovery" section for resolution steps.
 - **Amazon cart contamination** — existing items in the Amazon cart can redirect the Amazon Music "Buy MP3" flow to standard checkout with inflated totals. Always clear the cart before purchasing music (see pre-flight checks).
 - **Amazon billing address** — after re-adding the Privacy.com card, you must also set the billing address via Edit card → "Choose or add a billing address". Without it, purchases fail with "billing address must match your country of purchase".
+
+## Post-Download: BPM & Key Enrichment
+
+After downloading any track, basic ID3 tags (artist, title, artwork) are written automatically. **BPM and musical key are also auto-enriched on import** via the Recco Beats API — no manual step needed for new purchases.
+
+The Recco Beats API (free, no auth) is called automatically during the purchase/download flow using the track's Spotify ID as the lookup key. Tags are written to the MP3 immediately.
+
+### Manual Re-Enrichment (bulk / existing library only)
+
+Only needed if you have older tracks missing BPM/key, or want to re-enrich in bulk:
+
+```bash
+cd ~/code/dj-buyer
+
+# Step 1: Fetch BPM/key from Recco Beats API and store in DB
+uv run dj-buyer library enrich
+
+# Step 2: Write enriched tags back to the MP3 files
+uv run dj-buyer library retag
+```
+
+Without enrichment, files are missing BPM and key in DJ software (Rekordbox, Serato, etc.).
 
 ## Config
 

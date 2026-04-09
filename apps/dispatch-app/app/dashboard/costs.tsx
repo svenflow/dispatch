@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
-  FlatList,
   Platform,
   Pressable,
   RefreshControl,
@@ -128,7 +127,7 @@ function SummaryCard({
       {burnRate != null && burnRate > 0 && (
         <View style={styles.burnRateRow}>
           <Text style={styles.burnRateText}>
-            🔥 {formatCost(burnRate)}/hr burn rate
+            🔥 {formatCost(burnRate)}/hr
           </Text>
         </View>
       )}
@@ -150,7 +149,7 @@ function SessionCostRow({
   maxCost: number;
 }) {
   const barWidth = costBarWidth(session.total_cost, maxCost);
-  const models = Object.keys(session.model_breakdown || {});
+  const models = session.models?.length ? session.models : Object.keys(session.model_breakdown || {});
 
   return (
     <View style={styles.sessionRow}>
@@ -184,6 +183,11 @@ function SessionCostRow({
             {models.join(", ")}
           </Text>
         )}
+        {session.last_activity && (
+          <Text style={styles.metaText}>
+            {formatDateLabel(session.last_activity)}
+          </Text>
+        )}
       </View>
     </View>
   );
@@ -211,7 +215,7 @@ function DailyCostChart({ daily }: { daily: Array<Record<string, unknown>> }) {
 
   return (
     <View style={styles.chartSection}>
-      <Text style={styles.chartTitle}>Daily Spend</Text>
+      <Text style={styles.chartTitle}>Daily Cost</Text>
       <View style={styles.chartContainer}>
         {items.map((item, i) => {
           const height = Math.max((item.cost / maxCost) * 80, 2);
@@ -353,8 +357,8 @@ export default function CostsScreen() {
 
       {/* Session cost leaderboard */}
       <View style={styles.leaderboardSection}>
-        <Text style={styles.sectionHeader}>SESSION COSTS</Text>
-        <Text style={styles.sectionSubheader}>Who's expensive?</Text>
+        <Text style={styles.sectionHeader}>COST BY SESSION</Text>
+        <Text style={styles.sectionSubheader}>Ranked by total cost</Text>
 
         {sortedSessions.length === 0 ? (
           <View style={styles.emptyState}>

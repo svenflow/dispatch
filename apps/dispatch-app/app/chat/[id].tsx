@@ -42,6 +42,10 @@ import { BubbleMenu, type BubbleMenuItem } from "@/src/components/BubbleMenu";
 import { Toast } from "@/src/components/Toast";
 import { RenameModal } from "@/src/components/RenameModal";
 
+/** Delay before retrying scrollToIndex after the initial offset scroll.
+ *  One layout pass (~100ms) is enough for the target row to render. */
+const SCROLL_RETRY_DELAY_MS = 100;
+
 export default function ChatDetailScreen() {
   const { id, chatTitle, chatModel } = useLocalSearchParams<{
     id: string;
@@ -53,11 +57,33 @@ export default function ChatDetailScreen() {
   const [currentModel, setCurrentModel] = useState(chatModel || "opus");
   const modelLabel = currentModel || null;
   const adapter = useMemo(() => chatAdapter(id ?? ""), [id]);
-  const { messages, isLoading, error, isThinking, sendMessage, sendMessageWithImage, retryMessage, toggleReaction } =
-    useMessages(adapter, id ? `chat:${id}` : undefined);
+  const { messages, isLoading, isRefreshing, error, isThinking, sendMessage, sendMessageWithImage, retryMessage, toggleReaction } =
+    useMessages(adapter, id ? `chat:${id}` : undefined, id ?? undefined);
 
-  const audioPlayer = useAudioPlayer();
+  const audioPlayerState = useAudioPlayer();
+  // Stable proxy: useAudioPlayer() returns a new object each render (isPlaying/
+  // isPaused derived from useState), which would invalidate renderItem's useCallback
+  // and cause all MessageBubbles to re-render on every frame. The proxy reads
+  // current state via ref getters without appearing in useCallback deps.
+  const audioPlayerRef = useRef(audioPlayerState);
+  audioPlayerRef.current = audioPlayerState;
+  const audioPlayer = useMemo<typeof audioPlayerState>(() => ({
+    get isPlaying() { return audioPlayerRef.current.isPlaying; },
+    get isPaused() { return audioPlayerRef.current.isPaused; },
+    get currentMessageId() { return audioPlayerRef.current.currentMessageId; },
+    play: (...args: Parameters<typeof audioPlayerState.play>) => audioPlayerRef.current.play(...args),
+    pause: () => audioPlayerRef.current.pause(),
+    resume: () => audioPlayerRef.current.resume(),
+    stop: () => audioPlayerRef.current.stop(),
+  }), []);
   const clearInputTextRef = useRef<(() => void) | null>(null);
+  const flatListRef = useRef<FlatList<DisplayMessage>>(null);
+  const scrollRetryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Clean up scroll retry timeout on unmount
+  useEffect(() => () => {
+    if (scrollRetryRef.current) clearTimeout(scrollRetryRef.current);
+  }, []);
   const voiceConversation = useVoiceConversation({
     chatId: id ?? "",
     onSend: sendMessage,
@@ -320,7 +346,9 @@ export default function ChatDetailScreen() {
     [handleMenuPress],
   );
 
-  // Find last delivered user message to show "Delivered" indicator (like iMessage)
+  // Ref shadow: keeps renderItem stable (fewer useCallback deps) while still
+  // reading the latest value at call time. Safe because renderItem runs
+  // synchronously during React's render phase.
   const lastDeliveredUserMsgId = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
       const m = messages[i];
@@ -328,6 +356,8 @@ export default function ChatDetailScreen() {
     }
     return null;
   }, [messages]);
+  const lastDeliveredRef = useRef(lastDeliveredUserMsgId);
+  lastDeliveredRef.current = lastDeliveredUserMsgId;
 
   const handleReact = useCallback(
     async (messageId: string, emoji: string) => {
@@ -352,10 +382,10 @@ export default function ChatDetailScreen() {
         onRetry={retryMessage}
         onLongPress={handleMessageLongPress}
         onReact={handleReact}
-        showDelivered={item.id === lastDeliveredUserMsgId}
+        showDelivered={item.id === lastDeliveredRef.current} // ref shadow — see declaration above
       />
     ),
-    [audioPlayer, retryMessage, handleMessageLongPress, handleReact, lastDeliveredUserMsgId],
+    [id, audioPlayer, retryMessage, handleMessageLongPress, handleReact],
   );
 
   const keyExtractor = useCallback((item: DisplayMessage) => item.id, []);
@@ -422,7 +452,7 @@ export default function ChatDetailScreen() {
           </View>
         ) : null}
 
-        {isLoading ? (
+        {isLoading && messages.length === 0 ? (
           <View style={screenStyles.loadingContainer}>
             <ActivityIndicator color="#71717a" size="small" />
           </View>
@@ -437,6 +467,7 @@ export default function ChatDetailScreen() {
           />
         ) : (
           <FlatList
+            ref={flatListRef}
             data={invertedMessages}
             inverted
             renderItem={renderItem}
@@ -446,6 +477,31 @@ export default function ChatDetailScreen() {
             keyboardDismissMode="interactive"
             keyboardShouldPersistTaps="handled"
             ListHeaderComponent={showThinking ? <ThinkingIndicator events={sdkEvents} visible={showThinking} /> : null}
+            // Bottom spinner (inverted = ListFooterComponent renders at top visually)
+            // Shows when loading fresh data while displaying cached messages
+            ListFooterComponent={isRefreshing ? (
+              <View style={localStyles.bottomSpinner}>
+                <ActivityIndicator color="#52525b" size="small" />
+              </View>
+            ) : null}
+            // Perf: render ~3 screens ahead instead of default 21.
+            // Message bubbles are variable-height so getItemLayout can't be used.
+            windowSize={7}
+            maxToRenderPerBatch={8}
+            initialNumToRender={15}
+            // removeClippedSubviews can cause blank cells on iOS — only use on Android
+            removeClippedSubviews={Platform.OS === "android"}
+            // Without getItemLayout, scrollToIndex may fail if the target row
+            // hasn't been rendered yet. Scroll to estimated offset, then retry
+            // after one layout pass (~100ms) to let the row render.
+            onScrollToIndexFailed={(info) => {
+              console.warn(`[ChatDetail] scrollToIndex failed: index=${info.index}, retrying`);
+              const offset = info.averageItemLength * info.index;
+              flatListRef.current?.scrollToOffset({ offset, animated: false });
+              scrollRetryRef.current = setTimeout(() => {
+                flatListRef.current?.scrollToIndex({ index: info.index, animated: true, viewPosition: 0 });
+              }, SCROLL_RETRY_DELAY_MS);
+            }}
           />
         )}
         {dictationDraft !== null && <DraftBubble text={dictationDraft} />}
@@ -739,5 +795,9 @@ const localStyles = StyleSheet.create({
   debugLoadingText: {
     color: "#fafafa",
     fontSize: 15,
+  },
+  bottomSpinner: {
+    paddingVertical: 16,
+    alignItems: "center",
   },
 });

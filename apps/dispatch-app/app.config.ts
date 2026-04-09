@@ -111,7 +111,7 @@ export default ({ config: _config }: ConfigContext): ExpoConfig => ({
                   provisioningProfile: merged.provisioningProfile,
                 }),
               },
-            ],
+            ] as [string, Record<string, unknown>],
           ]
         : []),
     ],

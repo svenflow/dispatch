@@ -164,9 +164,9 @@ function showAddFactPrompt(
       { text: "Cancel", style: "cancel" },
       {
         text: "Add",
-        onPress: (value) => {
+        onPress: (value: string | undefined) => {
           if (!value) return;
-          const parts = value.split("|").map((s) => s.trim());
+          const parts = value.split("|").map((s: string) => s.trim());
           if (parts.length < 3) {
             Alert.alert("Invalid format", "Use: contact | type | summary");
             return;
@@ -192,7 +192,7 @@ function showEditFactPrompt(fact: Fact, onSubmit: (summary: string) => void) {
       { text: "Cancel", style: "cancel" },
       {
         text: "Save",
-        onPress: (value) => {
+        onPress: (value: string | undefined) => {
           if (value && value !== fact.summary) {
             onSubmit(value);
           }

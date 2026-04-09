@@ -264,6 +264,17 @@ If subagent returns unhelpful/unclear review:
 
 ---
 
+## Iterative Review Stopping Criteria
+
+When doing multiple rounds of review (re-review after changes), follow these rules to avoid endless loops:
+
+1. **Score plateau** — stop if score doesn't change for 2 consecutive rounds ("Score has plateaued at X.X — content is production-ready.")
+2. **9+ threshold** — 9+ is production-ready; stop unless user explicitly asks for more rounds
+3. **Round 3+** — only flag bugs, correctness issues, and security problems; ignore style/polish
+4. **Hard cap** — maximum 4 rounds total; after round 4, always stop with a summary
+
+When stopping: tell the user "Score has plateaued at X.X — content is production-ready." or "Reached 4-round cap at X.X/10."
+
 ## Usage
 
 Trigger phrases:

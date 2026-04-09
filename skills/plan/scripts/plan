@@ -476,6 +476,53 @@ Prototype: ''' + filename + '''
     click.echo(f"Created: {filepath}")
 
 
+
+
+@cli.command()
+@click.argument("title")
+@click.argument("risk")
+def derisk(title: str, risk: str):
+    """Create a structured derisking exploration for a specific assumption."""
+    plan_path = get_plan_path(title)
+
+    if not plan_path.exists():
+        click.echo(f"Error: Plan not found at {plan_path}", err=True)
+        sys.exit(1)
+
+    explorations_dir = plan_path / "explorations"
+    explorations_dir.mkdir(exist_ok=True)
+
+    date = datetime.now().strftime("%Y-%m-%d")
+    slug = re.sub(r'[^a-z0-9]+', '-', risk.lower()).strip('-')
+    filename = f"{date}-derisk-{slug}.md"
+    filepath = explorations_dir / filename
+
+    # Create structured derisk file
+    content = f"""# Derisk: {risk}
+
+Created: {datetime.now().isoformat()}
+
+## Hypothesis
+What we believe to be true:
+
+
+## Method
+How we'll test this assumption:
+
+
+## Result
+What we observed:
+
+
+## Verdict
+✅ validated / ❌ busted / ⚠️ mitigated
+
+"""
+    filepath.write_text(content)
+    click.echo(f"Created: {filepath}")
+    click.echo("Fill in hypothesis and method, run the experiment, then record result and verdict.")
+
+
 @cli.command()
 @click.argument("title")
 @click.argument("file", type=click.Path(exists=True))

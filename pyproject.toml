@@ -12,6 +12,8 @@ dependencies = [
     "alembic>=1.13.0",
     "discord.py>=2.3.0",
     "duckdb>=1.5.0",
+    "pyobjc-framework-ApplicationServices>=10.0",
+    "pyobjc-framework-Quartz>=10.0",
 ]
 
 [dependency-groups]

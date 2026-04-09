@@ -1,0 +1,119 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e9]:
+  - generic [ref=e14]:
+    - generic [ref=e17]:
+      - 'button "dashboard in app, You: then top right (where % is now) is where we put the new thing" [ref=e20] [cursor=pointer]':
+        - generic [ref=e21]:
+          - img [ref=e24]
+          - generic [ref=e26]:
+            - generic [ref=e27]:
+              - generic [ref=e28]: dashboard in app
+              - generic [ref=e29]: just now
+            - generic [ref=e31]: "You: then top right (where % is now) is where we put the new thing"
+      - button "Debug Flash Issue, oh nice — so you're running the dev server with metro hot reload and it picked up the changes from the branch? that's a live test then. no flicker? 👀" [ref=e39] [cursor=pointer]:
+        - generic [ref=e40]:
+          - generic [ref=e43]: DF
+          - generic [ref=e45]:
+            - generic [ref=e46]:
+              - generic [ref=e47]: Debug Flash Issue
+              - generic [ref=e48]: 2m ago
+            - generic [ref=e50]: oh nice — so you're running the dev server with metro hot reload and it picked up the changes from the branch? that's a live test then. no flicker? 👀
+      - 'button "widget, You: great" [ref=e53] [cursor=pointer]':
+        - generic [ref=e54]:
+          - generic [ref=e57]: W
+          - generic [ref=e59]:
+            - generic [ref=e60]:
+              - generic [ref=e61]: widget
+              - generic [ref=e62]: 2m ago
+            - generic [ref=e64]: "You: great"
+      - button [ref=e67] [cursor=pointer]:
+        - generic [ref=e68]:
+          - generic [ref=e71]: EI
+          - generic [ref=e73]:
+            - generic [ref=e74]:
+              - generic [ref=e75]: Email Integration
+              - generic [ref=e76]: 9m ago
+            - generic [ref=e78]: "## 📋 Plan: Email → Bus Producer ### Understanding Build a daemon that watches Sven's Gmail via `gws gmail +watch` (Google Pub/Sub push notifications) and produces `email.received` events to a new `email` topic on the dispatch bus. No consumers yet — just raw event production. Consumers will be added later and are fully decoupled. ### Architecture ``` Gmail (Pub/Sub push notifications) ↓ gws gmail +watch --project sven-487516 ↓ (NDJSON to stdout) email-producer daemon (Python, reads stdin line-by-line) ↓ (extracts fields, normalizes payload) bus.produce(\"email\", \"email.received\", payload) ``` ### Components to Build **Step 1: Add `email` topic to bus** - File: `~/dispatch/assistant/manager.py` - Add `self._bus.create_topic(\"email\", retention_ms=7*24*3600*1000)` alongside existing topics - One-line change **Step 2: Write `email-producer` script** - File: `~/dispatch/bin/email-producer` - Python script with uv shebang - Subprocess launches `gws gmail +watch --project sven-487516 --label-ids INBOX --msg-format metadata` - Reads NDJSON stdout line by line - For each email, extracts: `id`, `threadId`, `labelIds`, `snippet`, `internalDate`, and from headers: `From`, `To`, `Subject`, `Date` - Produces to bus: `produce_event(producer, \"email\", \"email.received\", payload, key=f\"email/{message_id}\", source=\"gmail\")` - Handles: subprocess crashes (restart with backoff), malformed JSON (log + skip), SIGTERM (graceful shutdown) - Uses `--msg-format metadata` to avoid fetching full bodies (lighter, faster — bodies can be fetched on-demand by consumers) - Dedup: tracks seen message IDs in a small SQLite table to avoid re-producing on restart (Gmail watch can re-deliver) - Auto-renews watch every 6 days (before 7-day expiry) **Step 3: Launchd plist** - File: `~/dispatch/launchd/com.dispatch.email-producer.plist` - Long-running daemon pattern (like signal-cli) - Logs to `~/dispatch/logs/email-producer-launchd.log` - Install to `~/Library/LaunchAgents/` **Step 4: Bus helpers** - File: `~/dispatch/assistant/bus_helpers.py` - Add `produce_email_event()` convenience wrapper - Add `email_received_payload()` builder that normalizes Gmail API format into our standard payload shape ### Payload Schema ```json { \"message_id\": \"18f3a...\", \"thread_id\": \"18f3a...\", \"from\": \"Sender Name <sender@example.com>\", \"to\": \"sven@gmail.com\", \"subject\": \"Email subject\", \"snippet\": \"First 200 chars...\", \"label_ids\": [\"INBOX\", \"UNREAD\"], \"timestamp_ms\": 1712345678000, \"size_estimate\": 4321 } ``` ### Key Decisions - **metadata format** over full — lighter, no base64 body decoding, consumers can fetch full body if needed via Gmail API - **dedup via SQLite** — Gmail Pub/Sub has at-least-once delivery; we track message IDs to avoid duplicates - **standalone daemon** (not embedded in manager) — keeps separation of concerns, can restart independently - **auto-renewal** — watch expires in 7 days; we renew at 6 days proactively ### Testing Plan 1. Verify Pub/Sub setup works: `gws gmail +watch --project sven-487516 --once --cleanup` 2. Run email-producer manually, send a test email to Sven's Gmail 3. Verify event appears in bus: `uv run python -m bus.cli consume email --group test --once` 4. Install launchd, verify it starts and stays running 5. Send another test email, verify end-to-end reviewing with /subagent-review now..."
+      - 'button "skill loading metrics, done ✓ removed from skill detail page: - **Avg Duration** stat card - **Error Rate** stat card - error/success dots on recent invocations - duration on recent invocations just shows Total Uses + Last Used now, and recent invocations show timestamp + session name only. force-close the app to pick up the changes." [ref=e86] [cursor=pointer]':
+        - generic [ref=e87]:
+          - generic [ref=e90]: SL
+          - generic [ref=e91]:
+            - generic [ref=e92]:
+              - generic [ref=e93]: skill loading metrics
+              - generic [ref=e94]: 6h ago
+            - generic [ref=e96]: "done ✓ removed from skill detail page: - **Avg Duration** stat card - **Error Rate** stat card - error/success dots on recent invocations - duration on recent invocations just shows Total Uses + Last Used now, and recent invocations show timestamp + session name only. force-close the app to pick up the changes."
+      - 'button "[App] Settings, fixed it! the soul edit endpoint was broken because the API server had crashed and restarted without the Anthropic API key in its environment. **root cause**: the edit endpoint was spawning a Python subprocess that called `anthropic.Anthropic()` directly — which needs `ANTHROPIC_API_KEY` in the env. the server doesn''t have that key (it''s only available inside Claude Code sessions via OAuth). **fix**: switched the endpoint to use `claude --print` CLI instead, which handles its own OAuth auth. no API key needed, and it''s more reliable since it uses the same auth mechanism as everything else. tested and working — try editing your soul again 👆" [ref=e99] [cursor=pointer]':
+        - generic [ref=e100]:
+          - generic [ref=e103]: AS
+          - generic [ref=e104]:
+            - generic [ref=e105]:
+              - generic [ref=e106]: "[App] Settings"
+              - generic [ref=e107]: 6h ago
+            - generic [ref=e109]: "fixed it! the soul edit endpoint was broken because the API server had crashed and restarted without the Anthropic API key in its environment. **root cause**: the edit endpoint was spawning a Python subprocess that called `anthropic.Anthropic()` directly — which needs `ANTHROPIC_API_KEY` in the env. the server doesn't have that key (it's only available inside Claude Code sessions via OAuth). **fix**: switched the endpoint to use `claude --print` CLI instead, which handles its own OAuth auth. no API key needed, and it's more reliable since it uses the same auth mechanism as everything else. tested and working — try editing your soul again 👆"
+      - button "Remove Dashboard Title, 👍" [ref=e112] [cursor=pointer]:
+        - generic [ref=e113]:
+          - generic [ref=e116]: RD
+          - generic [ref=e117]:
+            - generic [ref=e118]:
+              - generic [ref=e119]: Remove Dashboard Title
+              - generic [ref=e120]: 6h ago
+            - generic [ref=e122]: 👍
+      - 'button "watchdog / health, on it 👍 three changes: 1. add haiku reasoning text to the bus event payload 2. update the API to return it 3. show it in the app as an expandable detail on verdict rows" [ref=e125] [cursor=pointer]':
+        - generic [ref=e126]:
+          - generic [ref=e129]: WH
+          - generic [ref=e130]:
+            - generic [ref=e131]:
+              - generic [ref=e132]: watchdog / health
+              - generic [ref=e133]: 6h ago
+            - generic [ref=e135]: "on it 👍 three changes: 1. add haiku reasoning text to the bus event payload 2. update the API to return it 3. show it in the app as an expandable detail on verdict rows"
+      - button "Explore Features, nah, this session was the feature brainstorm (v5) and then building A1 (Knowledge Base) + B5 (Cost Analytics). widgets weren't part of the brainstorm list. were you thinking of a different chat? or do you want to add new widget types as a feature here?" [ref=e138] [cursor=pointer]:
+        - generic [ref=e139]:
+          - generic [ref=e142]: EF
+          - generic [ref=e143]:
+            - generic [ref=e144]:
+              - generic [ref=e145]: Explore Features
+              - generic [ref=e146]: 6h ago
+            - generic [ref=e148]: nah, this session was the feature brainstorm (v5) and then building A1 (Knowledge Base) + B5 (Cost Analytics). widgets weren't part of the brainstorm list. were you thinking of a different chat? or do you want to add new widget types as a feature here?
+      - 'button "OTA Update Strategy, done — updated both skills: 1. **ios-app skill** — added \"Always Use Debug Configuration for Device Builds\" section + \"How Metro Over Tailscale Works\" explaining the `RCTMetroHost` + AppDelegate mechanism 2. **dispatch-api skill** — rewrote the `serve-ipa` section to always use `-configuration Debug`, with full build steps and a warning to never use Release for serve-ipa builds shouldn''t get this wrong again 🤞" [ref=e151] [cursor=pointer]':
+        - generic [ref=e152]:
+          - generic [ref=e155]: OU
+          - generic [ref=e156]:
+            - generic [ref=e157]:
+              - generic [ref=e158]: OTA Update Strategy
+              - generic [ref=e159]: 8h ago
+            - generic [ref=e161]: "done — updated both skills: 1. **ios-app skill** — added \"Always Use Debug Configuration for Device Builds\" section + \"How Metro Over Tailscale Works\" explaining the `RCTMetroHost` + AppDelegate mechanism 2. **dispatch-api skill** — rewrote the `serve-ipa` section to always use `-configuration Debug`, with full build steps and a warning to never use Release for serve-ipa builds shouldn't get this wrong again 🤞"
+      - button "Check QR Readers, https://sven-pages-worker.nicklaudethorat.workers.dev/ascii-qr/" [ref=e164] [cursor=pointer]:
+        - generic [ref=e165]:
+          - generic [ref=e168]: CQ
+          - generic [ref=e169]:
+            - generic [ref=e170]:
+              - generic [ref=e171]: Check QR Readers
+              - generic [ref=e172]: Mar 29
+            - generic [ref=e174]: https://sven-pages-worker.nicklaudethorat.workers.dev/ascii-qr/
+      - button "[App] messaging UX, hey Nikhil! 👋" [ref=e177] [cursor=pointer]:
+        - generic [ref=e178]:
+          - generic [ref=e181]: AM
+          - generic [ref=e182]:
+            - generic [ref=e183]:
+              - generic [ref=e184]: "[App] messaging UX"
+              - generic [ref=e185]: Mar 29
+            - generic [ref=e187]: hey Nikhil! 👋
+      - button "Build Rename Modal, nope, left that to you since restarting kills this session. want me to restart now?" [ref=e190] [cursor=pointer]:
+        - generic [ref=e191]:
+          - generic [ref=e194]: BR
+          - generic [ref=e195]:
+            - generic [ref=e196]:
+              - generic [ref=e197]: Build Rename Modal
+              - generic [ref=e198]: Mar 29
+            - generic [ref=e200]: nope, left that to you since restarting kills this session. want me to restart now?
+    - button "New chat":
+      - generic [ref=e202] [cursor=pointer]: +
+  - generic [ref=e203]:
+    - generic [ref=e205] [cursor=pointer]: Chats
+    - generic [ref=e207] [cursor=pointer]: agents
+    - generic [ref=e209] [cursor=pointer]: voice
+    - generic [ref=e211] [cursor=pointer]: Dashboard
+    - generic [ref=e213] [cursor=pointer]: Settings
+```

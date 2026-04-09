@@ -3,9 +3,18 @@ import { AppState, type AppStateStatus } from "react-native";
 import { getMessages, sendPrompt, sendPromptWithImage } from "../api/chats";
 import { getAgentMessages, sendAgentMessage } from "../api/agents";
 import type { ChatMessage, AgentMessage, WidgetData, WidgetResponse } from "../api/types";
-import { MESSAGE_POLL_INTERVAL } from "../config/constants";
+import { MESSAGE_POLL_INTERVAL, OUTBOX_MAX_RETRIES, OUTBOX_TTL_MS, DRAIN_ITEM_TIMEOUT_MS } from "../config/constants";
 import { generateUUID } from "../utils/uuid";
 import { makeLayoutAnim, safeConfigureNext, backoffDelay } from "../utils/animation";
+import {
+  getOutbox,
+  saveOutbox,
+  enqueueOutbox,
+  removeFromOutbox,
+  updateAttempts,
+  type OutboxItem,
+} from "../utils/outbox";
+import { getCachedMessages, setCachedMessages } from "../utils/messageCache";
 
 /** iMessage-like eased animation for new messages — no bounce, just smooth */
 const messageEaseAnim = makeLayoutAnim(300);
@@ -21,6 +30,7 @@ export interface DisplayMessage {
   timestamp: string; // ISO string
   isPending?: boolean;
   sendFailed?: boolean; // true when send failed — shows "Not Delivered" + retry
+  attempts?: number; // number of send attempts — used for maxedOut display (>= OUTBOX_MAX_RETRIES)
   serverMessageId?: string; // idempotency key sent to server — reused on retry to prevent duplicates
   audioUrl?: string | null;
   imageUrl?: string | null;
@@ -139,6 +149,7 @@ function agentMessageToDisplay(m: AgentMessage): DisplayMessage {
 export interface UseMessagesReturn {
   messages: DisplayMessage[];
   isLoading: boolean;
+  isRefreshing: boolean;
   error: string | null;
   isThinking: boolean;
   sendMessage: (text: string) => Promise<void>;
@@ -148,9 +159,10 @@ export interface UseMessagesReturn {
   toggleReaction: (messageId: string, emoji: string) => void;
 }
 
-export function useMessages(adapter: MessageAdapter, _cacheKey?: string): UseMessagesReturn {
+export function useMessages(adapter: MessageAdapter, cacheKey?: string, outboxChatId?: string): UseMessagesReturn {
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isThinking, setIsThinking] = useState(false);
 
@@ -165,6 +177,13 @@ export function useMessages(adapter: MessageAdapter, _cacheKey?: string): UseMes
   // Track consecutive poll failures to surface persistent connection issues
   const pollFailCountRef = useRef(0);
   const MAX_SILENT_POLL_FAILURES = 5;
+
+  // Outbox: guard against concurrent drain runs
+  const isDrainingRef = useRef(false);
+
+  // Ref mirror of messages for non-stale access in callbacks
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
 
 
   // -----------------------------------------------------------------------
@@ -185,12 +204,32 @@ export function useMessages(adapter: MessageAdapter, _cacheKey?: string): UseMes
   }, []);
 
   // -----------------------------------------------------------------------
-  // Initial load
+  // Initial load — try cache first for instant display, then refresh from server
   // -----------------------------------------------------------------------
 
+  const cacheKeyRef = useRef(cacheKey);
+  cacheKeyRef.current = cacheKey;
+
   const loadInitial = useCallback(async () => {
-    setIsLoading(true);
     setError(null);
+
+    // Phase 1: Load from cache for instant display
+    if (cacheKeyRef.current) {
+      try {
+        const cached = await getCachedMessages<DisplayMessage>(cacheKeyRef.current);
+        if (cached && cached.length > 0 && mountedRef.current) {
+          setMessages(cached);
+          updateLatestTs(cached);
+          setIsLoading(false);
+          // Show bottom spinner while refreshing from server
+          setIsRefreshing(true);
+        }
+      } catch {
+        // Cache read failed — continue to server fetch with full spinner
+      }
+    }
+
+    // Phase 2: Fetch fresh data from server
     try {
       const result = await adapterRef.current.fetchMessages({});
       if (!mountedRef.current) return;
@@ -203,13 +242,163 @@ export function useMessages(adapter: MessageAdapter, _cacheKey?: string): UseMes
       } else if (result.messages.length > 0 && result.messages[result.messages.length - 1].role === "user") {
         setIsThinking(true);
       }
+
+      // Write-through: update cache with fresh data
+      if (cacheKeyRef.current) {
+        setCachedMessages(cacheKeyRef.current, result.messages); // fire-and-forget
+      }
     } catch (err) {
       if (!mountedRef.current) return;
-      setError(err instanceof Error ? err.message : "Failed to load messages");
+      // Only show error if we have no cached data to display
+      if (messagesRef.current.length === 0) {
+        setError(err instanceof Error ? err.message : "Failed to load messages");
+      }
     } finally {
-      if (mountedRef.current) setIsLoading(false);
+      if (mountedRef.current) {
+        setIsLoading(false);
+        setIsRefreshing(false);
+      }
     }
   }, [updateLatestTs]);
+
+  // -----------------------------------------------------------------------
+  // Outbox: convert persisted item to display message
+  // -----------------------------------------------------------------------
+
+  function outboxItemToDisplayMessage(item: OutboxItem): DisplayMessage {
+    return {
+      id: item.id,
+      role: "user",
+      content: item.content,
+      timestamp: item.timestamp,
+      isPending: false,
+      sendFailed: true,
+      serverMessageId: item.serverMessageId,
+      attempts: item.attempts,
+      localImageUri: item.imageUri,
+      retryChatId: item.retryChatId,
+    };
+  }
+
+  // -----------------------------------------------------------------------
+  // Outbox: merge persisted outbox items after loadInitial
+  // -----------------------------------------------------------------------
+
+  const mergeOutbox = useCallback(async () => {
+    if (!outboxChatId) return;
+
+    const outboxItems = await getOutbox(outboxChatId);
+    if (outboxItems.length === 0) return;
+
+    // TTL purge: drop items older than 7 days
+    const now = Date.now();
+    const fresh = outboxItems.filter((i) => now - new Date(i.timestamp).getTime() < OUTBOX_TTL_MS);
+    const purged = outboxItems.length - fresh.length;
+    if (purged > 0) {
+      console.info(`[outbox] TTL purged ${purged} items for ${outboxChatId}`);
+      await saveOutbox(outboxChatId, fresh);
+    }
+
+    if (fresh.length === 0) return;
+
+    // Get current server messages — server id === client serverMessageId
+    const currentMessages = messagesRef.current;
+    const serverIds = new Set(
+      currentMessages.map((m) => m.serverMessageId ?? m.id),
+    );
+
+    // Partition: delivered (server has it) vs pending (server doesn't)
+    const delivered = fresh.filter((i) => serverIds.has(i.serverMessageId));
+    const pending = fresh.filter((i) => !serverIds.has(i.serverMessageId));
+
+    // Remove delivered from disk
+    if (delivered.length > 0) {
+      await saveOutbox(outboxChatId, pending);
+    }
+
+    // Inject pending into React state (dedup by serverMessageId)
+    if (pending.length > 0) {
+      const existingServerMsgIds = new Set(
+        currentMessages
+          .filter((m) => m.serverMessageId)
+          .map((m) => m.serverMessageId),
+      );
+      const toInject = pending.filter(
+        (i) => !existingServerMsgIds.has(i.serverMessageId),
+      );
+
+      if (toInject.length > 0) {
+        console.info(`[outbox] injected ${toInject.length} items for ${outboxChatId}`);
+        safeConfigureNext(messageEaseAnim);
+        setMessages((prev) => [...prev, ...toInject.map(outboxItemToDisplayMessage)]);
+      }
+    }
+  }, [outboxChatId]);
+
+  // -----------------------------------------------------------------------
+  // Outbox: drain — auto-retry non-image items with attempts < MAX_RETRIES
+  // -----------------------------------------------------------------------
+
+  const drainOutbox = useCallback(async () => {
+    if (!outboxChatId) return;
+    if (isDrainingRef.current) return;
+    isDrainingRef.current = true;
+
+    let drained = 0;
+    let total = 0;
+
+    try {
+      const items = await getOutbox(outboxChatId);
+      const drainable = items.filter(
+        (i) => !i.hasImage && i.attempts < OUTBOX_MAX_RETRIES,
+      );
+      total = drainable.length;
+
+      for (const item of drainable) {
+        if (!mountedRef.current) break;
+        try {
+          await Promise.race([
+            adapterRef.current.sendMessage(item.content, item.serverMessageId),
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error("drain item timeout")), DRAIN_ITEM_TIMEOUT_MS),
+            ),
+          ]);
+          // Success — remove from outbox, mark as pending in state (poll will confirm)
+          await removeFromOutbox(outboxChatId, item.serverMessageId);
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.serverMessageId === item.serverMessageId
+                ? { ...m, isPending: true, sendFailed: false, attempts: undefined }
+                : m,
+            ),
+          );
+          drained++;
+        } catch {
+          // Failed — increment attempts on disk AND in React state
+          const newAttempts = item.attempts + 1;
+          try {
+            await updateAttempts(outboxChatId, item.serverMessageId, newAttempts);
+          } catch (diskErr) {
+            console.warn("[outbox] updateAttempts disk write failed during drain", diskErr);
+          }
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.serverMessageId === item.serverMessageId
+                ? { ...m, attempts: newAttempts }
+                : m,
+            ),
+          );
+        }
+      }
+    } catch (err) {
+      console.warn("[outbox] drainOutbox unexpected error", err);
+    } finally {
+      isDrainingRef.current = false;
+      if (drained > 0) {
+        console.info(`[outbox] drained ${drained}/${total} items for ${outboxChatId}`);
+      }
+    }
+  }, [outboxChatId]);
 
   // -----------------------------------------------------------------------
   // Poll for new messages
@@ -248,10 +437,11 @@ export function useMessages(adapter: MessageAdapter, _cacheKey?: string): UseMes
 
         if (truly_new.length === 0) return prev;
 
-        // Remove pending messages that match incoming server messages by serverMessageId
+        // Remove pending/failed messages that match incoming server messages by serverMessageId
+        // This handles both optimistic inserts (isPending) and outbox-hydrated items (sendFailed)
         const newIds = new Set(truly_new.map((m) => m.id));
         const filtered = prev.filter(
-          (m) => !m.isPending || !m.serverMessageId || !newIds.has(m.serverMessageId),
+          (m) => (!m.isPending && !m.sendFailed) || !m.serverMessageId || !newIds.has(m.serverMessageId),
         );
 
         // Fallback: also match by content for messages without serverMessageId.
@@ -272,6 +462,24 @@ export function useMessages(adapter: MessageAdapter, _cacheKey?: string): UseMes
       });
 
       updateLatestTs(newMsgs);
+
+      // Clean up outbox items confirmed by server
+      if (outboxChatId) {
+        for (const msg of newMsgs) {
+          // Server message id matches outbox serverMessageId
+          removeFromOutbox(outboxChatId, msg.id); // fire-and-forget
+        }
+      }
+
+      // Write-through: update cache with current state
+      if (cacheKeyRef.current) {
+        // Grab latest state after merge — messagesRef is updated synchronously
+        setTimeout(() => {
+          if (cacheKeyRef.current) {
+            setCachedMessages(cacheKeyRef.current, messagesRef.current); // fire-and-forget
+          }
+        }, 0);
+      }
 
       // Fallback: check if assistant has responded — stop thinking indicator
       // (only used when server doesn't provide is_thinking)
@@ -351,34 +559,49 @@ export function useMessages(adapter: MessageAdapter, _cacheKey?: string): UseMes
         setMessages((prev) =>
           prev.map((m) =>
             m.id === pendingId
-              ? { ...m, isPending: false, sendFailed: true }
+              ? { ...m, isPending: false, sendFailed: true, attempts: 1 }
               : m,
           ),
         );
         setIsThinking(false);
+
+        // Persist to outbox for durability across app kills
+        if (outboxChatId) {
+          const ok = await enqueueOutbox(outboxChatId, {
+            id: pendingId,
+            content: trimmed,
+            serverMessageId,
+            timestamp: pendingMsg.timestamp,
+            attempts: 1,
+          });
+          if (!ok) {
+            console.warn("[outbox] enqueue failed — message not durable");
+          }
+        }
       }
     },
-    [],
+    [outboxChatId],
   );
 
   // -----------------------------------------------------------------------
   // Retry a failed message
   // -----------------------------------------------------------------------
 
-  // Use a ref to avoid stale closure over messages in retryMessage
-  const messagesRef = useRef(messages);
-  messagesRef.current = messages;
-
   const retryMessage = useCallback(
     async (messageId: string) => {
       const failedMsg = messagesRef.current.find((m) => m.id === messageId && m.sendFailed);
       if (!failedMsg) return;
 
-      // Mark as pending again
+      // If maxedOut (attempts >= MAX_RETRIES), user intent = fresh start — reset attempts
+      if (outboxChatId && failedMsg.serverMessageId && (failedMsg.attempts ?? 0) >= OUTBOX_MAX_RETRIES) {
+        await updateAttempts(outboxChatId, failedMsg.serverMessageId, 0);
+      }
+
+      // Mark as pending again — keep attempts undefined to suppress failure label during retry
       setMessages((prev) =>
         prev.map((m) =>
           m.id === messageId
-            ? { ...m, isPending: true, sendFailed: false }
+            ? { ...m, isPending: true, sendFailed: false, attempts: undefined }
             : m,
         ),
       );
@@ -390,19 +613,33 @@ export function useMessages(adapter: MessageAdapter, _cacheKey?: string): UseMes
         } else {
           await adapterRef.current.sendMessage(failedMsg.content, failedMsg.serverMessageId);
         }
+        // Success — remove from outbox
+        if (outboxChatId && failedMsg.serverMessageId) {
+          await removeFromOutbox(outboxChatId, failedMsg.serverMessageId);
+        }
       } catch {
         if (!mountedRef.current) return;
+        const newAttempts = (failedMsg.attempts ?? 0) + 1;
         setMessages((prev) =>
           prev.map((m) =>
             m.id === messageId
-              ? { ...m, isPending: false, sendFailed: true }
+              ? { ...m, isPending: false, sendFailed: true, attempts: newAttempts }
               : m,
           ),
         );
         setIsThinking(false);
+
+        // Update attempts in outbox
+        if (outboxChatId && failedMsg.serverMessageId) {
+          try {
+            await updateAttempts(outboxChatId, failedMsg.serverMessageId, newAttempts);
+          } catch (diskErr) {
+            console.warn("[outbox] updateAttempts failed during retry", diskErr);
+          }
+        }
       }
     },
-    [],
+    [outboxChatId],
   );
 
   // -----------------------------------------------------------------------
@@ -439,14 +676,28 @@ export function useMessages(adapter: MessageAdapter, _cacheKey?: string): UseMes
         setMessages((prev) =>
           prev.map((m) =>
             m.id === pendingId
-              ? { ...m, isPending: false, sendFailed: true }
+              ? { ...m, isPending: false, sendFailed: true, attempts: 1 }
               : m,
           ),
         );
         setIsThinking(false);
+
+        // Persist to outbox — hasImage:true means skip auto-drain (manual retry only)
+        if (outboxChatId) {
+          await enqueueOutbox(outboxChatId, {
+            id: pendingId,
+            content: trimmed,
+            serverMessageId,
+            timestamp: pendingMsg.timestamp,
+            attempts: 1,
+            hasImage: true,
+            imageUri,
+            retryChatId: chatId,
+          });
+        }
       }
     },
-    [],
+    [outboxChatId],
   );
 
   // -----------------------------------------------------------------------
@@ -465,31 +716,33 @@ export function useMessages(adapter: MessageAdapter, _cacheKey?: string): UseMes
   useEffect(() => {
     mountedRef.current = true;
 
-    loadInitial().then(() => {
-      if (mountedRef.current) startPolling();
-    });
+    loadInitial()
+      .then(() => { if (mountedRef.current) return mergeOutbox(); })
+      .then(() => { if (mountedRef.current) return drainOutbox(); })
+      .then(() => { if (mountedRef.current) startPolling(); });
 
     return () => {
       mountedRef.current = false;
       stopPolling();
     };
-  }, [loadInitial, startPolling, stopPolling]);
+  }, [loadInitial, mergeOutbox, drainOutbox, startPolling, stopPolling]);
 
   // Pause polling when app backgrounds, resume when foregrounded
   useEffect(() => {
     const handleAppState = (nextState: AppStateStatus) => {
       if (nextState === "active") {
-        // Full reload on foreground to avoid stale data
-        loadInitial().then(() => {
-          if (mountedRef.current) startPolling();
-        });
+        // Full reload on foreground, then merge outbox + drain + resume polling
+        loadInitial()
+          .then(() => { if (mountedRef.current) return mergeOutbox(); })
+          .then(() => { if (mountedRef.current) return drainOutbox(); })
+          .then(() => { if (mountedRef.current) startPolling(); });
       } else {
         stopPolling();
       }
     };
     const sub = AppState.addEventListener("change", handleAppState);
     return () => sub.remove();
-  }, [loadInitial, startPolling, stopPolling]);
+  }, [loadInitial, mergeOutbox, drainOutbox, startPolling, stopPolling]);
 
   const toggleReaction = useCallback((messageId: string, emoji: string) => {
     setMessages((prev) =>
@@ -505,6 +758,7 @@ export function useMessages(adapter: MessageAdapter, _cacheKey?: string): UseMes
   return {
     messages,
     isLoading,
+    isRefreshing,
     error,
     isThinking,
     sendMessage,

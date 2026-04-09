@@ -18,6 +18,39 @@ The bus is a Kafka-on-SQLite event system at the core of Dispatch. All messages,
 
 ## CLI Usage
 
+## Searching for Past Messages / Conversations
+
+**This is the #1 tool for "find that conversation" requests.** The bus records ALL messages (sent and received) across iMessage, Signal, and Dispatch App with full-text search. Use this BEFORE searching chat.db, dispatch-messages.db, or transcript files.
+
+```bash
+cd ~/dispatch
+
+# Search for any past message by keyword (searches full message text)
+uv run python -m bus.cli search "crosstrek paint" --limit 10
+
+# Narrow to a specific chat
+uv run python -m bus.cli search "birthday gift" --key "ab3876ca883949d2b0ce9c4cd5d1d633" --limit 10
+
+# Search only received messages
+uv run python -m bus.cli search "subaru" --type message.received --limit 10
+
+# Search within a time window
+uv run python -m bus.cli search "allston collision" --since 30 --limit 10
+```
+
+**Why bus search first:**
+- Has full plaintext of ALL messages (iMessage `text` field is often NULL for group chats — only `attributedBody` blob exists in chat.db)
+- Covers all backends (iMessage, Signal, Dispatch App) in one search
+- FTS5 is fast and handles partial matches
+- Archive tables preserve messages beyond the 7-day hot retention
+
+**Fallback order if bus doesn't have it:**
+1. `bus.cli search` (FTS on bus.db — covers all backends, always has plaintext)
+2. `dispatch-messages.db` (Dispatch App messages)
+3. `read-sms` CLI (parses attributedBody correctly — never query chat.db text field directly for group chats)
+4. Transcript compaction files (`~/transcripts/*/.compactions/*.md`)
+
+
 All CLI commands run from `~/dispatch`:
 
 ```bash

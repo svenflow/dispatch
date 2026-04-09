@@ -22,7 +22,17 @@ def check_setup():
         print("GPS key not found. Run the one-time setup first: ~/.claude/skills/findmy/SETUP.md", file=sys.stderr)
         sys.exit(1)
 
-def decrypt_db():
+def refresh_findmy(timeout=8):
+    """Open Find My app to trigger a location sync."""
+    try:
+        subprocess.run(["open", "/System/Applications/FindMy.app"], capture_output=True)
+        import time; time.sleep(timeout)
+    except Exception:
+        pass
+
+def decrypt_db(refresh=True):
+    if refresh:
+        refresh_findmy()
     work_dir = DECRYPT_SCRIPT.parent
     subprocess.run([sys.executable, str(DECRYPT_SCRIPT), str(KEY_FILE)],
                    capture_output=True, cwd=work_dir)

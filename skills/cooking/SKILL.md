@@ -602,3 +602,123 @@ Then:
 ~/.claude/skills/chrome-control/scripts/chrome -p 1 screenshot <tab_id>  # Take screenshot
 ~/.claude/skills/chrome-control/scripts/chrome -p 1 scroll <tab_id> down 3  # Scroll
 ```
+
+
+## Part A.5: Cooking Timeline — Ingredient Fact-Check (MANDATORY)
+
+When generating a `cooking_timeline` widget, **every step must be ingredient-accurate against the original recipe.** Before sending the timeline, spawn a subagent (sonnet) to fact-check all steps.
+
+### Subagent Prompt Template
+
+```
+You are an ingredient fact-checker for a cooking timeline. Given the ORIGINAL RECIPE and the GENERATED TIMELINE STEPS, verify each step's ingredients are correct.
+
+ORIGINAL RECIPE:
+{paste full recipe text — ingredients list + preparation instructions}
+
+GENERATED TIMELINE STEPS:
+{paste the JSON steps array you're about to send}
+
+For EACH step that mentions an ingredient, check:
+1. **Is it in the original recipe?** Flag any ingredient that appears in a step but NOT in the recipe.
+2. **Is the amount correct?** If a step says "2 cloves garlic" but the recipe says "4 cloves", flag it.
+3. **Is anything missing?** If the recipe says to add butter at this stage but the step doesn't mention it, flag it.
+4. **Any accidental additions?** Sometimes when paraphrasing, ingredients get added that aren't in the recipe (e.g., "thyme" added to a step when the recipe never calls for thyme). Flag these.
+
+Output format:
+- ✅ Step "id": all ingredients correct
+- ⚠️ Step "id": [issue description]
+
+Be strict. Every ingredient in every step must trace back to the original recipe.
+```
+
+### When to Run This
+
+- **Always** before sending a `cooking_timeline` widget
+- After any modifications to the timeline (if user asks to adjust)
+- The subagent result doesn't need to be shown to the user — just fix any issues it finds before sending
+
+### Common Mistakes to Catch
+
+- Adding "thyme" or "rosemary" to a butter-baste step when the recipe doesn't call for herbs
+- Wrong garlic quantity (recipe says 3 cloves, step says 2)
+- Missing an ingredient that should be added at that step (e.g., forgetting to add salt when the recipe says "season with salt")
+- Inventing garnishes not in the original recipe
+- Swapping oils (recipe says olive oil, step says avocado oil)
+
+
+## Part A.6: Recipe Archive (MANDATORY)
+
+Every recipe we cook gets saved as a markdown file in `~/recipes/` for future reference and search.
+
+### When to Save
+
+- **After user approves a recipe** and before/during the cooking timeline phase
+- Save the recipe ONCE — don't duplicate if user asks to cook it again (update the existing file instead)
+
+### File Format
+
+**Filename:** `~/recipes/YYYY-MM-DD-slug.md` (date of first cook + slugified name)
+
+Example: `~/recipes/2026-04-06-reverse-sear-ribeye.md`
+
+```markdown
+# Reverse Sear Ribeye with Roasted Mushrooms & Asparagus
+
+**Source:** [NYT Cooking](https://cooking.nytimes.com/...) | improvised | etc.
+**Serves:** 2
+**Time:** ~75 min
+**Tags:** beef, steak, date-night, reverse-sear
+
+## Ingredients
+
+- 2 ribeye steaks (1.5" thick)
+- Kosher salt
+- 2 tbsp avocado oil
+- 2 tbsp butter
+- ...full ingredient list...
+
+## Steps
+
+1. Salt steaks generously...
+2. Preheat oven to 275°F...
+...full preparation steps...
+
+## Notes
+
+- Internal temp: pull at 115°F for medium-rare
+- Any modifications we made
+- What worked, what to change next time
+```
+
+### Searching Recipes
+
+The archive is just markdown files — use Grep to search:
+```bash
+# Find all beef recipes
+grep -rl "beef" ~/recipes/
+
+# Find recipes by tag
+grep -rl "date-night" ~/recipes/
+
+# Find by ingredient
+grep -rl "mushroom" ~/recipes/
+```
+
+### Updating Recipes
+
+If we cook something again with modifications, update the existing file:
+- Add a `## Cook Log` section at the bottom with dated entries
+- Update any notes about what worked better
+
+```markdown
+## Cook Log
+
+### 2026-04-06
+- First cook. Pulled at 115°F — perfect medium-rare.
+- Mushrooms could use more balsamic next time.
+
+### 2026-04-20
+- Added rosemary to butter baste. Much better.
+- Used 425°F for veggies instead of 400°F — better char.
+```

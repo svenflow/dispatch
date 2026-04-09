@@ -67,5 +67,17 @@ export const REQUEST_TIMEOUT = 15000;
 /** Storage key for persisted API URL */
 export const API_URL_STORAGE_KEY = "dispatch_api_url";
 
+/** Outbox: max auto-retry attempts before marking as permanently failed */
+export const OUTBOX_MAX_RETRIES = 3;
+
+/** Outbox: time-to-live for outbox items (7 days) */
+export const OUTBOX_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** Outbox: max bytes per chat outbox file (50KB safety cap) */
+export const OUTBOX_MAX_BYTES = 50_000;
+
+/** Outbox: per-item timeout during drain (10 seconds) */
+export const DRAIN_ITEM_TIMEOUT_MS = 10_000;
+
 /** Google Maps Embed API key (public, restricted to embed usage) */
 export const GOOGLE_MAPS_EMBED_KEY = "AIzaSyAAZfRH6ubjcaDh6mcj9yaRI2NpqdSbQ3c";

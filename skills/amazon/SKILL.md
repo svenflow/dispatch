@@ -241,3 +241,21 @@ Re-sign in and retry. Payment method may need re-adding.
 
 ### click-by-name hits wrong element
 Use `chrome js` with `document.querySelector()` as fallback.
+
+### Prime upsell interstitial ("Try Prime" / "Add a Prime membership")
+
+After clicking "Add to Cart", Amazon sometimes shows a full-page Prime upsell instead of the cart confirmation. This blocks the checkout flow.
+
+**Primary path** — click by name (try these in order):
+```bash
+chrome click-by-name <tab> "No thanks"
+# OR
+chrome click-by-name <tab> "Continue without Prime"
+```
+
+**JS fallback** (if click-by-name fails):
+```bash
+chrome js <tab> "document.querySelector('[data-action=\"prime-upsell-decline\"], [id*=\"no-thanks\"], [id*=\"noThanks\"]')?.click()"
+```
+
+**Note:** After every "Add to Cart", check for Prime upsell and dismiss before proceeding to checkout. This interstitial has been seen multiple times during Roomba parts checkout.

@@ -89,6 +89,17 @@ echo "✓ Update published to: $UPDATE_DIR"
 echo ""
 echo "Contents:"
 find "$UPDATE_DIR" -type f | head -30
+
+# Also rebuild the web export so the dispatch-api root endpoint stays in sync
+echo ""
+echo "→ Rebuilding web export..."
+npx expo export --platform web 2>&1
+if [ -f "$APP_DIR/dist/index.html" ]; then
+  echo "✓ Web export updated"
+else
+  echo "⚠ Web export ran but index.html missing"
+fi
+
 echo ""
 echo "The dispatch-api manifest endpoint will serve this automatically."
 echo "Restart the app to pick up the update (or wait for next cold start)."

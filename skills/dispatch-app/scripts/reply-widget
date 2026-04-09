@@ -28,7 +28,7 @@ from pathlib import Path
 # Add scripts dir for shared module imports
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from dispatch_db import init_db, store_message, get_chat_title
-from widget_models import validate_widget, format_widget_content, WIDGET_REGISTRY
+from widget_models import validate_and_dump_widget, format_widget_content, WIDGET_REGISTRY
 
 
 PUSH_SCRIPT = Path.home() / ".claude" / "skills" / "dispatch-app" / "scripts" / "send-push"
@@ -70,19 +70,20 @@ def main():
     payload["v"] = 1
     payload["type"] = widget_type
 
-    # Validate via pydantic
-    error = validate_widget(widget_type, payload)
+    # Validate via pydantic and get model-dumped data (includes post_init defaults
+    # like timer=True on passive steps with duration)
+    error, validated_payload = validate_and_dump_widget(widget_type, payload)
     if error:
         print(f"Validation error: {error}", file=sys.stderr)
         sys.exit(1)
 
-    # Generate plain-text fallback
-    content = format_widget_content(payload)
+    # Generate plain-text fallback (use validated payload with all defaults applied)
+    content = format_widget_content(validated_payload)
 
     # Initialize DB and store
     init_db()
     message_id = str(uuid.uuid4())
-    widget_data_json = json.dumps(payload)
+    widget_data_json = json.dumps(validated_payload)
 
     store_message(
         message_id=message_id,

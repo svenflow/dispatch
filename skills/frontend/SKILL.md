@@ -52,6 +52,7 @@ For THIS system's specific look, read `./interface-design/SKILL.md`:
 
 | Command | Purpose |
 |---------|---------|
+| `/style` | Load a DESIGN.md as the active design system |
 | `/audit` | Find issues: a11y, perf, theming, responsive, anti-patterns |
 | `/critique` | UX design review: hierarchy, clarity, emotional resonance |
 | `/normalize` | Align with design system standards |
@@ -74,6 +75,11 @@ Each command's full instructions are in `./impeccable/{command}/SKILL.md`.
 
 ## The Process
 
+0. **Check for DESIGN.md**: Does `./DESIGN.md` exist in the project root?
+   - **YES + has tokens**: Read it, extract tokens if `design-tokens.css` missing, use as design authority, skip steps 2-5
+   - **YES + empty/malformed**: Warn user, proceed as if no DESIGN.md
+   - **design-tokens.css without DESIGN.md**: Warn orphan, proceed without constraints
+   - **NO**: Continue with standard flow below
 1. **Read** `./impeccable/frontend-design/SKILL.md` completely
 2. **Read** `./interface-design/SKILL.md` for this system's visual language
 3. **Explore the domain** — produce 4 outputs:

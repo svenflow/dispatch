@@ -128,7 +128,7 @@ BACKENDS["pocket-sven"] = BackendConfig(
     send_cmd='~/.claude/skills/pocket-sven/scripts/reply-voice "{chat_id}"',
     send_group_cmd='~/.claude/skills/pocket-sven/scripts/reply-voice "{chat_id}"',
     reply_hint='~/.claude/skills/pocket-sven/scripts/reply-voice "{chat_id}" "message"',
-    history_cmd="",
+    history_cmd='~/.claude/skills/pocket-sven/scripts/read-pocket-sven --chat "{chat_id}" --limit {limit}',
     supports_image_context=False,
     supports_markdown=False,
 )

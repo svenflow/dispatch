@@ -8,6 +8,7 @@ import * as FileSystem from "expo-file-system/legacy";
 import * as WebBrowser from "expo-web-browser";
 import type { BubbleMenuItem } from "./BubbleMenu";
 import type { DisplayMessage } from "../hooks/useMessages";
+import { OUTBOX_MAX_RETRIES } from "../config/constants";
 import { branding } from "../config/branding";
 import { buildImageUrl, buildVideoUrl } from "../api/images";
 import { relativeTime } from "../utils/time";
@@ -16,8 +17,9 @@ import { SimpleMarkdown } from "./SimpleMarkdown";
 import { AskQuestionWidget } from "./AskQuestionWidget";
 import { ProgressTrackerWidget } from "./ProgressTrackerWidget";
 import { MapPinWidget } from "./MapPinWidget";
+import { CookingTimelineWidget } from "./CookingTimelineWidget";
 import { submitWidgetResponse } from "../api/chats";
-import type { AskQuestionWidgetData, FormResponse, ProgressTrackerWidgetData, MapPinWidgetData } from "../api/types";
+import type { AskQuestionWidgetData, FormResponse, ProgressTrackerWidgetData, MapPinWidgetData, CookingTimelineWidgetData } from "../api/types";
 
 const URL_REGEX = /https?:\/\/[^\s<>\"'\])},]+/gi;
 
@@ -112,7 +114,7 @@ interface MessageBubbleProps {
   showDelivered?: boolean;
 }
 
-export function MessageBubble({ message, chatId, audioState, onRetry, onLongPress, onReact, showDelivered }: MessageBubbleProps) {
+export const MessageBubble = React.memo(function MessageBubble({ message, chatId, audioState, onRetry, onLongPress, onReact, showDelivered }: MessageBubbleProps) {
   const { role, content, timestamp, isPending, sendFailed, audioUrl, imageUrl, videoUrl, localImageUri, status } = message;
   const isUser = role === "user";
   const isGenerating = status === "generating";
@@ -504,6 +506,12 @@ export function MessageBubble({ message, chatId, audioState, onRetry, onLongPres
               data={message.widgetData as MapPinWidgetData}
             />
           )}
+          {message.widgetData?.type === "cooking_timeline" && (
+            <CookingTimelineWidget
+              data={message.widgetData as CookingTimelineWidgetData}
+              messageId={message.id}
+            />
+          )}
           {/* Inline audio player for uploaded audio (user or assistant) */}
           {audioUrl && audioState ? (
             <Pressable
@@ -548,6 +556,13 @@ export function MessageBubble({ message, chatId, audioState, onRetry, onLongPres
         )}
         {/* Side buttons removed — actions now in long-press context menu */}
       </View>
+      {sendFailed && (
+        <Pressable onPress={() => onRetry?.(message.id)} hitSlop={8}>
+          <Text style={styles.failedText}>
+            {(message.attempts ?? 0) >= OUTBOX_MAX_RETRIES ? "Could not send — Tap to retry" : "Not Delivered — Tap to retry"}
+          </Text>
+        </Pressable>
+      )}
       {showDelivered && !sendFailed && (
         <Animated.Text style={[styles.deliveredText, { opacity: deliveredAnim }]}>Delivered</Animated.Text>
       )}
@@ -563,7 +578,7 @@ export function MessageBubble({ message, chatId, audioState, onRetry, onLongPres
       )}
     </Animated.View>
   );
-}
+});
 
 /** Pulsing dots for "generating" state */
 function GeneratingDots() {
@@ -804,6 +819,14 @@ const styles = StyleSheet.create({
     color: "#71717a",
     fontSize: 11,
     fontWeight: "400",
+    textAlign: "right",
+    marginTop: 2,
+    marginRight: 4,
+  },
+  failedText: {
+    color: "#ef4444",
+    fontSize: 11,
+    fontWeight: "500",
     textAlign: "right",
     marginTop: 2,
     marginRight: 4,

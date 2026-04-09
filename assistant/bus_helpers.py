@@ -36,7 +36,10 @@ Topic/type taxonomy (v6):
                 sdk.turn_complete, session.heartbeat (keyed by component/session_name),
                 quota.fetched, quota.fetch_failed (source=daemon),
                 health.haiku_verdict, health.circuit_breaker,
-                health.quota_alert, health.bus_check (source=health)
+                health.quota_alert, health.bus_check (source=health),
+                auth_dialog.event (source=auth-dialog-monitor),
+                auth_dialog.approved, auth_dialog.denied,
+                auth_dialog.always_approved (source=auth-dialog-approve)
     reminders — reminder.due (keyed by chat_id)
     tasks     — task.requested, task.started, task.completed, task.failed,
                 task.timeout, task.skipped (keyed by requested_by chat_id)

@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS chat_notes (
 _STATE_DIR = Path.home() / "dispatch" / "state"
 DB_PATH = _STATE_DIR / "dispatch-messages.db"
 IMAGE_DIR = _STATE_DIR / "dispatch-images"
+VIDEO_DIR = _STATE_DIR / "dispatch-videos"
 
 # Backward compatibility: migrate old sven-* file names
 _OLD_DB = _STATE_DIR / "sven-messages.db"
@@ -172,13 +173,14 @@ def store_message(
     chat_id: str = "voice",
     audio_path: str | None = None,
     image_path: str | None = None,
+    video_path: str | None = None,
     widget_data: str | None = None,
 ):
     """Store a message in the dispatch-messages.db database."""
     conn = _get_conn()
     conn.execute(
-        "INSERT INTO messages (id, role, content, audio_path, chat_id, image_path, widget_data) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (message_id, role, content, audio_path, chat_id, image_path, widget_data),
+        "INSERT INTO messages (id, role, content, audio_path, chat_id, image_path, video_path, widget_data) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (message_id, role, content, audio_path, chat_id, image_path, video_path, widget_data),
     )
     conn.execute(
         "UPDATE chats SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
@@ -212,6 +214,29 @@ def copy_image_to_canonical(source_path: str, message_id: str, chat_id: str) -> 
     dest_dir.mkdir(parents=True, exist_ok=True)
 
     ext = src.suffix.lower() or ".jpg"
+    dest = dest_dir / f"{message_id}{ext}"
+
+    try:
+        shutil.copy2(src, dest)
+        return str(dest)
+    except Exception:
+        return None
+
+
+def copy_video_to_canonical(source_path: str, message_id: str, chat_id: str) -> str | None:
+    """Copy a video file to the canonical dispatch-videos directory.
+
+    Videos are organized by chat_id: ~/dispatch/state/dispatch-videos/{chat_id}/{message_id}{ext}
+    Returns the canonical path on success, None on failure.
+    """
+    src = Path(source_path)
+    if not src.exists():
+        return None
+
+    dest_dir = VIDEO_DIR / chat_id
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    ext = src.suffix.lower() or ".mov"
     dest = dest_dir / f"{message_id}{ext}"
 
     try:

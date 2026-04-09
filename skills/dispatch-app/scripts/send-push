@@ -25,6 +25,7 @@ Config is in ~/dispatch/state/dispatch-push-config.json
 
 import argparse
 import json
+import sqlite3
 import sys
 import time
 from pathlib import Path
@@ -37,6 +38,11 @@ CONFIG_PATH = Path.home() / "dispatch" / "state" / "dispatch-push-config.json"
 # Fallback to old name for backward compat
 _CONFIG_PATH_OLD = Path.home() / "dispatch" / "state" / "sven-push-config.json"
 APNS_TOKENS_PATH = Path.home() / "dispatch" / "state" / "dispatch-apns-tokens.json"
+
+# Database path for direct unread count queries (no HTTP round-trip needed)
+DB_PATH = Path.home() / "dispatch" / "state" / "dispatch-messages.db"
+# Fallback for old DB name
+_DB_PATH_OLD = Path.home() / "dispatch" / "state" / "sven-messages.db"
 
 # APNs endpoints
 APNS_HOST_PROD = "https://api.push.apple.com"
@@ -80,6 +86,70 @@ def create_apns_jwt(config: dict) -> str:
     return jwt.encode(payload, key, algorithm="ES256", headers=headers)
 
 
+# Shared SQL for counting unread chats — single source of truth.
+# Both this script and server.py read from the same .sql file.
+# The equivalent JS logic lives in useChatList.ts _isServerUnread().
+UNREAD_COUNT_SQL_PATH = Path.home() / "dispatch" / "services" / "dispatch-api" / "unread_count.sql"
+
+# Inline fallback in case the .sql file is missing (shouldn't happen, but defensive)
+# TODO: remove fallback after 2026-07-01 once deployment is stable
+_UNREAD_COUNT_SQL_FALLBACK = """
+    SELECT COUNT(*) FROM (
+        SELECT c.id
+        FROM chats c
+        LEFT JOIN (
+            SELECT chat_id, created_at, role,
+                   ROW_NUMBER() OVER (PARTITION BY chat_id ORDER BY created_at DESC) AS rn
+            FROM messages
+        ) m ON m.chat_id = c.id AND m.rn = 1
+        WHERE c.marked_unread = 1
+           OR (m.role = 'assistant'
+               AND m.created_at IS NOT NULL
+               AND (c.last_opened_at IS NULL OR m.created_at > c.last_opened_at))
+    )
+"""
+
+
+def _load_unread_sql() -> str:
+    """Load the shared unread count SQL from disk."""
+    if UNREAD_COUNT_SQL_PATH.exists():
+        return UNREAD_COUNT_SQL_PATH.read_text()
+    print(f"[send-push] Warning: {UNREAD_COUNT_SQL_PATH} not found, using fallback SQL", file=sys.stderr)
+    return _UNREAD_COUNT_SQL_FALLBACK
+
+
+def get_unread_count() -> int:
+    """Query dispatch-messages.db directly for the current unread chat count.
+
+    Returns 0 on any error (prefer no badge over phantom badge).
+    """
+    if DB_PATH.exists():
+        db_path = DB_PATH
+    elif _DB_PATH_OLD.exists():
+        # TODO: remove old DB fallback after 2026-07-01
+        print(f"[send-push] Using legacy DB path {_DB_PATH_OLD}", file=sys.stderr)
+        db_path = _DB_PATH_OLD
+    else:
+        print(f"[send-push] DB not found at {DB_PATH}, badge=0", file=sys.stderr)
+        return 0
+    conn = None
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, check_same_thread=False)
+        conn.execute("PRAGMA busy_timeout = 2000")
+        # The app also queries unread count on foreground via server.py /unread-count.
+        # Brief divergence between push-time and foreground-time reads is acceptable.
+        sql = _load_unread_sql()
+        row = conn.execute(sql).fetchone()
+        count = row[0] if row else 0
+        return max(count, 0)
+    except Exception as e:
+        print(f"[send-push] Error querying unread count: {e}, returning badge=0", file=sys.stderr)
+        return 0  # Prefer no badge over phantom badge
+    finally:
+        if conn:
+            conn.close()
+
+
 def send_notification(
     apns_token: str,
     message_id: str,
@@ -93,6 +163,7 @@ def send_notification(
     report_url: str = None,
     chat_id: str = "voice",
     chat_title: str = None,
+    badge: int = 1,
 ) -> bool:
     """Send push notification via APNs."""
     host = APNS_HOST_SANDBOX if sandbox else APNS_HOST_PROD
@@ -134,7 +205,7 @@ def send_notification(
                 "body": truncated
             },
             "sound": "default",
-            "badge": 1,
+            "badge": badge,
             "category": category,
             "mutable-content": 1  # Required for notification service extension
         },
@@ -235,8 +306,12 @@ def main():
         print("No APNs tokens registered", file=sys.stderr)
         sys.exit(0)
 
+    # Fetch dynamic badge count from dispatch-api
+    badge_count = get_unread_count()
+
     print(f"Sending push to {len(tokens)} device(s)...")
     print(f"  Category: {category}")
+    print(f"  Badge: {badge_count}")
     if image_url:
         print(f"  Image: {image_url}")
     if audio_url:
@@ -260,10 +335,11 @@ def main():
             report_url=report_url,
             chat_id=args.chat_id,
             chat_title=args.chat_title,
+            badge=badge_count,
         ):
             success_count += 1
 
-    print(f"Sent {success_count}/{len(tokens)} notifications")
+    print(f"[send-push] Sent {success_count}/{len(tokens)} notifications, badge={badge_count}, chat_id={args.chat_id}")
 
 
 if __name__ == "__main__":

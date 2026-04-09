@@ -24,7 +24,7 @@ import { router } from "expo-router";
 import { useDashboard } from "@/src/hooks/useDashboard";
 import type { HistogramBucket } from "@/src/hooks/useDashboard";
 import type { DashboardHealth, DashboardCcuResponse } from "@/src/api/types";
-import { quotaBarColor, formatResetTime, computeQuotaPrediction, predictionIcon, predictionColor } from "@/src/utils/quotaHelpers";
+import { quotaBarColor, formatResetTimeInfo, computeQuotaPrediction, predictionIcon, predictionColor } from "@/src/utils/quotaHelpers";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -82,7 +82,7 @@ function UsageBar({
   resetsAt: string;
 }) {
   const prediction = computeQuotaPrediction(label, utilization, resetsAt);
-  const showAlert = prediction.status === "tight" || prediction.status === "danger";
+  const showAlert = prediction.status === "danger";
   return (
     <View style={usageStyles.barRow}>
       <View style={usageStyles.labelRow}>
@@ -109,7 +109,14 @@ function UsageBar({
           ]}
         />
       </View>
-      <Text style={usageStyles.resetText}>Resets in {formatResetTime(resetsAt)}</Text>
+      {(() => {
+        const info = formatResetTimeInfo(resetsAt);
+        return (
+          <Text style={[usageStyles.resetText, !info.isFresh && { color: "#f59e0b" }]}>
+            {info.isFresh ? `Resets in ${info.text}` : info.text}
+          </Text>
+        );
+      })()}
     </View>
   );
 }
@@ -774,9 +781,6 @@ const usageStyles = StyleSheet.create({
     color: "#52525b",
     fontSize: 11,
     marginTop: 3,
-  },
-  predictionText: {
-    fontSize: 11,
   },
 });
 

@@ -1,3 +1,25 @@
+// ---------------------------------------------------------------------------
+// Performance optimization stack (see also: ChatRow.tsx, chat/[id].tsx)
+//
+// Problem: WebSocket pushes + 1.5s polling create new Conversation objects
+// on every update. Without mitigation, every push re-renders every row.
+//
+// 1. Per-item fingerprinting: applyChats() compares a string fingerprint
+//    per item to preserve object references for unchanged rows — avoids
+//    deep-equal on every render cycle.
+// 2. React.memo: ChatRow, MessageBubble, SimpleMarkdown skip re-render
+//    when props are referentially equal (which fingerprinting guarantees).
+// 3. Stable callbacks: parent passes callbacks that accept Conversation;
+//    ChatRow composes per-item handlers internally via useCallback —
+//    avoids external callback caches and stale-closure risks.
+// 4. FlatList tuning: windowSize=7 reduces off-screen renders from ~21
+//    screens to ~3. removeClippedSubviews reclaims memory (Android only —
+//    causes blank cells on iOS).
+// 5. Proxy refs: audioPlayer and lastDeliveredUserMsgId use ref shadows
+//    to keep renderItem's useCallback stable even when derived state
+//    changes every frame.
+// ---------------------------------------------------------------------------
+
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppState, type AppStateStatus } from "react-native";
 import { getChats, createChat, deleteChat, markChatAsUnread as apiMarkChatAsUnread } from "../api/chats";
@@ -6,6 +28,7 @@ import { notifyUnreadChatCount } from "../state/unreadChats";
 import { makeLayoutAnim, safeConfigureNext, backoffDelay } from "../utils/animation";
 import { getApiBaseUrl } from "../config/constants";
 import { getDeviceToken } from "../api/client";
+import { getCachedChatList, setCachedChatList } from "../utils/messageCache";
 
 /** Smooth reorder animation for chat list updates */
 const chatListAnim = makeLayoutAnim(250);
@@ -60,7 +83,10 @@ function _updateReadTracking(conversations: Conversation[]): void {
   }
 }
 
-/** Check if a chat is unread based on server data (no optimistic overrides) */
+/** Check if a chat is unread based on server data (no optimistic overrides).
+ *  NOTE: This logic is mirrored in server.py GET /unread-count and
+ *  send-push UNREAD_COUNT_SQL. All three must stay in sync.
+ *  Relies on timestamps being ISO 8601 strings (JS Date comparison matches SQLite string ordering). */
 function _isServerUnread(c: Conversation): boolean {
   if (c.marked_unread) return true;
   if (c.last_message_role !== "assistant" || !c.last_message_at) return false;
@@ -79,26 +105,23 @@ export function isCurrentlyUnread(conversation: Conversation): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// SSE helpers
+// WebSocket helpers
 // ---------------------------------------------------------------------------
 
-interface SSEChatsEvent {
+interface WSChatsEvent {
   type: "chats";
   chats: Conversation[];
 }
-interface SSEKeepalive {
+interface WSKeepalive {
   type: "keepalive";
 }
-type SSEEvent = SSEChatsEvent | SSEKeepalive;
+type WSEvent = WSChatsEvent | WSKeepalive;
 
-function parseSSELine(line: string): SSEEvent | null {
-  if (!line.startsWith("data: ")) return null;
-  const jsonStr = line.slice(6).trim();
-  if (!jsonStr || jsonStr === "[DONE]") return null;
+function parseWSMessage(data: string): WSEvent | null {
   try {
-    return JSON.parse(jsonStr) as SSEEvent;
+    return JSON.parse(data) as WSEvent;
   } catch {
-    console.warn("[useChatList] Malformed SSE JSON:", jsonStr);
+    console.warn("[useChatList] Malformed WS JSON:", data);
     return null;
   }
 }
@@ -129,6 +152,25 @@ export function useChatList(): UseChatListReturn {
   // ---------------------------------------------------------------------------
   // Shared: apply a chat list update (used by both SSE and polling)
   // ---------------------------------------------------------------------------
+  /** Per-item fingerprint for referential stability — React.memo on ChatRow
+   *  only helps if unchanged items keep the same object reference.
+   *  The FingerprintFields type ensures compile-time enforcement: if a new
+   *  render-relevant field is added to Conversation, adding it here produces
+   *  a type error until the fingerprint string is also updated. */
+  // MUST include every Conversation field that affects ChatRow visual output.
+  // If a new render-relevant field is added to Conversation, add it here —
+  // TypeScript will enforce the Pick, and the fingerprint string below must
+  // also be updated. Intentionally excluded: created_at, updated_at, model,
+  // forked_from, fork_message_id, has_notes (not rendered in ChatRow).
+  type FingerprintFields = Pick<Conversation,
+    "id" | "title" | "last_message" | "last_message_at" | "last_message_role" |
+    "is_thinking" | "marked_unread" | "image_url" | "image_status" |
+    "last_opened_at" | "status"
+  >;
+  const itemFingerprintFn = (c: FingerprintFields) =>
+    `${c.id}:${c.title}:${c.last_message ?? ""}:${c.last_message_at ?? ""}:${c.last_message_role ?? ""}:${c.is_thinking}:${c.marked_unread}:${c.image_url ?? ""}:${c.image_status ?? ""}:${c.last_opened_at ?? ""}:${c.status ?? ""}`;
+  const prevItemFingerprints = useRef(new Map<string, string>());
+
   const applyChats = useCallback((chats: Conversation[]) => {
     // Sort by last message time descending (most recent first)
     chats.sort((a, b) => {
@@ -164,9 +206,41 @@ export function useChatList(): UseChatListReturn {
     }
     prevOrderRef.current = newOrder;
 
-    setConversations(chats);
+    // Preserve referential stability for unchanged items so React.memo on
+    // ChatRow can skip re-rendering rows whose data hasn't changed.
+    setConversations((prev) => {
+      const prevMap = new Map(prev.map((c) => [c.id, c]));
+      const nextFingerprints = new Map<string, string>();
+      let changedCount = 0;
+      const merged = chats.map((c) => {
+        const fp = itemFingerprintFn(c);
+        nextFingerprints.set(c.id, fp);
+        const existing = prevMap.get(c.id);
+        if (existing && prevItemFingerprints.current.get(c.id) === fp) {
+          return existing; // Same data — keep existing reference
+        }
+        if (__DEV__ && prevItemFingerprints.current.has(c.id)) {
+          changedCount++;
+          if (changedCount <= 3) {
+            console.debug(`[useChatList] fingerprint changed: ${c.title}`);
+          }
+        }
+        return c;
+      });
+      if (__DEV__ && changedCount > 3) {
+        const remaining = changedCount - 3;
+        console.debug(`[useChatList] ...and ${remaining} more ${remaining === 1 ? "item" : "items"} changed this cycle`);
+      }
+      // NOTE: mutating the ref inside the updater is safe — React runs
+      // updaters synchronously and exactly once in production.
+      prevItemFingerprints.current = nextFingerprints;
+      return merged;
+    });
     setError(null);
     setIsLoading(false);
+
+    // Write-through: update cache with latest data
+    setCachedChatList(chats); // fire-and-forget
   }, []);
 
   // ---------------------------------------------------------------------------
@@ -192,151 +266,88 @@ export function useChatList(): UseChatListReturn {
   }, [applyChats]);
 
   // ---------------------------------------------------------------------------
-  // SSE connection
+  // WebSocket connection (replaces SSE — React Native has native WS support)
   // ---------------------------------------------------------------------------
-  const sseAbortRef = useRef<AbortController | null>(null);
-  const sseActiveRef = useRef(false);
-  const sseReconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const sseFailCountRef = useRef(0);
+  const wsRef = useRef<WebSocket | null>(null);
+  const wsActiveRef = useRef(false);
+  const wsReconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const wsFailCountRef = useRef(0);
 
   const stopSSE = useCallback(() => {
-    sseActiveRef.current = false;
-    sseAbortRef.current?.abort();
-    sseAbortRef.current = null;
-    if (sseReconnectTimerRef.current) {
-      clearTimeout(sseReconnectTimerRef.current);
-      sseReconnectTimerRef.current = null;
+    wsActiveRef.current = false;
+    if (wsRef.current) {
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+    if (wsReconnectTimerRef.current) {
+      clearTimeout(wsReconnectTimerRef.current);
+      wsReconnectTimerRef.current = null;
     }
   }, []);
 
-  /** Count of consecutive short-lived SSE connections (stream closes in < 1s).
-   *  After MAX_SHORT_LIVED hits, SSE is disabled and we fall back to polling. */
-  const sseShortLivedCountRef = useRef(0);
-  const SSE_MAX_SHORT_LIVED = 3;
-  const SSE_MIN_STREAM_DURATION_MS = 1000;
-  /** Once true, SSE is permanently disabled for this mount (polling only). */
-  const sseDisabledRef = useRef(false);
-
-  const connectSSE = useCallback(() => {
-    if (!mountedRef.current) return;
-
-    // If SSE has been disabled due to repeated short-lived connections
-    // (React Native doesn't support persistent HTTP streaming), use polling
-    if (sseDisabledRef.current) return false;
-
-    const token = getDeviceToken();
-    if (!token) {
-      // No token — fall back to polling
-      return false;
-    }
-
-    sseActiveRef.current = true;
-    const abortController = new AbortController();
-    sseAbortRef.current = abortController;
-
-    const url = `${getApiBaseUrl()}/chats/stream?token=${encodeURIComponent(token)}`;
-
-    (async () => {
-      const streamStartTime = Date.now();
-      try {
-        const response = await fetch(url, {
-          signal: abortController.signal,
-          headers: { Accept: "text/event-stream" },
-        });
-
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`);
-        }
-
-        const reader = response.body?.getReader();
-        if (!reader) throw new Error("No response body");
-
-        // Connected successfully — reset fail count
-        sseFailCountRef.current = 0;
-
-        const decoder = new TextDecoder();
-        let buffer = "";
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() || "";
-
-          for (const line of lines) {
-            const event = parseSSELine(line);
-            if (!event) continue;
-
-            if (event.type === "chats") {
-              applyChats(event.chats);
-            }
-            // keepalive — nothing to do
-          }
-        }
-
-        // Stream ended — check if it was short-lived (React Native streaming bug)
-        const streamDuration = Date.now() - streamStartTime;
-        if (streamDuration < SSE_MIN_STREAM_DURATION_MS) {
-          sseShortLivedCountRef.current += 1;
-          console.warn(
-            `[useChatList] SSE stream closed after ${streamDuration}ms ` +
-            `(${sseShortLivedCountRef.current}/${SSE_MAX_SHORT_LIVED} short-lived)`
-          );
-
-          if (sseShortLivedCountRef.current >= SSE_MAX_SHORT_LIVED) {
-            // React Native can't maintain persistent SSE streams — disable and use polling
-            console.warn("[useChatList] SSE disabled — falling back to polling");
-            sseDisabledRef.current = true;
-            sseActiveRef.current = false;
-            if (mountedRef.current) {
-              // Schedule polling via ref to avoid stale closure
-              schedulePollRef.current?.();
-            }
-            return;
-          }
-        } else {
-          // Stream lived long enough — reset short-lived counter
-          sseShortLivedCountRef.current = 0;
-        }
-
-        // Stream ended — reconnect with backoff based on short-lived count
-        if (mountedRef.current && sseActiveRef.current) {
-          sseFailCountRef.current += sseShortLivedCountRef.current;
-          scheduleSSEReconnect();
-        }
-      } catch (err: unknown) {
-        if (abortController.signal.aborted) return; // Intentional abort
-
-        console.warn("[useChatList] SSE error, will reconnect:", err);
-        sseFailCountRef.current += 1;
-
-        if (mountedRef.current && sseActiveRef.current) {
-          // Do one poll immediately so we don't miss data during reconnect gap
-          loadConversations();
-          scheduleSSEReconnect();
-        }
-      }
-    })();
-
-    return true;
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [applyChats, loadConversations]);
-
   const scheduleSSEReconnect = useCallback(() => {
-    if (!mountedRef.current || !sseActiveRef.current) return;
-    if (sseReconnectTimerRef.current) return;
+    if (!mountedRef.current || !wsActiveRef.current) return;
+    if (wsReconnectTimerRef.current) return;
 
-    const delay = backoffDelay(2000, sseFailCountRef.current);
-    sseReconnectTimerRef.current = setTimeout(() => {
-      sseReconnectTimerRef.current = null;
-      if (mountedRef.current && sseActiveRef.current) {
+    const delay = backoffDelay(2000, wsFailCountRef.current);
+    wsReconnectTimerRef.current = setTimeout(() => {
+      wsReconnectTimerRef.current = null;
+      if (mountedRef.current && wsActiveRef.current) {
         connectSSE();
       }
     }, delay);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connectSSE]);
+  }, []);
+
+  const connectSSE = useCallback(() => {
+    if (!mountedRef.current) return false;
+
+    const token = getDeviceToken();
+    if (!token) return false;
+
+    wsActiveRef.current = true;
+
+    // Build WebSocket URL: http→ws, https→wss
+    const httpBase = getApiBaseUrl();
+    const wsBase = httpBase.replace(/^http/, "ws");
+    const url = `${wsBase}/chats/ws?token=${encodeURIComponent(token)}`;
+
+    const ws = new WebSocket(url);
+    wsRef.current = ws;
+
+    ws.onopen = () => {
+      wsFailCountRef.current = 0;
+    };
+
+    ws.onmessage = (event) => {
+      const msg = parseWSMessage(event.data);
+      if (!msg) return;
+      if (msg.type === "chats") {
+        applyChats(msg.chats);
+      }
+      // keepalive — nothing to do
+    };
+
+    ws.onerror = (err) => {
+      console.warn("[useChatList] WS error, will reconnect:", err);
+    };
+
+    ws.onclose = () => {
+      if (!wsActiveRef.current) return; // Intentional close
+
+      wsFailCountRef.current += 1;
+      wsRef.current = null;
+
+      if (mountedRef.current) {
+        // Poll once so we don't miss data during reconnect gap
+        loadConversations();
+        scheduleSSEReconnect();
+      }
+    };
+
+    return true;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [applyChats, loadConversations, scheduleSSEReconnect]);
 
   // ---------------------------------------------------------------------------
   // Polling fallback (used when SSE is not active)
@@ -353,7 +364,7 @@ export function useChatList(): UseChatListReturn {
 
   const schedulePoll = useCallback(() => {
     if (pollTimerRef.current) return;
-    if (sseActiveRef.current) return; // SSE is handling updates
+    if (wsActiveRef.current) return; // WS is handling updates
     const delay = backoffDelay(3000, pollFailCountRef.current);
     pollTimerRef.current = setTimeout(async () => {
       pollTimerRef.current = null;
@@ -363,20 +374,25 @@ export function useChatList(): UseChatListReturn {
       } else {
         pollFailCountRef.current += 1;
       }
-      if (mountedRef.current && !sseActiveRef.current) schedulePoll();
+      if (mountedRef.current && !wsActiveRef.current) schedulePoll();
     }, delay);
   }, [loadConversations]);
-
-  /** Stable ref for schedulePoll — used by connectSSE's async closure to avoid stale captures */
-  const schedulePollRef = useRef(schedulePoll);
-  schedulePollRef.current = schedulePoll;
 
   // ---------------------------------------------------------------------------
   // Lifecycle: try SSE first, fall back to polling
   // ---------------------------------------------------------------------------
 
-  // Initial load + start SSE or polling
+  // Initial load: try cache first for instant display, then fetch from server
   useEffect(() => {
+    // Phase 1: Load cached chat list instantly
+    getCachedChatList<Conversation>().then((cached) => {
+      if (cached && cached.length > 0 && mountedRef.current) {
+        // Show cached data immediately — applyChats handles sorting + fingerprinting
+        applyChats(cached);
+      }
+    });
+
+    // Phase 2: Fetch fresh data from server
     loadConversations();
 
     const sseStarted = connectSSE();
@@ -392,18 +408,19 @@ export function useChatList(): UseChatListReturn {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Refresh on app foreground
+  // Refresh on app foreground — also reconciles iOS app icon badge via
+  // loadConversations() → notifyUnreadChatCount() → setBadgeCountAsync()
   useEffect(() => {
     const handleAppStateChange = (nextState: AppStateStatus) => {
       if (nextState === "active") {
         loadConversations();
-        // Reconnect SSE if it was dropped while backgrounded
-        if (sseActiveRef.current && !sseAbortRef.current) {
+        // Reconnect WS if it was dropped while backgrounded
+        if (wsActiveRef.current && !wsRef.current) {
           connectSSE();
-        } else if (!sseActiveRef.current) {
-          // Restart SSE attempt on foreground
-          const sseStarted = connectSSE();
-          if (sseStarted) {
+        } else if (!wsActiveRef.current) {
+          // Restart WS attempt on foreground
+          const wsStarted = connectSSE();
+          if (wsStarted) {
             stopPolling();
           }
         }
@@ -487,10 +504,14 @@ export function useChatList(): UseChatListReturn {
 
   const markAsUnread = useCallback(
     async (chatId: string): Promise<void> => {
-      // Optimistic: set module-level state + force re-render
+      // Optimistic: set module-level state + update the conversation object
+      // with marked_unread: true so the fingerprint changes and React.memo
+      // on ChatRow correctly re-renders only this row.
       _optimisticState.set(chatId, "unread");
       _readAtMessage.delete(chatId);
-      setConversations((prev) => [...prev]);
+      setConversations((prev) => prev.map((c) =>
+        c.id === chatId ? { ...c, marked_unread: true } : c
+      ));
 
       try {
         await apiMarkChatAsUnread(chatId);

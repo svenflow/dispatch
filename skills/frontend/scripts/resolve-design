@@ -1,0 +1,27 @@
+#!/bin/bash
+# Resolves a design system name to its DESIGN.md path in the cache.
+# Usage: resolve-design <name>
+# Outputs: full path to DESIGN.md, or exits 1 with error message
+set -euo pipefail
+
+NAME="${1:?Usage: resolve-design <name>}"
+CACHE_DIR="$(dirname "$0")/../design-md/design-md"
+
+if [ ! -d "$CACHE_DIR" ]; then
+  echo "Error: Design cache not found. Run: git clone --depth 1 https://github.com/VoltAgent/awesome-design-md.git $(dirname "$0")/../design-md" >&2
+  exit 1
+fi
+
+# Try exact match first, then common domain suffixes
+for candidate in "$NAME" "${NAME}.app" "${NAME}.ai" "${NAME}.com" "${NAME}.dev" "${NAME}.io"; do
+  DESIGN_FILE="$CACHE_DIR/$candidate/DESIGN.md"
+  if [ -f "$DESIGN_FILE" ]; then
+    echo "$DESIGN_FILE"
+    exit 0
+  fi
+done
+
+echo "Error: Design system '$NAME' not found." >&2
+echo "Tried: $NAME, ${NAME}.app, ${NAME}.ai, ${NAME}.com, ${NAME}.dev, ${NAME}.io" >&2
+echo "Run \`/style list\` to see available systems." >&2
+exit 1

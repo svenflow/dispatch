@@ -220,6 +220,136 @@ class MapPinDescriptor(WidgetDescriptor):
 
 
 # ---------------------------------------------------------------------------
+# cooking_timeline widget type
+# ---------------------------------------------------------------------------
+
+
+class CookingDish(BaseModel):
+    id: str = Field(min_length=1, max_length=30)
+    name: str = Field(min_length=1, max_length=50)
+    emoji: str = Field(min_length=1, max_length=4)
+
+
+class CookingStep(BaseModel):
+    id: str = Field(min_length=1, max_length=30)
+    dish_id: str
+    offset_min: int = Field(ge=0)
+    action: str = Field(min_length=1, max_length=200)
+    detail: str | None = Field(None, max_length=500)
+    duration_min: int | None = Field(None, ge=1, le=480)
+    type: Literal["active", "passive"]
+    timer: bool | None = None
+    checkpoint: str | None = Field(None, max_length=200)
+    appliance: str | None = Field(None, max_length=30)
+
+    def model_post_init(self, __context: object) -> None:
+        # Auto-set timer=True for passive steps with duration
+        if self.timer is None and self.type == "passive" and self.duration_min is not None:
+            self.timer = True
+        # Normalize appliance strings
+        if self.appliance is not None:
+            self.appliance = self.appliance.lower().strip().replace(" ", "")
+
+
+class CookingTimelineWidget(BaseModel):
+    v: Literal[1] = 1
+    type: Literal["cooking_timeline"] = "cooking_timeline"
+    title: str = Field(min_length=1, max_length=100)
+    target_time: str | None = None
+    total_duration_min: int = Field(ge=1, le=720)
+    dishes: list[CookingDish] = Field(min_length=1, max_length=6)
+    steps: list[CookingStep] = Field(min_length=1, max_length=40)
+
+    def model_post_init(self, __context: object) -> None:
+        dish_ids = {d.id for d in self.dishes}
+        for step in self.steps:
+            if step.dish_id not in dish_ids:
+                raise ValueError(f"Step '{step.id}' references unknown dish '{step.dish_id}'")
+
+        # Verify chronological ordering
+        offsets = [s.offset_min for s in self.steps]
+        if offsets != sorted(offsets):
+            raise ValueError("Steps must be ordered by offset_min")
+
+        # total_duration_min must be >= last step's offset_min
+        max_offset = max(s.offset_min for s in self.steps)
+        if self.total_duration_min < max_offset:
+            raise ValueError(
+                f"total_duration_min ({self.total_duration_min}) must be >= "
+                f"last step offset ({max_offset})"
+            )
+
+        # No step end should exceed total_duration_min (with 5-min tolerance)
+        for s in self.steps:
+            if s.duration_min and (s.offset_min + s.duration_min) > self.total_duration_min + 5:
+                raise ValueError(
+                    f"Step '{s.id}' ends at T+{s.offset_min + s.duration_min} but "
+                    f"total_duration is {self.total_duration_min}min"
+                )
+
+        # No overlapping active steps (two-hands constraint)
+        active_steps = [
+            (s.offset_min, s.offset_min + (s.duration_min or 1), s.id)
+            for s in self.steps
+            if s.type == "active"
+        ]
+        for i, (start_a, end_a, id_a) in enumerate(active_steps):
+            for start_b, _end_b, id_b in active_steps[i + 1 :]:
+                if start_b < end_a:
+                    raise ValueError(
+                        f"Active steps '{id_a}' (T+{start_a}-{end_a}) and '{id_b}' (T+{start_b}) "
+                        f"overlap. A cook can't do two active things at once."
+                    )
+
+        # Appliance conflict check
+        appliance_steps = [
+            (s.offset_min, s.offset_min + (s.duration_min or 0), s.appliance, s.id)
+            for s in self.steps
+            if s.appliance and s.duration_min
+        ]
+        for i, (start_a, end_a, app_a, id_a) in enumerate(appliance_steps):
+            for start_b, end_b, app_b, id_b in appliance_steps[i + 1 :]:
+                if app_a == app_b and start_b < end_a:
+                    raise ValueError(
+                        f"Appliance conflict: '{id_a}' and '{id_b}' both use '{app_a}' "
+                        f"at overlapping times (T+{start_a}-{end_a} vs T+{start_b}-{end_b}). "
+                        f"Stagger timing or note shared usage in detail."
+                    )
+
+
+class CookingTimelineDescriptor(WidgetDescriptor):
+    widget_model = CookingTimelineWidget
+    response_model = BaseModel  # Display-only widget
+
+    def cross_validate(self, widget: BaseModel, response: BaseModel) -> str | None:
+        return None  # Display-only, no response validation
+
+    def format_content(self, widget_data: dict) -> str:
+        parts = []
+        title = widget_data.get("title", "Cooking Timeline")
+        total = widget_data.get("total_duration_min", "?")
+        parts.append(f"🍽 {title} (~{total} min)")
+        if widget_data.get("target_time"):
+            parts.append(f"Target: {widget_data['target_time']}")
+        dishes = {d["id"]: d for d in widget_data.get("dishes", [])}
+        for step in widget_data.get("steps", []):
+            dish = dishes.get(step["dish_id"], {})
+            emoji = dish.get("emoji", "•")
+            t = step.get("offset_min", 0)
+            line = f"T+{t}: {emoji} {step['action']}"
+            dur = step.get("duration_min")
+            if dur:
+                line += f" ({dur} min, {step.get('type', 'active')})"
+            if step.get("checkpoint"):
+                line += f" 📍 {step['checkpoint']}"
+            parts.append(line)
+        return "\n".join(parts)
+
+    def format_response(self, widget_data: dict, response: dict, message_id: str) -> str:
+        return f"[Widget {message_id}] Cooking timeline (display-only)"
+
+
+# ---------------------------------------------------------------------------
 # Registry - single registration point for all widget types
 # ---------------------------------------------------------------------------
 
@@ -227,6 +357,7 @@ WIDGET_REGISTRY: dict[str, WidgetDescriptor] = {
     "ask_question": AskQuestionDescriptor(),
     "progress_tracker": ProgressTrackerDescriptor(),
     "map_pin": MapPinDescriptor(),
+    "cooking_timeline": CookingTimelineDescriptor(),
 }
 
 
@@ -259,6 +390,22 @@ def validate_widget(widget_type: str, payload: dict) -> str | None:
     except ValidationError as e:
         return str(e)
     return None
+
+
+def validate_and_dump_widget(widget_type: str, payload: dict) -> tuple[str | None, dict]:
+    """Validate a widget payload and return (error, dumped_data).
+
+    Unlike validate_widget, this returns the model's serialized dict which
+    includes defaults and post_init mutations (e.g. timer=True on passive steps).
+    """
+    descriptor = WIDGET_REGISTRY.get(widget_type)
+    if not descriptor:
+        return f"Unknown widget type: {widget_type}", payload
+    try:
+        model = descriptor.widget_model(**payload)
+    except ValidationError as e:
+        return str(e), payload
+    return None, model.model_dump()
 
 
 def format_widget_content(widget_data: dict) -> str:

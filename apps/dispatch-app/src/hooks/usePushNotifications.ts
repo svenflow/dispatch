@@ -55,7 +55,7 @@ Notifications?.setNotificationHandler({
  * Extract chat_id and chat_title from a notification's data payload.
  */
 function getNotificationData(
-  notification: { request: { content: { data: Record<string, unknown> | null } } },
+  notification: { request: { content: { data?: Record<string, unknown> | null } } },
 ): { chatId: string | null; chatTitle: string | null } {
   const data = notification.request.content.data;
   const chatId = data && typeof data.chat_id === "string" ? data.chat_id : null;
@@ -90,7 +90,7 @@ export async function dismissNotificationsForChat(chatId: string | null) {
 const _processedIds = new Set<string>();
 
 function navigateToChat(
-  notification: { request: { identifier: string; content: { title?: string | null; body?: string | null; data: Record<string, unknown> | null } } },
+  notification: { request: { identifier: string; content: { title?: string | null; body?: string | null; data?: Record<string, unknown> | null } } },
   source: string,
 ) {
   const responseId = notification.request.identifier;

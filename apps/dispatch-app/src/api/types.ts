@@ -71,11 +71,44 @@ export interface MapPinWidgetData {
   title?: string | null;
 }
 
+/** A dish in a cooking_timeline widget */
+export interface CookingDish {
+  id: string;
+  name: string;
+  emoji: string;
+}
+
+/** A step in a cooking_timeline widget */
+export interface CookingStep {
+  id: string;
+  dish_id: string;
+  offset_min: number;
+  action: string;
+  detail?: string | null;
+  duration_min?: number | null;
+  type: "active" | "passive";
+  timer?: boolean | null;
+  checkpoint?: string | null;
+  appliance?: string | null;
+}
+
+/** cooking_timeline widget payload (display-only, interactive locally) */
+export interface CookingTimelineWidgetData {
+  v: number;
+  type: "cooking_timeline";
+  title: string;
+  target_time?: string | null;
+  total_duration_min: number;
+  dishes: CookingDish[];
+  steps: CookingStep[];
+}
+
 /** Union of all widget data types (extensible via registry pattern) */
 export type WidgetData =
   | AskQuestionWidgetData
   | ProgressTrackerWidgetData
-  | MapPinWidgetData;
+  | MapPinWidgetData
+  | CookingTimelineWidgetData;
 
 /** A single question's answer in a form response */
 export interface QuestionAnswer {
@@ -324,6 +357,31 @@ export interface DashboardTasksResponse {
   }>;
 }
 
+/** Config toggles from GET /api/config/toggles */
+export interface ConfigToggles {
+  reminders_enabled: boolean;
+  tasks_enabled: boolean;
+}
+
+/** A single config field from GET /api/config */
+export interface ConfigItem {
+  key: string;
+  value: unknown;
+  type: "bool" | "number" | "string" | "list" | "string_list";
+  editable: boolean;
+}
+
+/** A config section grouping related fields */
+export interface ConfigSection {
+  section: string;
+  items: ConfigItem[];
+}
+
+/** Response from GET /api/config */
+export interface ConfigResponse {
+  sections: ConfigSection[];
+}
+
 /** A skill from GET /api/dashboard/skills */
 export interface DashboardSkill {
   name: string;
@@ -513,6 +571,10 @@ export interface UsageSession {
   total_cache_write_tokens: number;
   model_breakdown: Record<string, { cost: number; input_tokens: number; output_tokens: number }>;
   conversation_count: number;
+  /** Model names used in this session (e.g. ["claude-opus-4-6"]) */
+  models: string[];
+  /** ISO date string of last activity (e.g. "2026-04-05") */
+  last_activity: string | null;
 }
 
 /** Response from GET /api/dashboard/usage */

@@ -1046,6 +1046,22 @@ npx expo export --platform web    # Build static web bundle
 claude-assistant restart           # Restart daemon to serve new bundle
 ```
 
+**Troubleshooting: Silent 500 on `/` (web app not loading)**
+
+The root `/` endpoint serves `~/dispatch/apps/dispatch-app/dist/index.html`. If that file is missing, the API returns a silent 500 with no helpful error message.
+
+```bash
+# Check if the web build exists
+ls ~/dispatch/apps/dispatch-app/dist/index.html
+
+# If missing, rebuild:
+cd ~/dispatch/apps/dispatch-app
+npx expo export --platform web --clear
+claude-assistant restart
+```
+
+This is separate from iOS OTA updates — rebuilding the web bundle doesn't affect the iOS app.
+
 ### CRITICAL: NO TestFlight, NO EAS — Direct Device Deploy ONLY
 
 **NEVER use TestFlight or EAS for the dispatch app.**

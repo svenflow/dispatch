@@ -13,6 +13,8 @@ import type {
   FactsResponse,
   Fact,
   UsageResponse,
+  ConfigToggles,
+  ConfigResponse,
 } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -246,8 +248,7 @@ export async function createFact(fact: {
 }): Promise<Fact> {
   return apiRequest<Fact>("/api/dashboard/facts", {
     method: "POST",
-    body: JSON.stringify(fact),
-    headers: { "Content-Type": "application/json" },
+    body: fact,
   });
 }
 
@@ -258,8 +259,7 @@ export async function updateFact(
 ): Promise<Fact> {
   return apiRequest<Fact>(`/api/dashboard/facts/${id}`, {
     method: "PUT",
-    body: JSON.stringify(updates),
-    headers: { "Content-Type": "application/json" },
+    body: updates,
   });
 }
 
@@ -273,6 +273,49 @@ export async function deleteFact(id: number): Promise<void> {
 // ---------------------------------------------------------------------------
 // Cost Analytics / Usage
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Config Toggles
+// ---------------------------------------------------------------------------
+
+const DEFAULT_TOGGLES: ConfigToggles = {
+  reminders_enabled: true,
+  tasks_enabled: true,
+};
+
+/** Fetch current config toggles */
+export async function getConfigToggles(): Promise<ConfigToggles> {
+  const data = await apiRequest<Partial<ConfigToggles>>("/api/config/toggles");
+  return withDefaults(DEFAULT_TOGGLES, data);
+}
+
+/** Update a config toggle */
+export async function setConfigToggle(
+  toggles: Partial<ConfigToggles>,
+): Promise<ConfigToggles> {
+  const data = await apiRequest<ConfigToggles>("/api/config/toggles", {
+    method: "POST",
+    body: toggles,
+  });
+  return data;
+}
+
+/** Fetch the full config */
+export async function getConfig(): Promise<ConfigResponse> {
+  const data = await apiRequest<ConfigResponse>("/api/config");
+  return { sections: data.sections ?? [] };
+}
+
+/** Update a single config field */
+export async function setConfigField(
+  key: string,
+  value: unknown,
+): Promise<{ ok: boolean; key: string; value: unknown }> {
+  return apiRequest("/api/config", {
+    method: "POST",
+    body: { key, value },
+  });
+}
 
 /** Fetch per-session cost/usage data */
 export async function getDashboardUsage(since?: string): Promise<UsageResponse> {
