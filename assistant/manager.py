@@ -2178,7 +2178,7 @@ class Manager:
                     time.sleep(5)
                     # Rebuild consumer runner so it gets fresh DB connections
                     try:
-                        self._consumer_runner = self._build_consumer_runner()
+                        self._consumer_runner = self._init_consumers()
                         log.info("ConsumerRunner rebuilt after crash, restarting loop")
                     except Exception as rebuild_err:
                         log.error(f"ConsumerRunner rebuild failed: {rebuild_err} — retrying in 30s")
@@ -2822,6 +2822,13 @@ class Manager:
         from assistant.bus_helpers import reconstruct_msg_from_bus
         from bus import StaleGenerationError
 
+        # Close any previous consumer BEFORE creating new one to prevent
+        # partition splitting. If old consumer joins group simultaneously
+        # with new one, rebalance splits partitions and the old (dead)
+        # consumer holds partitions it will never process.
+        if self._resource_registry:
+            self._resource_registry.close_and_remove("message-router-consumer")
+
         consumer = self._bus.consumer(
             group_id="message-router",
             topics=["messages"],
@@ -2829,9 +2836,20 @@ class Manager:
             auto_offset_reset="latest",  # Skip history on first start (already processed)
         )
 
-        # Register consumer for clean shutdown (close_and_remove handles supervisor restarts)
+        # Verify we got all partitions — if not, a zombie consumer is holding some
+        # (This is a safety check; the close_and_remove above should prevent this)
+        assigned = getattr(consumer, '_assigned', [])
+        if assigned:
+            n_assigned = len(assigned)
+            n_total = sum(t.get('partitions', 1) for t in getattr(self._bus, '_topic_cache', {}).values())
+            if n_assigned < 4:  # messages topic has 4 partitions
+                log.warning(
+                    f"Message consumer only assigned {n_assigned}/4 partitions! "
+                    f"Zombie consumer may be holding the rest. Check consumer_members table."
+                )
+
+        # Register consumer for clean shutdown
         if self._resource_registry:
-            self._resource_registry.close_and_remove("message-router-consumer")
             self._resource_registry.register(
                 "message-router-consumer", consumer, consumer.close)
 
@@ -2973,13 +2991,20 @@ class Manager:
         log.info("Message consumer stopped")
 
     def _on_consumer_done(self, task: asyncio.Task):
-        """Detect message consumer task death and auto-restart."""
+        """Detect message consumer task death and auto-restart (max 5 restarts)."""
         if self._shutdown_flag:
             return
         try:
             exc = task.exception()
             log.error(f"Message consumer task died: {exc}. Restarting in 5s...")
         except asyncio.CancelledError:
+            return
+
+        self._message_consumer_restarts = getattr(self, '_message_consumer_restarts', 0) + 1
+        MAX_RESTARTS = 5
+        if self._message_consumer_restarts > MAX_RESTARTS:
+            log.error(f"Message consumer exceeded {MAX_RESTARTS} restarts, giving up. "
+                      "Manual daemon restart required.")
             return
 
         async def _restart():
@@ -2989,7 +3014,8 @@ class Manager:
                     self._run_message_consumer(), name="message-consumer"
                 )
                 self._consumer_task.add_done_callback(self._on_consumer_done)
-                log.info("Message consumer task restarted")
+                log.info(f"Message consumer task restarted "
+                         f"({self._message_consumer_restarts}/{MAX_RESTARTS})")
 
         _fire_and_forget(_restart(), name="consumer-restart")
 
@@ -3012,6 +3038,10 @@ class Manager:
         )
         from bus import StaleGenerationError
 
+        # Close any previous consumer BEFORE creating new one (same fix as message consumer)
+        if self._resource_registry:
+            self._resource_registry.close_and_remove("task-runner-consumer")
+
         consumer = self._bus.consumer(
             group_id="task-runner",
             topics=["tasks"],
@@ -3021,7 +3051,6 @@ class Manager:
 
         # Register for clean shutdown
         if self._resource_registry:
-            self._resource_registry.close_and_remove("task-runner-consumer")
             self._resource_registry.register(
                 "task-runner-consumer", consumer, consumer.close)
 
@@ -3687,10 +3716,12 @@ class Manager:
         if killed_any:
             time.sleep(1)  # Sync sleep OK — called from supervisor which handles async context
 
-        # Ensure dispatch-app web build exists (prevents 500 on root endpoint)
+        # Ensure dispatch-app web build exists and kick off background rebuild on every restart.
+        # If dist is missing: blocking build first (prevent broken placeholder).
+        # Always: fire a background rebuild so the served app stays fresh after restarts.
         _web_index = DISPATCH_APP_DIR / "dist" / "index.html"
         if not _web_index.is_file():
-            log.info("Dispatch app web build missing — running expo export")
+            log.info("Dispatch app web build missing — running blocking expo export")
             try:
                 subprocess.run(
                     ["npx", "expo", "export", "--platform", "web"],
@@ -3704,6 +3735,22 @@ class Manager:
                     log.warning("Dispatch app web build ran but index.html still missing")
             except Exception as e:
                 log.warning(f"Dispatch app web build failed: {e}")
+
+        # Background rebuild — always run on restart so the build stays current.
+        # Non-blocking: daemon starts immediately, fresh dist lands ~60s later.
+        _expo_log = LOGS_DIR / "expo-export.log"
+        try:
+            with open(_expo_log, "a") as _expo_fh:
+                subprocess.Popen(
+                    ["npx", "expo", "export", "--platform", "web"],
+                    cwd=str(DISPATCH_APP_DIR),
+                    stdout=_expo_fh,
+                    stderr=_expo_fh,
+                    start_new_session=True,
+                )
+            log.info("Dispatch app background web build triggered")
+        except Exception as e:
+            log.warning(f"Dispatch app background web build failed to start: {e}")
 
         try:
             proc = subprocess.Popen(
