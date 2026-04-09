@@ -448,7 +448,11 @@ class PyObjCAXBackend:
 
     def find_security_agent(self) -> Any | None:
         import ApplicationServices as AS
-        from Quartz import CGWindowListCopyWindowInfo, kCGWindowListOptionAll, kCGNullWindowID
+        import importlib
+        _quartz = importlib.import_module("Quartz")
+        CGWindowListCopyWindowInfo = getattr(_quartz, "CGWindowListCopyWindowInfo")
+        kCGWindowListOptionAll = getattr(_quartz, "kCGWindowListOptionAll")
+        kCGNullWindowID = getattr(_quartz, "kCGNullWindowID")
         for app_info in CGWindowListCopyWindowInfo(kCGWindowListOptionAll, kCGNullWindowID) or []:
             if app_info.get("kCGWindowOwnerName") == "SecurityAgent":
                 pid = app_info.get("kCGWindowOwnerPID")

@@ -9,7 +9,7 @@ Spotify integration for the dj-buyer pipeline and general music discovery/recomm
 
 **Credentials**: Stored in `~/code/dj-buyer/state.db` (table: `spotify_auth`)
 **Client ID**: `43d9bf46f34d48bb80cc23803c8db2a8`
-**Account**: nsthorat / Nikhil Thorat
+**Account**: see Contacts.app for owner details
 
 ## Quick Commands
 
@@ -140,7 +140,7 @@ db = sqlite3.connect('/Users/sven/code/dj-buyer/state.db')
 row = db.execute('SELECT access_token, expires_at FROM spotify_auth LIMIT 1').fetchone()
 sp = spotipy.Spotify(auth=row[0])
 
-user_id = sp.me()['id']  # 'nsthorat'
+user_id = sp.me()['id']
 
 # Create playlist
 playlist = sp.user_playlist_create(

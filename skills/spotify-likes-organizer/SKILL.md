@@ -40,7 +40,7 @@ uv run python scripts/spotify_likes_classify.py playlists --dry-run  # Preview p
 
 - **Last.fm API key** stored in macOS Keychain as `lastfm-api-key` (account: `lastfm`)
 - **Last.fm shared secret** stored as `lastfm-shared-secret` (account: `lastfm`)
-- Last.fm account: `svenflow` (nicklaudethorat@gmail.com)
+- Last.fm account: `svenflow`
 - Spotify auth tokens in `~/code/dj-buyer/state.db`
 
 ## Database
