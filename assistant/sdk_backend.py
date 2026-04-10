@@ -702,17 +702,31 @@ class SDKBackend:
 
         self._create_backend_claude_md(transcript_dir, source)
 
+        # Resolve model: global override > per-session registry > default
+        existing_entry = self.registry.get(chat_id)
+        stored_resume_id_for_log = existing_entry.get("session_id") if existing_entry else None
+
         lifecycle_log.info(
             f"CREATE | {session_name} | START | contact={contact_name} "
             f"tier={tier} chat_id={chat_id} source={source}"
+            f"{f' resume_id={stored_resume_id_for_log}' if stored_resume_id_for_log else ''}"
         )
 
-        # Resolve model: global override > per-session registry > default
-        existing_entry = self.registry.get(chat_id)
+        # (existing_entry reused below)
         default_model = "sonnet" if source == "discord" else "opus"
         registry_model = existing_entry.get("model", default_model) if existing_entry else default_model
         model, model_source = self.quota_manager.get_effective_model(chat_id, registry_model, default_model)
         log.info(f"SESSION_MODEL | chat_id={chat_id} | model={model} | source={model_source}")
+
+        # Resume from stored session_id if available (e.g., after idle timeout kill).
+        # kill_session() saves the session_id to the registry before stopping,
+        # so we can resume the previous conversation instead of starting blank.
+        stored_resume_id = existing_entry.get("session_id") if existing_entry else None
+        if stored_resume_id:
+            lifecycle_log.info(
+                f"CREATE | {session_name} | RESUME_FROM_REGISTRY | "
+                f"resume_id={stored_resume_id}"
+            )
 
         session = SDKSession(
             chat_id=chat_id,
@@ -723,6 +737,7 @@ class SDKBackend:
             source=source,
             model=model,
             producer=self._producer,
+            resume_id=stored_resume_id,
         )
         import time
         spawn_start = time.perf_counter()
@@ -755,6 +770,22 @@ class SDKBackend:
             "session_type": session_type, "source": source,
             "spawn_ms": round(spawn_ms, 1),
         }, source="daemon")
+
+        # Replay any undelivered WAL messages for this session.
+        # This is critical for the lazy-recreation path: if a previous session
+        # died (e.g., bad resume ID, race with idle-kill) and messages were
+        # queued to it, they'd be stuck in the WAL forever. Replaying here
+        # ensures they're delivered immediately when the session is recreated.
+        try:
+            replayed = await self._replay_undelivered(chat_id, stored_resume_id)
+            if replayed:
+                lifecycle_log.info(
+                    f"CREATE | {session_name} | LAZY_REPLAY | "
+                    f"replayed={replayed} messages"
+                )
+        except Exception as e:
+            log.warning(f"LAZY_REPLAY_FAILED | {chat_id} | {e}")
+
         # Yield control to event loop so other tasks can run during concurrent creations
         await asyncio.sleep(0)
         return session
@@ -1261,6 +1292,15 @@ Gemini analyzed the attached image:
         model, model_source = self.quota_manager.get_effective_model(chat_id, "", default_model)
         log.info(f"SESSION_MODEL | chat_id={chat_id} | model={model} | source={model_source} | type=group")
 
+        # Resume from stored session_id if available (e.g., after idle timeout kill).
+        existing_entry = self.registry.get(chat_id)
+        stored_resume_id = existing_entry.get("session_id") if existing_entry else None
+        if stored_resume_id:
+            lifecycle_log.info(
+                f"CREATE | {session_name} | RESUME_FROM_REGISTRY | "
+                f"resume_id={stored_resume_id}"
+            )
+
         session = SDKSession(
             chat_id=chat_id,
             contact_name=display_name or chat_id,
@@ -1270,6 +1310,7 @@ Gemini analyzed the attached image:
             source=source,
             model=model,
             producer=self._producer,
+            resume_id=stored_resume_id,
         )
         await session.start(resume_session_id=None)
         self.sessions[chat_id] = session
@@ -1560,13 +1601,17 @@ Respond via: ~/.claude/skills/sms-assistant/scripts/send-sms "{admin_phone}" "[M
         """Kill a session."""
         async with self._lock:
             session = self.sessions.pop(chat_id, None)
+            # Save session_id and clear was_active INSIDE the lock so that
+            # inject_message (which also holds the lock) always sees a consistent
+            # registry state. Without this, a concurrent inject could create a new
+            # session from stale registry data (missing the session_id from the
+            # session we're about to kill).
+            if session:
+                if session.session_id:
+                    self.registry.update_session_id(chat_id, session.session_id)
+                self.registry.clear_was_active(chat_id)
 
         if session:
-            # Save session_id before stopping
-            if session.session_id:
-                self.registry.update_session_id(chat_id, session.session_id)
-            # Clear was_active so killed sessions don't resurrect on restart
-            self.registry.clear_was_active(chat_id)
             uptime = (datetime.now() - session.created_at).total_seconds()
             produce_session_event(self._producer, chat_id, "session.killed", {
                 "contact_name": session.contact_name, "tier": session.tier,

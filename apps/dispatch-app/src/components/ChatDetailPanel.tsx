@@ -6,7 +6,6 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   ActivityIndicator,
   FlatList,
-  KeyboardAvoidingView,
   Platform,
   Pressable,
   StyleSheet,
@@ -14,6 +13,7 @@ import {
   View,
 } from "react-native";
 import { SymbolView } from "expo-symbols";
+import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import {
   chatAdapter,
   useMessages,

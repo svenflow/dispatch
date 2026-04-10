@@ -436,6 +436,20 @@ class Bus:
 
         return info
 
+    def topic_partition_count(self, name: str) -> int:
+        """Get the number of partitions for a topic.
+
+        Raises ValueError if the topic does not exist (prevents silently
+        masking a misconfigured topic name as 'all partitions assigned').
+        """
+        cursor = self._conn.execute(
+            "SELECT partitions FROM topics WHERE name = ?", (name,)
+        )
+        row = cursor.fetchone()
+        if not row:
+            raise ValueError(f"Topic '{name}' does not exist")
+        return row[0]
+
     def list_consumer_groups(self) -> list[dict[str, Any]]:
         """List all consumer groups with members and assignments."""
         cursor = self._conn.execute(
@@ -489,6 +503,7 @@ class Bus:
         consumer_id: str | None = None,
         on_partitions_revoked: RebalanceListener | None = None,
         on_partitions_assigned: RebalanceListener | None = None,
+        exclusive: bool = False,
     ) -> "Consumer":
         """
         Create a consumer in a consumer group.
@@ -503,6 +518,9 @@ class Bus:
             consumer_id: Unique consumer ID (auto-generated if not provided)
             on_partitions_revoked: Callback when partitions are revoked during rebalance
             on_partitions_assigned: Callback when partitions are assigned during rebalance
+            exclusive: If True, purge ALL other members of this group before joining.
+                Use for single-consumer groups (e.g. message-router) to prevent
+                partition splitting from zombie consumers during rapid restarts.
 
         Mirrors: KafkaConsumer(group_id=..., topics=[...], auto_offset_reset=...)
         """
@@ -515,6 +533,7 @@ class Bus:
             consumer_id=consumer_id or f"consumer-{uuid.uuid4().hex[:8]}",
             on_partitions_revoked=on_partitions_revoked,
             on_partitions_assigned=on_partitions_assigned,
+            exclusive=exclusive,
         )
 
     def prune(self) -> int:
@@ -1234,6 +1253,7 @@ class Consumer:
         consumer_id: str = "",
         on_partitions_revoked: RebalanceListener | None = None,
         on_partitions_assigned: RebalanceListener | None = None,
+        exclusive: bool = False,
     ):
         self._bus = bus
         # Consumer gets its OWN connection to avoid transaction conflicts
@@ -1250,6 +1270,7 @@ class Consumer:
         self._assigned: list[TopicPartition] = []
         self._generation: int = 0
         self._pending_offsets: dict[tuple[str, int], int] = {}
+        self._exclusive = exclusive
         # Throttle heartbeats: send at most every 10s (HEARTBEAT_TIMEOUT is 30s)
         self._last_heartbeat: int = 0
         self._heartbeat_interval_ms: int = 60_000  # 60s (reduced write pressure, all consumers in-process)
@@ -1287,11 +1308,26 @@ class Consumer:
                 (self.group_id, self.consumer_id, self._generation, now),
             )
 
-            # Remove dead consumers (no heartbeat in HEARTBEAT_TIMEOUT_MS)
-            self._conn.execute(
-                "DELETE FROM consumer_members WHERE group_id = ? AND last_heartbeat < ?",
-                (self.group_id, now - HEARTBEAT_TIMEOUT_MS),
-            )
+            # Remove stale consumers. In exclusive mode, purge ALL other members
+            # regardless of heartbeat freshness — this prevents partition splitting
+            # from zombie consumers during rapid daemon restarts (where the old
+            # consumer's heartbeat is still fresh but it will never process messages).
+            if self._exclusive:
+                deleted = self._conn.execute(
+                    "DELETE FROM consumer_members WHERE group_id = ? AND consumer_id != ?",
+                    (self.group_id, self.consumer_id),
+                ).rowcount
+                if deleted:
+                    logger.warning(
+                        "Exclusive consumer purged %d other member(s) from group '%s'",
+                        deleted, self.group_id,
+                    )
+            else:
+                # Default: only remove consumers that missed heartbeat timeout
+                self._conn.execute(
+                    "DELETE FROM consumer_members WHERE group_id = ? AND last_heartbeat < ?",
+                    (self.group_id, now - HEARTBEAT_TIMEOUT_MS),
+                )
 
             # Get all live consumers in this group
             cursor = self._conn.execute(
@@ -1383,6 +1419,11 @@ class Consumer:
             "Consumer %s joined group '%s' generation %d, assigned %d partition(s)",
             self.consumer_id, self.group_id, self._generation, len(self._assigned),
         )
+
+    @property
+    def assigned_partitions(self) -> list[TopicPartition]:
+        """Currently assigned partitions (read-only view)."""
+        return list(self._assigned)
 
     def poll(
         self,

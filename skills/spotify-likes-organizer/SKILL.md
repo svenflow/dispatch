@@ -41,11 +41,20 @@ uv run python scripts/spotify_likes_classify.py playlists --dry-run  # Preview p
 - **Last.fm API key** stored in macOS Keychain as `lastfm-api-key` (account: `lastfm`)
 - **Last.fm shared secret** stored as `lastfm-shared-secret` (account: `lastfm`)
 - Last.fm account: `svenflow`
-- Spotify auth tokens in `~/code/dj-buyer/state.db`
+- Spotify auth tokens in `~/.config/dj-buyer/state.db`
 
-## Database
+## Databases
 
-`~/code/dj-buyer/spotify_likes.db`:
+⚠️ **CRITICAL: Two separate DBs exist — do NOT confuse them:**
+
+| DB | Purpose | Tracks |
+|---|---|---|
+| `~/code/dj-buyer/spotify_likes.db` | **Spotify likes organizer** (this skill) | Liked songs from Spotify |
+| `~/.config/dj-buyer/state.db` | **dj-buyer purchase workflow** + rekordbox imports | Purchased/imported tracks |
+
+**This skill ONLY uses `spotify_likes.db`.** Never read `state.db` for likes organizer status.
+
+`~/code/dj-buyer/spotify_likes.db` schema:
 - `liked_tracks` — metadata + genres_json + genre_source
 - `track_genres` — junction table for multi-genre
 - `playlists` — genre → Spotify playlist ID

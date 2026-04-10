@@ -13,6 +13,8 @@
  * - 2MB cap per cache file — prevents unbounded growth for very long chats
  */
 import { File, Paths } from "expo-file-system";
+import { getMessages } from "../api/chats";
+import type { Conversation } from "../api/types";
 
 /** Max cache file size (2MB — covers ~5000+ messages) */
 const MAX_CACHE_BYTES = 2_000_000;
@@ -111,4 +113,72 @@ export async function setCachedChatList<T>(chats: T[]): Promise<void> {
   } catch (err) {
     console.warn("[messageCache] setCachedChatList failed", err);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Message pre-fetching — warm cache for chats likely to be opened
+// ---------------------------------------------------------------------------
+
+/** Track in-flight prefetches to avoid duplicate requests */
+const _prefetchingSet = new Set<string>();
+
+/**
+ * Pre-fetch messages for a list of chat IDs in the background.
+ * Skips chats that already have a cache or are currently being fetched.
+ * Designed to be called from the chat list screen when data arrives.
+ * Never throws.
+ */
+export async function prefetchMessages(chatIds: string[]): Promise<void> {
+  for (const chatId of chatIds) {
+    if (_prefetchingSet.has(chatId)) continue;
+
+    // Skip if cache already exists
+    const cacheKey = `msgs_chat_${sanitize(chatId)}`;
+    const file = cacheFile(cacheKey);
+    if (file.exists) continue;
+
+    _prefetchingSet.add(chatId);
+
+    try {
+      const res = await getMessages(chatId);
+      if (res.messages && res.messages.length > 0) {
+        await setCachedMessages(`chat:${chatId}`, res.messages);
+      }
+    } catch {
+      // Prefetch is best-effort — silently ignore failures
+    } finally {
+      _prefetchingSet.delete(chatId);
+    }
+  }
+}
+
+/**
+ * Select chats worth pre-fetching: thinking chats first, then most recently
+ * active, up to `maxCount`.
+ */
+export function selectPrefetchCandidates(
+  conversations: Conversation[],
+  maxCount: number = 5,
+): string[] {
+  // Prioritize chats where the assistant is actively thinking
+  const thinking = conversations
+    .filter((c) => c.is_thinking)
+    .map((c) => c.id);
+
+  // Then most recently active (already sorted by last_message_at desc from server)
+  const recent = conversations
+    .filter((c) => !c.is_thinking)
+    .slice(0, maxCount)
+    .map((c) => c.id);
+
+  // Combine, deduplicate, cap at maxCount
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const id of [...thinking, ...recent]) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    result.push(id);
+    if (result.length >= maxCount) break;
+  }
+  return result;
 }

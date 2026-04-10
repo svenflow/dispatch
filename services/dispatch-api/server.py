@@ -5652,6 +5652,7 @@ def _batch_check_is_thinking(session_names: list[str]) -> dict[str, bool]:
 
         return result
     except Exception:
+        logger.error(f"_batch_check_is_thinking failed for {session_names}", exc_info=True)
         return {name: False for name in session_names}
     finally:
         if conn:

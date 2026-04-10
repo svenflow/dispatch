@@ -1933,3 +1933,129 @@ class TestTimestampNormalization:
         assert _normalize_timestamp_ms(1_999_999_999_999) == 1_999_999_999_999 * 1000
         # At and above the boundary - treated as ms
         assert _normalize_timestamp_ms(2_000_000_000_000) == 2_000_000_000_000
+
+
+# ─── Exclusive Consumer Mode ─────────────────────────────────
+
+
+class TestExclusiveConsumer:
+    """Tests for exclusive=True consumer mode (zombie purge on join)."""
+
+    def test_exclusive_purges_other_members(self, bus):
+        """Exclusive consumer should delete all other members regardless of heartbeat freshness."""
+        bus.create_topic("test", partitions=4)
+
+        # Create a non-exclusive consumer first
+        c1 = bus.consumer(group_id="g1", topics=["test"], consumer_id="zombie")
+        assert len(c1.assigned_partitions) == 4
+
+        # Now create an exclusive consumer — should purge c1's membership
+        c2 = bus.consumer(group_id="g1", topics=["test"], consumer_id="exclusive-one", exclusive=True)
+        assert len(c2.assigned_partitions) == 4  # gets ALL partitions
+
+        # Verify the zombie is gone from the group
+        groups = bus.list_consumer_groups()
+        g1 = [g for g in groups if g["group_id"] == "g1"][0]
+        member_ids = [m["consumer_id"] for m in g1["members"]]
+        assert "zombie" not in member_ids
+        assert "exclusive-one" in member_ids
+
+        c1.close()
+        c2.close()
+
+    def test_exclusive_does_not_purge_self(self, bus):
+        """Exclusive consumer should not delete its own membership row."""
+        bus.create_topic("test", partitions=4)
+
+        c1 = bus.consumer(group_id="g1", topics=["test"], consumer_id="sole", exclusive=True)
+        assert len(c1.assigned_partitions) == 4
+
+        groups = bus.list_consumer_groups()
+        g1 = [g for g in groups if g["group_id"] == "g1"][0]
+        assert len(g1["members"]) == 1
+        assert g1["members"][0]["consumer_id"] == "sole"
+
+        c1.close()
+
+    def test_exclusive_purges_fresh_heartbeat_zombie(self, bus):
+        """Exclusive mode should purge members even with fresh heartbeats (the key bug fix)."""
+        bus.create_topic("test", partitions=4)
+
+        # Insert a zombie with a very fresh heartbeat (simulates rapid restart scenario)
+        fresh_heartbeat = int(time.time() * 1000)  # just now
+        bus._conn.execute(
+            "INSERT OR REPLACE INTO consumer_members "
+            "(group_id, consumer_id, generation, assigned_partitions, last_heartbeat) "
+            "VALUES (?, ?, ?, '[]', ?)",
+            ("g1", "fresh-zombie", 1, fresh_heartbeat),
+        )
+
+        # Exclusive consumer should still purge it
+        c1 = bus.consumer(group_id="g1", topics=["test"], consumer_id="new-daemon", exclusive=True)
+        assert len(c1.assigned_partitions) == 4
+
+        groups = bus.list_consumer_groups()
+        g1 = [g for g in groups if g["group_id"] == "g1"][0]
+        member_ids = [m["consumer_id"] for m in g1["members"]]
+        assert "fresh-zombie" not in member_ids
+        assert "new-daemon" in member_ids
+
+        c1.close()
+
+    def test_non_exclusive_does_not_purge_fresh_zombie(self, bus):
+        """Non-exclusive consumer should NOT purge members with fresh heartbeats."""
+        bus.create_topic("test", partitions=4)
+
+        # Insert a zombie with a fresh heartbeat
+        fresh_heartbeat = int(time.time() * 1000)
+        bus._conn.execute(
+            "INSERT OR REPLACE INTO consumer_members "
+            "(group_id, consumer_id, generation, assigned_partitions, last_heartbeat) "
+            "VALUES (?, ?, ?, '[]', ?)",
+            ("g1", "fresh-zombie", 1, fresh_heartbeat),
+        )
+
+        # Non-exclusive consumer should share partitions
+        c1 = bus.consumer(group_id="g1", topics=["test"], consumer_id="non-excl")
+        assert len(c1.assigned_partitions) < 4  # should be split
+
+        c1.close()
+
+
+# ─── Topic Partition Count ─────────────────────────────────
+
+
+class TestTopicPartitionCount:
+    def test_returns_correct_count(self, bus):
+        bus.create_topic("multi", partitions=8)
+        assert bus.topic_partition_count("multi") == 8
+
+    def test_single_partition_default(self, bus):
+        bus.create_topic("single", partitions=1)
+        assert bus.topic_partition_count("single") == 1
+
+    def test_raises_on_missing_topic(self, bus):
+        with pytest.raises(ValueError, match="does not exist"):
+            bus.topic_partition_count("nonexistent")
+
+
+# ─── Assigned Partitions Property ──────────────────────────
+
+
+class TestAssignedPartitionsProperty:
+    def test_returns_all_partitions(self, bus):
+        bus.create_topic("test", partitions=4)
+        c = bus.consumer(group_id="g1", topics=["test"])
+        assigned = c.assigned_partitions
+        assert len(assigned) == 4
+        assert all(isinstance(tp, TopicPartition) for tp in assigned)
+        c.close()
+
+    def test_returns_copy_not_reference(self, bus):
+        """Mutating the returned list should not affect internal state."""
+        bus.create_topic("test", partitions=4)
+        c = bus.consumer(group_id="g1", topics=["test"])
+        assigned = c.assigned_partitions
+        assigned.clear()  # mutate the copy
+        assert len(c.assigned_partitions) == 4  # internal state unchanged
+        c.close()

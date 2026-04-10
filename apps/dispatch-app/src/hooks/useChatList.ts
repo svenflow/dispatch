@@ -28,7 +28,7 @@ import { notifyUnreadChatCount } from "../state/unreadChats";
 import { makeLayoutAnim, safeConfigureNext, backoffDelay } from "../utils/animation";
 import { getApiBaseUrl } from "../config/constants";
 import { getDeviceToken } from "../api/client";
-import { getCachedChatList, setCachedChatList } from "../utils/messageCache";
+import { getCachedChatList, setCachedChatList, prefetchMessages, selectPrefetchCandidates } from "../utils/messageCache";
 
 /** Smooth reorder animation for chat list updates */
 const chatListAnim = makeLayoutAnim(250);
@@ -241,6 +241,12 @@ export function useChatList(): UseChatListReturn {
 
     // Write-through: update cache with latest data
     setCachedChatList(chats); // fire-and-forget
+
+    // Pre-fetch messages for likely-to-be-opened chats (thinking + recent)
+    const candidates = selectPrefetchCandidates(chats, 5);
+    if (candidates.length > 0) {
+      prefetchMessages(candidates); // fire-and-forget, best-effort
+    }
   }, []);
 
   // ---------------------------------------------------------------------------

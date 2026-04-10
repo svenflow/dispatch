@@ -3,7 +3,6 @@ import {
   ActivityIndicator,
   FlatList,
   InteractionManager,
-  KeyboardAvoidingView,
   Modal,
   Platform,
   Pressable,
@@ -12,6 +11,7 @@ import {
   View,
 } from "react-native";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
+import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { SymbolView } from "expo-symbols";
 import { markAgentSessionAsRead } from "@/src/state/unreadAgents";
 import {

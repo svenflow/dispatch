@@ -2009,6 +2009,10 @@ class Manager:
             alert_fn=self._alert_admin,
             producer=self._producer,
         )
+        # Consumer restart counters (used by _on_consumer_done / _on_task_consumer_done)
+        self._message_consumer_restarts: int = 0
+        self._task_consumer_restarts: int = 0
+
         # Track which disabled chats/backends have been notified (one-time per daemon run)
         self._disabled_notice_sent: set[str] = set()
 
@@ -2834,19 +2838,22 @@ class Manager:
             topics=["messages"],
             auto_commit=False,
             auto_offset_reset="latest",  # Skip history on first start (already processed)
+            exclusive=True,  # Single consumer — purge zombies to prevent partition split
         )
 
         # Verify we got all partitions — if not, a zombie consumer is holding some
-        # (This is a safety check; the close_and_remove above should prevent this)
-        assigned = getattr(consumer, '_assigned', [])
-        if assigned:
-            n_assigned = len(assigned)
-            n_total = sum(t.get('partitions', 1) for t in getattr(self._bus, '_topic_cache', {}).values())
-            if n_assigned < 4:  # messages topic has 4 partitions
-                log.warning(
-                    f"Message consumer only assigned {n_assigned}/4 partitions! "
-                    f"Zombie consumer may be holding the rest. Check consumer_members table."
-                )
+        # (This is a safety check; exclusive=True above should prevent this)
+        n_assigned = len(consumer.assigned_partitions)
+        try:
+            n_expected = self._bus.topic_partition_count("messages")
+        except ValueError:
+            n_expected = n_assigned  # topic lookup failed — skip check, don't crash
+            log.warning("Could not look up partition count for 'messages' topic")
+        if n_assigned < n_expected:
+            msg = (f"Message consumer only assigned {n_assigned}/{n_expected} partitions! "
+                   f"Zombie consumer may be holding the rest. Check consumer_members table.")
+            log.error(msg)
+            self._alert_admin(f"[SVEN] ⚠️ {msg}")
 
         # Register consumer for clean shutdown
         if self._resource_registry:
@@ -3000,11 +3007,13 @@ class Manager:
         except asyncio.CancelledError:
             return
 
-        self._message_consumer_restarts = getattr(self, '_message_consumer_restarts', 0) + 1
+        self._message_consumer_restarts += 1
         MAX_RESTARTS = 5
         if self._message_consumer_restarts > MAX_RESTARTS:
-            log.error(f"Message consumer exceeded {MAX_RESTARTS} restarts, giving up. "
-                      "Manual daemon restart required.")
+            msg = (f"Message consumer exceeded {MAX_RESTARTS} restarts, giving up. "
+                   "Manual daemon restart required.")
+            log.error(msg)
+            self._alert_admin(f"[SVEN] 🚨 {msg}")
             return
 
         async def _restart():
@@ -3047,6 +3056,7 @@ class Manager:
             topics=["tasks"],
             auto_commit=False,
             auto_offset_reset="latest",
+            exclusive=True,  # Single consumer — purge zombies to prevent partition split
         )
 
         # Register for clean shutdown
@@ -3585,11 +3595,13 @@ class Manager:
         except asyncio.CancelledError:
             return
 
-        self._task_consumer_restarts = getattr(self, '_task_consumer_restarts', 0) + 1
+        self._task_consumer_restarts += 1
         MAX_RESTARTS = 5
         if self._task_consumer_restarts > MAX_RESTARTS:
-            log.error(f"Task consumer exceeded {MAX_RESTARTS} restarts, giving up. "
-                      "Manual daemon restart required.")
+            msg = (f"Task consumer exceeded {MAX_RESTARTS} restarts, giving up. "
+                   "Manual daemon restart required.")
+            log.error(msg)
+            self._alert_admin(f"[SVEN] 🚨 {msg}")
             return
 
         async def _restart():

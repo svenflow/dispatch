@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AppState, type AppStateStatus } from "react-native";
+import { AppState, InteractionManager, type AppStateStatus } from "react-native";
 import { getMessages, sendPrompt, sendPromptWithImage } from "../api/chats";
 import { getAgentMessages, sendAgentMessage } from "../api/agents";
 import type { ChatMessage, AgentMessage, WidgetData, WidgetResponse } from "../api/types";
@@ -164,7 +164,17 @@ export function useMessages(adapter: MessageAdapter, cacheKey?: string, outboxCh
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [isThinking, setIsThinking] = useState(false);
+  const [isThinking, _setIsThinking] = useState(false);
+  const isThinkingRef = useRef(false);
+
+  // Wrapper that logs is_thinking transitions for debugging intermittent bubble issues
+  const setIsThinking = useCallback((value: boolean) => {
+    if (value !== isThinkingRef.current) {
+      console.log(`[useMessages] is_thinking: ${isThinkingRef.current} → ${value}`);
+      isThinkingRef.current = value;
+    }
+    _setIsThinking(value);
+  }, []);
 
   const mountedRef = useRef(true);
   const pollingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -233,6 +243,11 @@ export function useMessages(adapter: MessageAdapter, cacheKey?: string, outboxCh
     try {
       const result = await adapterRef.current.fetchMessages({});
       if (!mountedRef.current) return;
+
+      // Animate the cache→server transition so new messages don't "pop in"
+      if (messagesRef.current.length > 0) {
+        safeConfigureNext(messageEaseAnim);
+      }
       setMessages(result.messages);
       updateLatestTs(result.messages);
 
@@ -489,8 +504,9 @@ export function useMessages(adapter: MessageAdapter, cacheKey?: string, outboxCh
           setIsThinking(false);
         }
       }
-    } catch {
+    } catch (err) {
       // Surface persistent connection issues after repeated failures
+      console.warn(`[useMessages] poll failed (${pollFailCountRef.current + 1})`, err);
       pollFailCountRef.current += 1;
       if (
         mountedRef.current &&
@@ -716,13 +732,19 @@ export function useMessages(adapter: MessageAdapter, cacheKey?: string, outboxCh
   useEffect(() => {
     mountedRef.current = true;
 
-    loadInitial()
-      .then(() => { if (mountedRef.current) return mergeOutbox(); })
-      .then(() => { if (mountedRef.current) return drainOutbox(); })
-      .then(() => { if (mountedRef.current) startPolling(); });
+    // Defer heavy init until navigation animation settles — prevents
+    // JS thread contention that makes keyboard/UI animations janky.
+    const task = InteractionManager.runAfterInteractions(() => {
+      if (!mountedRef.current) return;
+      loadInitial()
+        .then(() => { if (mountedRef.current) return mergeOutbox(); })
+        .then(() => { if (mountedRef.current) return drainOutbox(); })
+        .then(() => { if (mountedRef.current) startPolling(); });
+    });
 
     return () => {
       mountedRef.current = false;
+      task.cancel();
       stopPolling();
     };
   }, [loadInitial, mergeOutbox, drainOutbox, startPolling, stopPolling]);

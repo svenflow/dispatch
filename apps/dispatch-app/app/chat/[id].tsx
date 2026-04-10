@@ -5,7 +5,6 @@ import {
   Animated,
   FlatList,
   InteractionManager,
-  KeyboardAvoidingView,
   Modal,
   Platform,
   Pressable,
@@ -14,6 +13,7 @@ import {
   Text,
   View,
 } from "react-native";
+import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { Stack, useLocalSearchParams, router } from "expo-router";
 import { SymbolView } from "expo-symbols";
 import {
@@ -439,7 +439,7 @@ export default function ChatDetailScreen() {
       />
       <KeyboardAvoidingView
         style={screenStyles.container}
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        behavior="padding"
         keyboardVerticalOffset={Platform.OS === "ios" ? 90 : 0}
       >
 
@@ -476,14 +476,20 @@ export default function ChatDetailScreen() {
             showsVerticalScrollIndicator={false}
             keyboardDismissMode="interactive"
             keyboardShouldPersistTaps="handled"
-            ListHeaderComponent={showThinking ? <ThinkingIndicator events={sdkEvents} visible={showThinking} /> : null}
-            // Bottom spinner (inverted = ListFooterComponent renders at top visually)
-            // Shows when loading fresh data while displaying cached messages
-            ListFooterComponent={isRefreshing ? (
-              <View style={localStyles.bottomSpinner}>
-                <ActivityIndicator color="#52525b" size="small" />
-              </View>
-            ) : null}
+            // In inverted FlatList: ListHeaderComponent renders at BOTTOM visually
+            // Refreshing spinner + thinking indicator both go here (near newest messages)
+            ListHeaderComponent={
+              (showThinking || isRefreshing) ? (
+                <View>
+                  {showThinking ? <ThinkingIndicator events={sdkEvents} visible={showThinking} /> : null}
+                  {isRefreshing ? (
+                    <View style={localStyles.bottomSpinner}>
+                      <ActivityIndicator color="#52525b" size="small" />
+                    </View>
+                  ) : null}
+                </View>
+              ) : null
+            }
             // Perf: render ~3 screens ahead instead of default 21.
             // Message bubbles are variable-height so getItemLayout can't be used.
             windowSize={7}

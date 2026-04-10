@@ -11,6 +11,7 @@ import { LogBox } from "react-native";
 // Suppress LogBox in dev to prevent it from covering the tab bar
 LogBox.ignoreAllLogs(true);
 import { GestureHandlerRootView } from "react-native-gesture-handler";
+import { KeyboardProvider } from "react-native-keyboard-controller";
 import { usePushNotifications } from "../src/hooks/usePushNotifications";
 import { useDeviceToken } from "../src/hooks/useDeviceToken";
 import { setApiBaseUrl, API_URL_STORAGE_KEY } from "../src/config/constants";
@@ -87,6 +88,7 @@ function RootLayoutNav() {
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
+      <KeyboardProvider>
       <ThemeProvider value={dispatchDarkTheme}>
         <Stack
           screenOptions={{
@@ -111,6 +113,7 @@ function RootLayoutNav() {
           <Stack.Screen name="modal" options={{ presentation: "modal" }} />
         </Stack>
       </ThemeProvider>
+      </KeyboardProvider>
     </GestureHandlerRootView>
   );
 }
