@@ -32,6 +32,45 @@ from collections import deque
 from enum import Enum
 from typing import Optional, Dict, Any, List
 
+
+def _load_dotenv() -> None:
+    """Populate os.environ from ~/dispatch/.env before any module reads it.
+
+    Format: KEY=VALUE per line (optional 'export ' prefix, surrounding quotes
+    stripped). A line of 'source <path>' recursively pulls in another file in
+    the same format — handy for keeping secrets in a separate (e.g. iCloud-
+    synced) file. Existing env vars win, so shell exports still override.
+    """
+    seen: set = set()
+
+    def parse(path: Path) -> None:
+        path = path.expanduser()
+        if not path.exists() or path in seen:
+            return
+        seen.add(path)
+        for raw in path.read_text().splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("source "):
+                parse(Path(line[len("source "):].strip()))
+                continue
+            if line.startswith("export "):
+                line = line[len("export "):].lstrip()
+            key, sep, val = line.partition("=")
+            if not sep:
+                continue
+            val = val.strip()
+            if len(val) >= 2 and val[0] == val[-1] and val[0] in ('"', "'"):
+                val = val[1:-1]
+            os.environ.setdefault(key.strip(), val)
+
+    parse(Path(__file__).resolve().parent.parent / ".env")
+
+
+_load_dotenv()
+
+
 from assistant.common import (
     HOME,
     ASSISTANT_DIR,
